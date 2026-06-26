@@ -1,0 +1,159 @@
+Section 8: Output Specification
+What fields should the MarketRegime object contain?
+Which fields are mandatory?
+Should the module include diagnostic information explaining the detected regime?
+Should raw feature values be included in the output?
+
+
+
+Section 8: Output Specification
+
+8.1 MarketRegime Object Fields
+The MarketRegime object is the canonical output contract of the module. Every field must earn its place — the object should contain everything a downstream consumer could reasonably need without requiring them to re-derive it, and nothing that belongs in internal module state. The full field specification is organized into five logical groups.
+
+Group A — Identity and Timing
+regime_id: UUID
+
+A globally unique identifier for this specific output record. Enables exact record lookup, deduplication in message queues, and idempotency checking in downstream persistence layers. Generated fresh on each emission, not reused across recalculations of the same timestamp.
+instrument_id: str
+
+The canonical identifier of the instrument for which the regime is computed. Must match the instrument registry identifier used across the platform — not a ticker alias or display name.
+timestamp: datetime (UTC, timezone-aware)
+
+The observation timestamp to which this regime label applies. Always the close of the observation period, not the computation time. Timezone-aware and explicitly UTC. Naive datetime objects are not permitted in the schema.
+computation_timestamp: datetime (UTC, timezone-aware)
+
+The wall-clock time at which this output was produced. Distinct from timestamp to support latency monitoring and to distinguish same-period recalculations (e.g., after recalibration) from original emissions.
+bar_type: Enum[DAILY, HOURLY, WEEKLY, CUSTOM]
+
+The resolution of the input data underlying this label. Required because the same module may be deployed at multiple resolutions and outputs must not be ambiguously compared across them.
+regime_epoch_id: UUID
+
+Identifies the contiguous run of the current regime label. Shared across all observations within the same uninterrupted regime period; changes only on confirmed regime transition. Enables downstream consumers to group all records belonging to the same regime episode without time-range logic.
+
+Group B — Regime Classification
+primary_regime: Enum
+
+The top-level regime label. Enumeration values must be defined exhaustively in the module schema with no open string values permitted. Recommended values: STRONGLY_TRENDING_UP, STRONGLY_TRENDING_DOWN, WEAKLY_TRENDING_UP, WEAKLY_TRENDING_DOWN, RANGING, HIGH_VOLATILITY, LOW_VOLATILITY, CRISIS, TRANSITIONING, UNKNOWN. UNKNOWN is reserved for initialization and total signal failure states; TRANSITIONING for periods where a regime change is confirmed but the destination regime has not yet met its own confidence floor.
+primary_regime_direction: Enum[BULLISH, BEARISH, NEUTRAL, UNDEFINED]
+
+Directional bias of the current regime, decoupled from intensity classification. Provides a clean separation between "what kind of regime" and "which direction" that simplifies downstream strategy selection logic. UNDEFINED for non-directional regimes such as RANGING or LOW_VOLATILITY.
+volatility_regime: Enum[LOW, NORMAL, ELEVATED, HIGH, CRISIS]
+
+Volatility classification as a separate orthogonal dimension from the trend/momentum classification in primary_regime. Must always be populated independently, even when primary_regime itself encodes a volatility state, to ensure consumers who only care about volatility regime can read a single field without parsing trend labels.
+trend_regime: Enum[STRONG_TREND, WEAK_TREND, RANGING, UNDEFINED]
+
+Trend classification as a separate orthogonal dimension. Same rationale as volatility_regime — orthogonal decomposition enables cleaner downstream consumption than a single combined label.
+regime_probability_distribution: Dict[str, float]
+
+Full probability vector over all defined regime classes. Keys are regime label strings; values are probabilities summing to 1.0. Must include all defined regimes, not only those with non-trivial probability. This is the foundational output for any downstream consumer performing soft allocation or blended strategy weighting.
+candidate_transition: Optional[CandidateTransition]
+
+Structured sub-object populated when a regime transition is in progress but not yet confirmed. Contains: candidate_regime (the proposed new label), confirmation_count (periods of consecutive confirmation so far), confirmation_required (total periods required), candidate_probability (current probability estimate for the candidate regime), and entry_timestamp (when the candidate transition was first detected). Null when no transition is in progress.
+
+Group C — Confidence and Uncertainty
+confidence: float
+
+The normalized instantaneous confidence score for primary_regime, in [0.0, 1.0]. Defined, calibrated, and bounded as specified in Section 7.
+confidence_tier: Enum[VERY_LOW, LOW, MODERATE, HIGH, VERY_HIGH]
+
+Categorical tier derived from confidence per the tier boundaries in Section 7.6. Provided as a convenience field for rule-based downstream consumers; the scalar confidence remains the authoritative value.
+regime_confidence: float
+
+Confidence in the current regime epoch as a whole, incorporating the persistence factor. Distinct from confidence as described in Section 7.1. Will typically be higher than confidence in well-established regimes and equal to confidence immediately after a transition.
+confidence_interval_low: float
+
+Lower bound of the 90% empirical confidence interval for the confidence score. Derived from the calibration bootstrap distribution. See Section 7.5.
+confidence_interval_high: float
+
+Upper bound of the 90% empirical confidence interval. See Section 7.5.
+regime_entropy: float
+
+Shannon entropy of regime_probability_distribution, in nats. Higher values indicate greater uncertainty across regime classes. See Section 7.5.
+uncertainty_type: Enum[NONE, ALEATORIC, EPISTEMIC, BOTH]
+
+Classification of active uncertainty as defined in Section 7.5. NONE when confidence is high and no flags are active; ALEATORIC when the market is genuinely near a boundary; EPISTEMIC when uncertainty is traceable to data or calibration issues; BOTH when both sources are simultaneously active.
+
+Group D — Transition Metadata
+regime_entry_timestamp: datetime (UTC)
+
+Timestamp at which the current regime epoch began — i.e., when the transition into the current primary_regime was confirmed. Used by downstream consumers to compute regime age without access to historical records.
+regime_duration_periods: int
+
+Number of observation periods elapsed since regime_entry_timestamp, inclusive of the current period. Provided as a convenience to avoid downstream time arithmetic across varying bar types and calendar effects.
+previous_regime: Optional[str]
+
+The primary_regime value of the immediately preceding regime epoch. Null only at module initialization. Enables downstream consumers to implement regime-transition-aware logic (e.g., different strategy response to ranging→trending vs. crisis→trending transitions) without maintaining their own state.
+previous_regime_duration_periods: int
+
+Duration of the preceding regime in observation periods. Provides context for interpreting the current regime — a transition out of a very short-lived prior regime carries different implications than a transition out of a long-established one.
+transition_trigger: Optional[str]
+
+Human-readable summary of the primary factor that triggered the most recent confirmed regime transition. Not a free-form string — drawn from a controlled vocabulary of trigger codes (e.g., ADX_THRESHOLD_BREACH, VOL_PERCENTILE_EXCEEDANCE, MACRO_CONFLICT_RESOLVED, CONFIRMATION_COUNT_MET). Null during stable regime periods between transitions.
+
+Group E — System and Audit
+module_version: str
+
+Semantic version string of the regime detection module that produced this output. Required for reproducibility, debugging, and detecting when outputs were produced by different module versions in a historical dataset.
+calibration_version: str
+
+Version identifier of the calibration artifact (threshold set, indicator weights, isotonic calibration mapping) active at computation time. Distinct from module_version because calibration updates more frequently than code. Enables exact reproduction of any historical output by pairing code version with calibration version.
+status_flags: List[Enum]
+
+List of active system status flags at computation time. Drawn from the controlled set defined in Sections 5–7: OSCILLATION_WARNING, CALIBRATION_STALE, STRUCTURAL_BREAK_DETECTED, DATA_QUALITY_WARNING, DURATION_LOCK, REDUCED_CONFIDENCE, AMBIGUOUS_REGIME, TRANSITION_IN_PROGRESS, INITIALIZATION_PERIOD. Empty list when system is operating nominally with no active conditions. Downstream consumers must check this field before acting on the label; a non-empty flag list is an explicit signal to adjust downstream behavior.
+data_quality_score: float
+
+Composite score in [0.0, 1.0] reflecting the quality of the input data underlying this output. Derived from: staleness of each input feed, fraction of indicators with complete vs. imputed data, and any detected anomalies in raw signal values. A score below a configurable floor (default: 0.70) should automatically add DATA_QUALITY_WARNING to status_flags.
+
+8.2 Mandatory Fields
+Mandatory fields are those without which the output is either non-actionable or non-auditable. Any record missing a mandatory field must be rejected at the schema validation layer before emission — partial records must never reach downstream consumers.
+The following fields are unconditionally mandatory:
+regime_id, instrument_id, timestamp, computation_timestamp, bar_type, regime_epoch_id, primary_regime, volatility_regime, trend_regime, confidence, confidence_tier, regime_entropy, uncertainty_type, regime_entry_timestamp, regime_duration_periods, status_flags, data_quality_score, module_version, calibration_version
+The following fields are conditionally mandatory — required when their preconditions are met, and must be explicitly null otherwise (absent fields and null fields are not equivalent in the schema):
+primary_regime_direction — mandatory when primary_regime is any trending variant; null for RANGING, LOW_VOLATILITY, UNKNOWN.
+candidate_transition — mandatory (as a structured null or populated object) whenever TRANSITION_IN_PROGRESS is in status_flags; explicitly null otherwise.
+previous_regime and previous_regime_duration_periods — mandatory after the first confirmed regime transition; null only during the initialization period before the first transition has occurred.
+regime_probability_distribution — mandatory in all cases. An empty or partial distribution is not permitted; all defined regime classes must appear as keys with valid float values.
+confidence_interval_low and confidence_interval_high — mandatory when calibration artifacts are available; may be null only during the initialization period before minimum calibration history has accumulated, with INITIALIZATION_PERIOD flag active.
+Soft mandatory fields — these are technically optional but their absence must be justified and logged: transition_trigger (null is valid between transitions but must not be null immediately following a confirmed transition), previous_regime (null only during initialization).
+
+8.3 Diagnostic Information
+Yes — diagnostic information must be included, but it must be structured, not narrative. Free-text explanations are not auditable, not machine-readable, and not testable. The module should produce a diagnostics sub-object with the following design:
+diagnostics sub-object structure:
+regime_drivers: List[IndicatorContribution]
+
+Ordered list of indicators contributing to the current regime label, sorted descending by contribution magnitude. Each IndicatorContribution contains: indicator_name, indicator_value (normalized), threshold_used, margin_to_threshold (signed distance, positive = inside regime, negative = outside), vote (the regime this indicator voted for), weight (this indicator's weight in the composite), contribution_to_confidence (scalar contribution to the final confidence score). This is the primary diagnostic tool — it answers "why is the regime labeled X" with quantitative specificity.
+confidence_factor_breakdown: Dict[str, float]
+
+Decomposition of the confidence score by contributing factor as defined in Section 7.2 (signal margin, indicator agreement, persistence, base rate, signal stability, macro alignment, calibration recency). Each key is a factor name; each value is that factor's contribution to the final score before weighting. Enables rapid identification of which factor is depressing or elevating confidence.
+threshold_distances: Dict[str, float]
+
+For each active threshold in the current regime evaluation, the signed distance of the relevant signal from that threshold, normalized by the threshold range width. Positive values indicate the signal is within the current regime's territory; negative values indicate it is outside. This field is the primary tool for detecting when a regime is near its boundary without the consumer needing to know the raw threshold values.
+transition_history: List[TransitionRecord]
+
+A bounded history of confirmed regime transitions, capped at a configurable depth (default: last 5 transitions). Each TransitionRecord contains: from_regime, to_regime, transition_timestamp, trigger_code, confidence_at_transition. Provides transition context without requiring consumers to query a separate historical store for routine diagnostic purposes.
+suppression_log: List[SuppressionEvent]
+
+Record of any transitions suppressed during the current regime epoch due to duration lock, oscillation suppression, or structural break gating. Each event records the suppressed candidate regime and the suppression reason. Exposes what the module almost did — critical for diagnosing cases where a consumer suspects the module is failing to capture a genuine regime change.
+Diagnostic availability tiers: The diagnostics sub-object should support two verbosity levels controlled by a configuration flag: STANDARD (includes regime_drivers and confidence_factor_breakdown only) and FULL (all fields). Production real-time consumers should use STANDARD to minimize serialization overhead; backtesting, monitoring, and debugging pipelines should use FULL. The verbosity level should be logged in the output metadata so that the absence of certain diagnostic fields in archived records is explicitly traceable to a configuration choice rather than a data loss event.
+
+8.4 Raw Feature Values
+Raw feature values should be included in the output, but as a conditionally emitted sub-object, not as top-level fields, and with strict controls on what "raw" means in this context.
+The case for inclusion: Raw features are essential for reproducibility — without them, it is impossible to audit a historical regime label without reconstructing the exact input data and feature engineering pipeline as it existed at that moment. They are necessary for model monitoring (detecting input distribution drift before it manifests as regime label drift), for debugging disagreements between the module's output and a consumer's intuition, and for training any downstream model that takes regime features as inputs rather than regime labels.
+The case for controlled inclusion: Emitting all raw features in every record doubles or triples the output payload size. Real-time consumers on hot paths do not need raw features; they need the label and confidence. Storing raw features at every observation in a production time series database is expensive and operationally complex. The solution is conditional emission, not omission.
+features sub-object design:
+features is emitted only when a configuration flag include_raw_features is true. When false, the field is absent from the serialized output entirely — not null, not empty — to avoid consumer-side null checks on a deliberately omitted field.
+The sub-object contains two categories:
+normalized_features: Dict[str, float]
+
+The normalized (post-transformation, pre-threshold) value of each indicator used in regime classification. These are the values that actually drove the regime decision — normalized to the same scale used in threshold comparison. Mandatory within the sub-object if include_raw_features is true.
+raw_features: Dict[str, float]
+
+The pre-normalization values of each indicator in their native units (e.g., ADX on its 0–100 scale, realized volatility as an annualized percentage). These are useful for external validation and cross-system comparison but should not be used to reproduce threshold decisions — normalized_features is the correct field for that. Conditionally mandatory within the sub-object, controlled by a secondary flag include_unnormalized_features (default: false in production, true in backtesting mode).
+feature_snapshot_timestamp: datetime (UTC)
+
+The timestamp of the most recent input data point used to compute these feature values. Should equal timestamp in normal operation; any divergence indicates staleness in one or more input feeds and must trigger a DATA_QUALITY_WARNING.
+imputed_features: List[str]
+
+List of feature names for which the value was imputed (e.g., due to missing data) rather than computed from live input. An empty list when all features are fully observed. Downstream consumers using raw features for model training must filter out records with non-empty imputed_features lists or apply appropriate imputation-aware handling.
+Schema versioning for features: The set of features and their names must be versioned alongside the module. A feature_schema_version field within the features sub-object records the schema version active at computation time. This is separate from calibration_version because feature definitions change on code deployments, not calibration cycles. Without this versioning, a historical dataset containing raw features from multiple module versions is uninterpretable without external documentation.

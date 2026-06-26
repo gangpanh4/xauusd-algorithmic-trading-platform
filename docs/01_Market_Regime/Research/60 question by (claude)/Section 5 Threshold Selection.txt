@@ -1,0 +1,126 @@
+Section 5: Threshold Selection
+Should thresholds be fixed or adaptive?
+How should trend thresholds be determined?
+How should volatility thresholds be determined?
+Should thresholds be based on historical percentiles?
+Which thresholds should be configurable?
+What default threshold values are recommended?
+
+Section 5: Threshold Selection
+
+5.1 Fixed vs. Adaptive Thresholds
+Thresholds should be dual-layered: a fixed structural baseline overlaid with adaptive calibration. Neither approach alone is sufficient in production.
+Fixed thresholds provide reproducibility, auditability, and protection against overfitting to recent history. They are necessary for regime labels to remain comparable across time and across model versions — if thresholds shift continuously, regime labels become non-stationary by construction, which breaks any downstream strategy or risk model that trains on labeled regimes.
+Adaptive thresholds are necessary because market microstructure changes over time. A volatility threshold calibrated on 2010–2015 equities will misclassify regimes during COVID-era volatility spikes or the low-volatility suppression of 2017. Ignoring this leads to chronic misclassification in structurally different regimes.
+The recommended architecture:
+
+Hard-coded floor/ceiling guards: Absolute bounds that can never be crossed regardless of adaptive recalibration. These prevent degenerate outputs (e.g., every day classified as "trending," or a volatility threshold of zero).
+Rolling calibration window: Thresholds are recomputed on a trailing window (e.g., 252 or 504 trading days) using percentile-based rules described in 5.4. The calibration itself is scheduled, not continuous — update frequency should be weekly or monthly, not intraday, to avoid threshold chasing.
+Regime-aware dampening: Threshold updates are suppressed or down-weighted during confirmed crisis/high-volatility regimes. Recalibrating thresholds using data from a crash embeds the crash into the definition of "normal," which distorts subsequent labeling.
+Change detection gate: Adaptive updates only apply when a statistical test (e.g., Kolmogorov-Smirnov or CUSUM on the underlying signal distribution) confirms structural drift. Without this gate, adaptive thresholds introduce unnecessary noise.
+
+Thresholds should never be updated in real-time within a trading session. All recalibrations apply at the open of the next calibration cycle.
+
+5.2 Trend Threshold Determination
+Trend thresholds govern classification of directional signals — typically the output of ADX, a moving-average crossover spread, or a normalized momentum score. Determination involves three steps:
+Step 1 — Signal normalization. Raw trend indicators have scale artifacts (ADX is bounded 0–100; MA spreads are price-denominated). All trend signals must be normalized before threshold application, either by z-scoring against a rolling window or by expressing as a percentile rank within the calibration window. This ensures thresholds have consistent semantic meaning across instruments and time periods.
+Step 2 — Regime-labeled historical segmentation. Using an independent reference labeling (e.g., analyst-annotated regimes, or a Hidden Markov Model trained on a held-out period), identify the empirical distribution of the normalized trend signal within confirmed trending vs. non-trending periods. The threshold is set at the intersection of these distributions — the point that minimizes combined classification error (false trending + false ranging). In practice this approximates the point where the two Gaussian distributions cross, weighted by their base rates.
+Step 3 — Hysteresis band construction. Do not use a single threshold value. Set a lower entry threshold (signal must exceed this to enter a trending regime) and a higher exit threshold (signal must fall below this to exit a trending regime). The band width should be calibrated so that false regime flips are suppressed across typical mean-reversion noise in the trend indicator. A reasonable starting band is ±0.5 standard deviations around the optimal threshold, tightened or widened based on false-flip frequency observed in backtest.
+For ADX specifically: trending regimes historically begin to exhibit meaningful persistence above ADX ≈ 20–25. The hysteresis band is typically set at 20 (entry) / 17 (exit), though these require instrument-specific calibration.
+
+5.3 Volatility Threshold Determination
+Volatility thresholds are structurally more complex than trend thresholds because volatility is highly autocorrelated, non-Gaussian (fat-tailed), and exhibits strong regime dependence — the very thing being measured.
+Preferred approach — realized volatility percentile anchoring:
+Compute rolling realized volatility (e.g., 21-day annualized) over the calibration window. Map the realized volatility time series to its empirical percentile distribution. Define volatility regime boundaries at fixed percentile cuts (e.g., <33rd percentile = low, 33rd–67th = normal, >67th = elevated, >90th = crisis). This is superior to fixed annualized volatility levels because it automatically adjusts to the volatility-of-volatility of each instrument class.
+Regime-specific multipliers: Volatility thresholds interact with trend thresholds. A trend signal during a high-volatility period carries different confidence than the same signal in a low-volatility period. The module should maintain a volatility scaling factor that modulates trend threshold sensitivity based on the current volatility regime. In high-volatility periods, trend thresholds should be raised (require stronger directional evidence) to avoid noise-driven mislabeling.
+GARCH-informed dynamic baseline: For production systems, a GARCH(1,1) or EGARCH model should provide a conditional volatility estimate alongside the realized volatility input. The threshold determination logic should compare both: when GARCH conditional volatility and realized volatility disagree significantly (e.g., realized has spiked but conditional has not yet caught up), flag the regime label as uncertain rather than committing to a volatility regime transition.
+Handling volatility clustering: Implement a minimum dwell time for volatility regime changes — e.g., require that realized volatility exceeds the threshold for at least 3 consecutive periods before a volatility regime transition is confirmed. This prevents whipsawing during intraday or day-to-day volatility oscillations.
+
+5.4 Historical Percentile-Based Thresholds
+Yes — percentile anchoring should be the primary method for all continuous-signal thresholds, with the following design constraints:
+Calibration window: The rolling window for percentile computation must be long enough to capture at least one full market cycle (bull, bear, ranging, crisis). A minimum of 504 trading days (~2 years) is recommended; 756 days (~3 years) is preferable. Windows shorter than 252 days introduce substantial look-ahead sensitivity.
+Percentile definitions per signal type:
+SignalLow RegimeNormal RegimeHigh/Trending RegimeRealized Volatility< P33P33 – P67> P67 (crisis > P90)ADX (normalized)< P30P30 – P60> P60Trend momentum z-score< –P60–P60 to +P60outside ±P60Volume ratio< P25P25 – P75> P75
+Non-stationarity caveat: Percentile-based thresholds assume the calibration window is representative of the current market structure. When a structural break is detected (see Section 5.1 CUSUM gate), the calibration window should be reset or expanded to include pre- and post-break data, and thresholds should be flagged as provisional until sufficient post-break history accumulates (minimum 63 trading days).
+Extreme tail handling: The top and bottom 5th percentiles should be treated as separate regime flags ("crisis" and "dormant") rather than absorbed into the high/low regime bins. These tails often correspond to qualitatively different market conditions requiring distinct downstream treatment.
+
+5.5 Configurable Thresholds
+All thresholds should be externally configurable via a validated configuration schema (e.g., YAML or JSON with Pydantic validation at load time). The following are the minimum required configurable parameters:
+Trend thresholds:
+
+trend_entry_threshold — normalized signal level to enter a trending regime
+trend_exit_threshold — normalized signal level to exit a trending regime
+trend_calibration_window_days — rolling window for trend signal percentile computation
+trend_min_dwell_periods — minimum consecutive periods before regime transition is confirmed
+
+Volatility thresholds:
+
+vol_low_percentile — upper bound of low-volatility regime (default: P33)
+vol_high_percentile — lower bound of high-volatility regime (default: P67)
+vol_crisis_percentile — lower bound of crisis regime (default: P90)
+vol_calibration_window_days
+vol_min_dwell_periods
+vol_garch_disagreement_tolerance — fractional divergence between GARCH and realized vol before uncertainty flag is raised
+
+Adaptive recalibration controls:
+
+adaptive_recalibration_enabled — bool; disables all adaptive updates when false
+recalibration_frequency — e.g., "weekly", "monthly"
+recalibration_min_history_days — minimum history required before adaptive thresholds activate
+structural_break_sensitivity — KS-test or CUSUM sensitivity parameter
+
+Global guards:
+
+absolute_vol_floor — minimum realized vol threshold regardless of percentile (prevents near-zero thresholds in suppressed vol environments)
+absolute_vol_ceiling — maximum vol threshold (prevents extreme tail events from setting an absurdly high "normal")
+max_adaptive_threshold_drift — maximum fractional change allowed per recalibration cycle (prevents jump discontinuities)
+
+All configurable thresholds must pass validation at module initialization. Invalid configurations (e.g., trend_exit_threshold > trend_entry_threshold) should raise a ThresholdConfigurationError with an explicit message before any computation begins.
+
+5.6 Recommended Default Values
+The following defaults are calibrated for liquid, large-cap equity indices (e.g., SPX, NDX). They require instrument-specific recalibration for FX, fixed income, commodities, or individual equities.
+Trend defaults:
+ParameterDefaultRationaletrend_entry_thresholdP60 of normalized ADXHistorically, ADX above this level shows meaningful trend persistencetrend_exit_thresholdP45 of normalized ADXCreates a hysteresis band; avoids flip-flopping near boundarytrend_calibration_window_days504Two full years; captures at least one cycletrend_min_dwell_periods3 daysSuppresses single-day signal spikes
+Volatility defaults:
+ParameterDefaultRationalevol_low_percentile33Tertile split; symmetric baselinevol_high_percentile67Tertile split upper boundvol_crisis_percentile90Top decile; consistent with VIX spike thresholds in literaturevol_calibration_window_days504Symmetric with trend windowvol_min_dwell_periods3 daysConsistent with trend; prevents vol-spike whipsawingabsolute_vol_floor5% annualizedBelow this, vol regime labels become numerically unstableabsolute_vol_ceiling150% annualizedAbove this, crisis regime is forced regardless of percentilevol_garch_disagreement_tolerance0.40 (40% divergence)Empirically, larger divergence signals structural event in progress
+Adaptive recalibration defaults:
+ParameterDefaultadaptive_recalibration_enabledtruerecalibration_frequency"weekly"recalibration_min_history_days126 (half-year)max_adaptive_threshold_drift0.15 (15% per cycle)
+These defaults should be treated as a validated starting point, not a production guarantee. Any deployment targeting a specific instrument class, time horizon, or strategy type should conduct a calibration study over at least 5 years of in-sample history before treating them as final. All defaults must be documented in the module's configuration schema with units, valid ranges, and the rationale for the default value.
+
+
+## ChatGPT Review Notes
+
+### Adopt for v2.3
+
+Threshold Design
+- Fixed, configurable thresholds.
+- Store all thresholds in configuration files.
+- Implement hysteresis (separate entry and exit thresholds).
+- Validate configuration values during startup.
+
+Trend
+- ADX Entry > 25
+- ADX Exit < 20
+
+Volatility
+- ATR-based volatility classification.
+- BB Width for compression detection.
+
+Market Efficiency
+- CHOP < 38 → Trending
+- CHOP > 62 → Ranging
+
+### Simplify
+
+- Use absolute thresholds instead of rolling percentiles.
+- Manual threshold tuning using backtests.
+- Single-symbol optimization (XAUUSD only).
+
+### Defer to Future Versions
+
+- Adaptive threshold recalibration
+- Percentile-based thresholds
+- GARCH / EGARCH models
+- KS-Test and CUSUM drift detection
+- Automatic threshold optimization
+- Dynamic threshold drift limits

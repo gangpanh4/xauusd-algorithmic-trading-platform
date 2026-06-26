@@ -1,0 +1,116 @@
+Section 6: State Transition Logic
+
+Under what conditions should a regime change occur?
+Should hysteresis be implemented? If so, how?
+How many consecutive confirmations are required before switching regimes?
+Should a minimum regime duration be enforced?
+How should rapid oscillation between regimes be prevented?
+How should conflicting indicator signals affect transitions?
+
+
+
+Section 6: State Transition Logic
+
+6.1 Conditions for Regime Change
+A regime change should never be triggered by a single indicator crossing a threshold in a single period. Production-grade transition logic requires simultaneous satisfaction of multiple independent conditions, forming a conjunctive gate. A regime change is authorized only when all of the following conditions are met:
+Condition 1 — Primary signal confirmation. The primary regime indicator (e.g., normalized ADX for trend, realized volatility percentile for volatility) must cross the designated entry threshold and remain beyond it for the minimum dwell period defined in configuration. A single-period exceedance is treated as a candidate event, not a confirmed transition.
+Condition 2 — Secondary signal corroboration. At least one secondary indicator must independently agree with the proposed transition. For a trend regime entry, this could be a moving-average slope sign change, a momentum z-score exceeding its threshold, or a volume confirmation. For a volatility regime transition, this could be GARCH conditional volatility directionally agreeing with realized volatility movement. The secondary indicator does not need to cross its own threshold — directional agreement is sufficient at this stage.
+Condition 3 — Confidence score threshold. The module's internal regime probability estimate (see Section 7 on confidence scoring) must exceed a minimum confidence floor for the proposed new regime. A low-confidence reading during threshold exceedance indicates the system is near a boundary, not clearly in a new state. The proposed transition is deferred until confidence rises above the floor or the signal retreats.
+Condition 4 — Macro context compatibility. If the module maintains a macro overlay (e.g., VIX level, credit spread regime, risk-on/risk-off flag), the proposed transition must not directly contradict the macro state. A micro-level signal suggesting a strong trending regime while macro signals indicate crisis conditions should trigger a conflict resolution path (see 6.6) rather than an unconditional transition.
+Condition 5 — No active suppression flag. Certain system states suppress transitions outright: a structural break flag raised by the CUSUM monitor, an active data quality warning on the input feed, or a calendar event lock (e.g., within one session of a major scheduled release where artificial signal spikes are expected). During suppression, the current regime label is frozen and the candidate transition is queued for re-evaluation once suppression lifts.
+These five conditions are evaluated in order. Failure at any gate stops evaluation for that period; the system re-evaluates from Condition 1 at the next observation.
+
+6.2 Hysteresis Implementation
+Hysteresis is mandatory. A module without hysteresis will produce regime labels that oscillate at boundaries, generating excessive transaction costs and strategy instability in any downstream consumer.
+The implementation uses a dual-threshold state machine per signal dimension, not a single crossing threshold. The entry and exit thresholds for each regime are set at different levels, creating a band of ambiguity within which the current regime is maintained regardless of signal value.
+Structural design:
+Each regime dimension (trend, volatility) maintains a current state variable. Transitions operate as follows:
+
+From ranging to trending: signal must exceed trend_entry_threshold. Until it does, the ranging label persists even if the signal is above the exit threshold.
+From trending to ranging: signal must fall below trend_exit_threshold, which is set strictly below the entry threshold. A signal hovering between exit and entry thresholds remains classified in its current state.
+
+The hysteresis band width — the gap between entry and exit thresholds — should be calibrated to be at least 1.5× the typical short-term standard deviation of the signal in question. This ensures normal noise oscillation does not produce transitions. As a practical rule, if backtesting the regime labels reveals more than one transition per 10-day window on average during range-bound markets, the hysteresis band is too narrow.
+Asymmetric hysteresis for crisis regimes: Crisis/high-volatility regimes should implement asymmetric bands — easy to enter (lower entry bar), hard to exit (high exit bar requiring significant and sustained volatility compression). This reflects the empirical asymmetry of volatility: spikes are fast and must be captured quickly; recoveries are gradual and should not be prematurely labeled as regime exits. The crisis exit threshold should require realized volatility to fall below the P67 level (not merely the P90 entry level) and sustain for a minimum of 5 periods.
+State machine persistence: The hysteresis logic must be implemented as a stateful object, not a stateless function applied to each observation independently. The current regime label must be an explicit state variable carried forward across observations. Stateless re-labeling of history on each call is not a hysteresis implementation — it is threshold crossing detection, which produces the very oscillation problem hysteresis is designed to solve.
+
+6.3 Consecutive Confirmation Requirements
+The minimum number of consecutive confirmation periods required before a regime transition is committed should vary by regime type and transition direction. A single recommended value applied uniformly is inadequate.
+Recommended confirmation counts by transition type:
+TransitionMinimum ConfirmationsRationaleRanging → Weakly Trending3 periodsModerate evidence bar; false trends are common near range boundariesWeakly Trending → Strongly Trending2 periodsAlready in trend; incremental confirmation is sufficientTrending → Ranging4 periodsTrend exhaustion signals are noisy; require sustained evidence of decayLow Vol → Normal Vol2 periodsVol expansion confirms quickly in real dataNormal Vol → High Vol2 periodsErr toward fast capture of volatility expansionHigh Vol → Normal Vol5 periodsVolatility compression must be sustained; premature recovery labeling is costlyAny → Crisis1 periodCrisis onset must be captured immediately; confirmation delay is unacceptableCrisis → Any7 periodsCrisis exits are the highest-stakes transitions; require strong sustained evidence
+Confirmation counting rules:
+The consecutive counter must reset to zero on any period where the signal retreats back across the relevant threshold, even by a small amount. Partial credit (e.g., counting a near-miss as 0.5) is not recommended — it introduces a hidden continuous parameter that is difficult to audit and calibrate. The counter is binary: each period either extends the confirmation streak or resets it.
+The confirmation counter for a candidate transition runs in parallel with the current regime label, which does not change until the confirmation count is satisfied. The candidate transition and its running count should be exposed as observable outputs of the module, not hidden internal state — downstream consumers need to know when the system is approaching a transition boundary.
+
+6.4 Minimum Regime Duration
+A minimum regime duration must be enforced as a hard constraint, independent of and in addition to the consecutive confirmation requirement. Confirmation prevents premature entry into a new regime; minimum duration prevents premature exit.
+Minimum duration by regime:
+RegimeMinimum DurationNotesStrongly Trending5 trading daysStrong trends are persistent; allow time to developWeakly Trending3 trading daysShorter persistence expected; exit bar is lowerRanging5 trading daysRange regimes are stable by nature; short-duration ranging is usually transition noiseHigh Volatility3 trading daysVol events can resolve quickly; somewhat shorter floorCrisis10 trading daysLongest minimum; crisis regimes have real-world consequences for downstream modelsLow Volatility5 trading daysSuppressed vol periods are structurally stable; short durations indicate noise
+Implementation: The module tracks current_regime_entry_time. On each observation, before evaluating any transition, it checks whether current_time - current_regime_entry_time >= minimum_duration[current_regime]. If the minimum duration has not elapsed, all transition logic is bypassed and the current label is maintained unconditionally. The bypass itself is logged with a DURATION_LOCK flag in the output metadata so downstream consumers can distinguish a confident regime label from a duration-locked one.
+Override provision: The minimum duration enforcement must be bypassable for crisis entry. If crisis conditions are met while a non-crisis regime is duration-locked, the crisis entry proceeds immediately. Duration locking must never delay the capture of a crisis regime onset.
+
+6.5 Prevention of Rapid Regime Oscillation
+Rapid oscillation — where the module flips between two regimes on consecutive or near-consecutive observations — is a signal of threshold miscalibration, insufficient hysteresis, or genuine market ambiguity. The system should detect and respond to it explicitly rather than allowing it silently.
+Primary prevention mechanisms (structural — built into the transition logic):
+The combination of dual-threshold hysteresis (6.2), minimum confirmation counts (6.3), and minimum regime duration (6.4) eliminates the majority of oscillation. These three mechanisms must all be active simultaneously; removing any one significantly increases oscillation frequency.
+Secondary prevention — flip frequency monitoring:
+Maintain a rolling counter of regime transitions over a configurable lookback window (default: 21 trading days). If the transition count exceeds a configurable threshold (default: 3 transitions per 21-day window for any single regime dimension), activate an oscillation suppression mode:
+
+The current regime label is locked.
+Threshold entry requirements are temporarily raised by one confirmation period.
+An OSCILLATION_WARNING flag is set in the module output.
+The condition persists until the rolling transition count falls back below the threshold.
+
+This suppression is not silent — it must be logged and observable. An oscillation warning is itself a signal: it indicates the market is genuinely at a regime boundary, which is useful information for downstream consumers.
+Tertiary prevention — regime probability smoothing:
+Apply a short exponential moving average to the raw regime probability scores before threshold evaluation (not to the regime labels themselves, which must remain discrete). A smoothing factor of α = 0.3 over 3 periods removes high-frequency noise from the probability estimates without introducing meaningful lag. Smoothing must be applied to the input signal, not the output label — label smoothing post-hoc is not a valid substitution.
+What not to do: Do not implement oscillation prevention by simply increasing minimum duration or confirmation counts uniformly to large values. Doing so trades oscillation risk for catastrophic lag in crisis detection. The targeted mechanisms above are preferred because they activate conditionally based on observed oscillation, preserving responsiveness under normal conditions.
+
+6.6 Handling Conflicting Indicator Signals
+Conflicting signals are not edge cases — they are the norm near regime boundaries and during transitions. The module must have an explicit, deterministic conflict resolution policy rather than leaving conflicts undefined.
+Step 1 — Signal independence audit. Before classifying a signal set as conflicting, verify that the signals are genuinely independent. ADX and a moving-average slope are not independent — both derive from price. True conflict resolution is only meaningful when signals from independent sources disagree (e.g., price-based trend signal vs. volume-based confirmation vs. volatility-implied direction). Correlated signals that disagree are more likely a calibration artifact than a true conflict.
+Step 2 — Conflict taxonomy. Classify the conflict type before applying resolution logic:
+
+Magnitude conflict: The direction of all signals agrees but their intensity disagrees (e.g., trend confirmed but volatility elevated). Resolution: proceed with transition, add a REDUCED_CONFIDENCE flag, raise the confidence floor requirement.
+Directional conflict — minority dissent: One signal disagrees with a majority of others. Resolution: proceed with the majority signal, log the dissenting indicator, apply a confidence penalty proportional to the weight of the dissenting signal.
+Directional conflict — even split: Signals are evenly divided in direction. This is the only true conflict. Resolution: do not transition. Maintain current regime. Set an AMBIGUOUS_REGIME flag in output metadata. Re-evaluate next period.
+Scale conflict: Signals agree on regime type but disagree on severity (e.g., one suggests weakly trending, another strongly trending). Resolution: assign the more conservative (lower intensity) of the proposed regimes.
+
+Step 3 — Signal weighting. Not all signals carry equal weight in conflict resolution. The module should maintain a configurable signal weight vector, with weights representing each indicator's historical accuracy in regime classification on the calibration dataset. In a conflict, the weighted vote determines the majority. Default weights should be uniform at initialization and updated during periodic recalibration based on each indicator's confusion matrix performance.
+Step 4 — Conflict persistence handling. If an even-split conflict persists for more than conflict_max_duration periods (default: 3), escalate: assign the regime that has the lowest expected cost of misclassification given the current context. In practice, during an unresolved conflict between trending and ranging, defaulting to ranging is lower cost for most strategies — it produces underperformance on a genuine trend rather than the larger risk of full trend-following exposure in a ranging market. This asymmetric default must be documented and configurable.
+Conflict metadata output: Every observation should carry a conflict_state field in the output — not just observations where a conflict is active. Values: NONE, MINORITY_DISSENT, EVEN_SPLIT, MAGNITUDE_CONFLICT, SCALE_CONFLICT. This field enables downstream consumers to distinguish a clean, high-confidence regime label from one produced under ambiguity, and to adjust position sizing or strategy allocation accordingly.
+
+
+## ChatGPT Review Notes
+
+### Adopt
+- Multi-condition regime transition gates.
+- Hysteresis using separate entry and exit thresholds.
+- Consecutive confirmation before regime changes.
+- Minimum regime duration to reduce noise.
+- Data quality validation before transitions.
+- Explicit handling of conflicting signals.
+- UNKNOWN state when evidence is insufficient.
+
+### Simplify for v2.3
+- Use four transition gates:
+  - Primary indicators
+  - Confidence threshold
+  - Confirmation bars
+  - Data quality check
+- Use fixed confirmation periods:
+  - Trend = 3 bars
+  - Range = 3 bars
+  - Volatile = 2 bars
+- Implement basic oscillation logging only.
+- Represent conflicts as:
+  - AGREE
+  - WEAK_AGREEMENT
+  - CONFLICT
+
+### Defer to Future Versions
+- Macro compatibility checks.
+- Crisis-specific asymmetric hysteresis.
+- Adaptive confirmation counts.
+- Automatic oscillation suppression.
+- Weighted conflict resolution.
+- Probability smoothing.

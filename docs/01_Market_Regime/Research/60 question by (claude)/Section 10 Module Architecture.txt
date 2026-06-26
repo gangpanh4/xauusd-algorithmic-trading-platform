@@ -1,0 +1,481 @@
+Section 10: Module Architecture
+
+1. What should the public interface of market_regime.py look like?
+2. Should the detector be stateless or stateful?
+3. Which configuration parameters should be externally configurable?
+4. Should the module depend on any external services?
+5. How should the detector integrate with the rest of the trading system?
+
+Section 10: Module Architecture
+
+10.1 Public Interface
+The public interface is the contract between the regime detection module and every consumer in the trading system. It must be minimal, stable, and expressive — minimal so that consumers are not coupled to internal implementation details, stable so that internal refactors do not break callers, and expressive so that the full richness of the module's output is accessible without requiring consumers to call multiple methods or reconstruct derived values.
+The interface is organized into three layers: the primary detector class, supporting data classes that form the type contract, and a factory function for standard construction.
+Primary class: MarketRegimeDetector
+pythonclass MarketRegimeDetector:
+    """
+    Stateful, single-instrument market regime detector.
+
+    One instance per instrument. Thread-safe for concurrent reads;
+    write operations (update) acquire an internal lock.
+    Not safe for concurrent calls to update() from multiple threads.
+    """
+
+    def __init__(
+        self,
+        instrument_id: str,
+        config: RegimeDetectorConfig,
+        calibration: CalibrationArtifact,
+        clock: Clock = SystemClock(),
+        logger: StructuredLogger | None = None,
+    ) -> None: ...
+
+    def update(
+        self,
+        bar: MarketBar,
+    ) -> MarketRegime:
+        """
+        Consume one observation and return the current regime assessment.
+
+        The primary entry point for live and backtesting use. Advances
+        internal state, evaluates all transition logic, emits log events,
+        and returns a fully-populated MarketRegime object.
+
+        Args:
+            bar: A validated MarketBar containing OHLCV and any
+                 auxiliary fields required by configured indicators.
+
+        Returns:
+            MarketRegime: The current regime assessment after
+                          incorporating this observation. Never None.
+
+        Raises:
+            DataQualityError: If bar fails validation and
+                              config.strict_data_validation is True.
+            StaleInputError:  If bar.timestamp is not strictly after
+                              the last processed timestamp.
+        """
+        ...
+
+    def update_batch(
+        self,
+        bars: Sequence[MarketBar],
+        *,
+        progress: bool = False,
+    ) -> list[MarketRegime]:
+        """
+        Process a sequence of bars in chronological order.
+
+        Preserves all state transitions across the sequence exactly
+        as sequential update() calls would. Intended for backtesting
+        and historical initialization. Returns one MarketRegime per
+        bar in input order.
+
+        Args:
+            bars:     Sequence of MarketBar, must be strictly
+                      chronologically ordered.
+            progress: If True, emit a progress indicator for
+                      long sequences.
+
+        Raises:
+            ChronologyError: If bars are not strictly ascending
+                             in timestamp.
+        """
+        ...
+
+    def current_regime(self) -> MarketRegime | None:
+        """
+        Return the most recently computed regime without advancing state.
+
+        Returns None if update() has never been called. Safe to call
+        from a read thread concurrently with another thread calling
+        current_regime(). Not safe to call concurrently with update().
+        """
+        ...
+
+    def regime_history(
+        self,
+        n: int | None = None,
+    ) -> list[MarketRegime]:
+        """
+        Return recent regime records in reverse chronological order.
+
+        Args:
+            n: Maximum records to return. None returns all retained
+               history up to config.history_retention_periods.
+
+        Returns an empty list if no updates have been processed.
+        """
+        ...
+
+    def recalibrate(
+        self,
+        calibration: CalibrationArtifact,
+        *,
+        effective_from: datetime | None = None,
+    ) -> RecalibrationResult:
+        """
+        Apply a new calibration artifact to the running detector.
+
+        Does not reset regime state or history. Thresholds and weights
+        take effect from the next update() call after effective_from
+        (defaults to immediately). Logs a CALIBRATION_UPDATED event.
+
+        Args:
+            calibration:    A fully validated CalibrationArtifact.
+            effective_from: Optional future timestamp at which the
+                            new calibration becomes active. If provided,
+                            the detector buffers the incoming artifact
+                            and swaps atomically at the specified time.
+
+        Returns:
+            RecalibrationResult: Summary of what changed — old vs new
+                                 threshold values, weight deltas,
+                                 and drift magnitudes per parameter.
+
+        Raises:
+            CalibrationValidationError: If the artifact fails
+                                        internal consistency checks.
+        """
+        ...
+
+    def reset(
+        self,
+        *,
+        preserve_calibration: bool = True,
+    ) -> None:
+        """
+        Reset all internal state to initialization values.
+
+        Intended for use between backtesting runs or when reinitializing
+        after a critical error. Logs a MODULE_RESET event.
+
+        Args:
+            preserve_calibration: If True, the current CalibrationArtifact
+                                  is retained. If False, the detector
+                                  reverts to the calibration supplied at
+                                  construction.
+        """
+        ...
+
+    def snapshot(self) -> DetectorSnapshot:
+        """
+        Capture a complete, serializable snapshot of internal state.
+
+        The snapshot can be used to restore the detector to this exact
+        state via MarketRegimeDetector.from_snapshot(). Intended for
+        checkpointing in long-running processes and for state transfer
+        between processes in distributed deployments.
+        """
+        ...
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: DetectorSnapshot,
+        *,
+        clock: Clock | None = None,
+        logger: StructuredLogger | None = None,
+    ) -> "MarketRegimeDetector":
+        """
+        Restore a detector from a previously captured snapshot.
+
+        Produces a detector in exactly the state represented by the
+        snapshot, including regime history, current epoch, and
+        calibration artifact.
+        """
+        ...
+
+    @property
+    def instrument_id(self) -> str: ...
+
+    @property
+    def config(self) -> RegimeDetectorConfig: ...
+
+    @property
+    def calibration_version(self) -> str: ...
+
+    @property
+    def is_initialized(self) -> bool:
+        """
+        True once the minimum history required for reliable labeling
+        has been accumulated (config.initialization_periods).
+        """
+        ...
+
+    @property
+    def status_flags(self) -> frozenset[StatusFlag]: ...
+Factory function:
+pythondef create_detector(
+    instrument_id: str,
+    config_path: Path | str,
+    calibration_path: Path | str,
+    *,
+    warm_up_bars: Sequence[MarketBar] | None = None,
+    clock: Clock | None = None,
+    logger: StructuredLogger | None = None,
+) -> MarketRegimeDetector:
+    """
+    Standard factory for production and backtesting use.
+
+    Loads and validates config and calibration from disk, constructs
+    the detector, and optionally warms it up with historical bars so
+    that the first call to update() returns a fully initialized regime
+    rather than an INITIALIZATION_PERIOD result.
+
+    Raises:
+        ConfigValidationError:       If config file fails schema
+                                     validation.
+        CalibrationValidationError:  If calibration artifact is
+                                     malformed or expired.
+        ChronologyError:             If warm_up_bars are not strictly
+                                     ascending.
+    """
+    ...
+Key interface design decisions worth making explicit:
+The interface is deliberately instrument-scoped. One MarketRegimeDetector instance manages one instrument. Multi-instrument orchestration is the caller's responsibility — a RegimeDetectorRegistry or similar container lives outside this module. This keeps the core class simple, testable, and free of cross-instrument coupling.
+update() returns a MarketRegime synchronously. Async variants should be thin wrappers (async_update() calling update() in an executor) rather than reimplementing the core logic asynchronously. The regime computation itself is CPU-bound and should not be awaited within an async event loop.
+The Clock dependency injection enables deterministic testing: pass a MockClock in tests to control wall time without monkeypatching. SystemClock is the default for production. This pattern must be established at construction rather than accessed via datetime.now() inside methods, which is untestable.
+
+10.2 Stateful vs. Stateless Design
+The detector must be stateful. This is not a preference — it is an architectural requirement imposed by the logic specified in preceding sections.
+Hysteresis (Section 6.2) requires knowing the current regime to evaluate whether an exit threshold has been crossed. Consecutive confirmation counting (Section 6.3) requires a counter that persists across observations. Minimum duration enforcement (Section 6.4) requires the regime entry timestamp. Oscillation suppression (Section 6.5) requires a rolling transition counter. Persistence-adjusted confidence (Section 7.4) requires the elapsed time in the current epoch. None of these can be computed from a single observation in isolation; all require carrying forward state from prior observations.
+The practical consequence is that the MarketRegimeDetector is not a pure function and must not be treated as one. Callers who serialize the detector state, restart processes, or transfer computation between machines must use snapshot() and from_snapshot() to preserve continuity. Failing to do so produces incorrect regime labels from the first post-restart observation, because the new instance begins in the initialization state with no regime history.
+Internal state managed by the detector:
+python@dataclass
+class _DetectorState:
+    # Current regime epoch
+    current_regime: RegimeLabel
+    current_regime_epoch_id: UUID
+    current_regime_entry_timestamp: datetime
+    current_regime_duration_periods: int
+
+    # Transition logic state
+    candidate_transition: CandidateTransition | None
+    confirmation_counter: int
+    oscillation_transition_timestamps: deque[datetime]
+    oscillation_suppression_active: bool
+
+    # Confidence and persistence state
+    persistence_periods_elapsed: int
+    previous_regime: RegimeLabel | None
+    previous_regime_duration_periods: int
+
+    # Signal history for stability factor computation
+    primary_signal_history: deque[float]
+
+    # Calibration and system state
+    active_status_flags: set[StatusFlag]
+    last_processed_timestamp: datetime | None
+    initialization_periods_remaining: int
+
+    # Retained output history
+    regime_history: deque[MarketRegime]
+    transition_history: deque[TransitionRecord]
+State mutation discipline: All state mutations must occur within a single method (_commit_state_update()) called once per update() invocation, after all evaluation logic has completed. No indicator computation, threshold comparison, or confidence calculation method should mutate state as a side effect. This discipline is essential for testability — it means evaluation logic can be exercised against any arbitrary state without risk of unintended state modification — and for correctness in the presence of evaluation errors (an exception mid-evaluation must not leave state partially updated).
+State immutability of outputs: The MarketRegime objects returned by update() and stored in history are immutable after construction. They must be frozen dataclasses or NamedTuple instances. Mutable output objects that could be modified by a caller post-return would corrupt the module's internal history record.
+
+10.3 Externally Configurable Parameters
+Configuration must be fully externalizable and validated at load time through a typed schema. No parameter that affects regime classification behavior should be hardcoded. The complete configuration schema, organized by subsystem:
+yaml# regime_detector_config.yaml
+
+instrument:
+  instrument_id: "SPX"
+  bar_type: "DAILY"                     # DAILY | HOURLY | WEEKLY | CUSTOM
+  asset_class: "EQUITY_INDEX"           # Informs default calibration choices
+
+initialization:
+  initialization_periods: 63            # Bars required before exiting UNKNOWN
+  warm_up_strict_mode: true             # Raise on insufficient warm-up data
+
+trend:
+  indicator: "ADX"                      # ADX | MA_SLOPE | MOMENTUM_ZSCORE
+  calibration_window_days: 504
+  entry_percentile: 60
+  exit_percentile: 45
+  min_dwell_periods: 3
+  confirmation_periods_ranging_to_weak: 3
+  confirmation_periods_weak_to_strong: 2
+  confirmation_periods_trending_to_ranging: 4
+  hysteresis_band_multiplier: 1.5       # Band = multiplier × signal stddev
+
+volatility:
+  calibration_window_days: 504
+  low_percentile: 33
+  high_percentile: 67
+  crisis_percentile: 90
+  min_dwell_periods: 3
+  confirmation_periods_low_to_normal: 2
+  confirmation_periods_normal_to_high: 2
+  confirmation_periods_high_to_normal: 5
+  confirmation_periods_any_to_crisis: 1
+  confirmation_periods_crisis_to_any: 7
+  absolute_vol_floor: 0.05              # 5% annualized
+  absolute_vol_ceiling: 1.50            # 150% annualized
+  garch_disagreement_tolerance: 0.40
+  crisis_exit_requires_percentile: 67   # Must fall to P67 to exit crisis
+
+confidence:
+  weights:
+    signal_margin: 0.25
+    indicator_agreement: 0.25
+    persistence: 0.15
+    base_rate: 0.10
+    signal_stability: 0.10
+    macro_alignment: 0.10
+    calibration_recency: 0.05
+  persistence_p_max_default: 0.20
+  calibration_recency_floor: 0.85
+  dissent_amplification_factor: 0.60
+  dissent_penalty_cap: 0.50
+  minimum_signal_confidence_for_persistence: 0.40
+
+thresholds:
+  max_adaptive_drift_per_cycle: 0.15
+  structural_break_sensitivity: 0.05    # KS-test p-value threshold
+  conflict_max_duration_periods: 3
+  conflict_default_regime: "RANGING"    # Regime assigned on unresolved even-split
+
+oscillation:
+  detection_window_periods: 21
+  max_transitions_before_suppression: 3
+  suppression_additional_confirmations: 1
+
+adaptive_recalibration:
+  enabled: true
+  frequency: "weekly"                   # daily | weekly | monthly
+  min_history_days: 126
+  suppress_during_crisis: true
+  suppress_during_structural_break: true
+
+output:
+  include_raw_features: false
+  include_unnormalized_features: false
+  diagnostics_verbosity: "STANDARD"     # STANDARD | FULL | NONE
+  history_retention_periods: 252
+
+data_quality:
+  strict_data_validation: true
+  quality_warning_floor: 0.70
+  max_input_staleness_seconds: 7200
+  imputation_allowed: true
+  max_imputation_fraction: 0.05
+
+logging:
+  log_level: "INFO"
+  emit_health_telemetry: true
+  telemetry_frequency_periods: 1
+  diagnostic_trace_enabled: false
+  transition_log_synchronous: true      # Block output until log written
+Configuration validation rules enforced at load time:
+
+exit_percentile must be strictly less than entry_percentile for all threshold pairs
+All confidence weights must sum to 1.0 (±0.001 tolerance for float precision)
+confirmation_periods_any_to_crisis must equal 1 and is not overridable to a higher value
+crisis_exit_requires_percentile must be less than or equal to high_percentile
+max_adaptive_drift_per_cycle must be in (0.0, 0.50]
+absolute_vol_floor must be strictly positive
+absolute_vol_ceiling must be greater than absolute_vol_floor
+All min_dwell_periods values must be positive integers
+
+Any configuration that fails validation raises ConfigValidationError with a structured error message enumerating all failing rules, not just the first one encountered.
+
+10.4 External Service Dependencies
+The module should be designed for maximum operational independence. Every external dependency introduces a failure mode: a service that is unavailable, slow, or returning corrupt data can degrade or halt regime detection, which is a core risk management function that must operate even under adverse conditions. Dependencies must be justified individually and each must have a defined degradation path.
+Tier 1 — Required dependencies (module cannot function without them):
+Market data feed. The module requires OHLCV bar data. This is provided via the MarketBar input to update() — it is injected by the caller rather than fetched internally. The module has no direct network dependency on the market data provider; it is the caller's responsibility to source and validate data before passing it in. If a bar is unavailable, the caller decides whether to skip the period, impute, or raise — the module does not make this decision.
+Tier 2 — Optional dependencies (module degrades gracefully without them):
+Calibration artifact store. At initialization the module loads a CalibrationArtifact from disk or an object store. If this is unavailable, the module falls back to hardcoded default thresholds (see Section 5.6) and sets CALIBRATION_STALE immediately. It can still emit regime labels at reduced confidence. The calibration store is not polled continuously; it is accessed only at initialization and during scheduled recalibration cycles.
+GARCH model service. If a GARCH conditional volatility estimate is configured as a secondary volatility signal, it may come from an external model service. The module must tolerate the absence of this signal by excluding the GARCH term from confidence calculation and flagging REDUCED_CONFIDENCE. The GARCH service is never on the critical path for primary regime labeling.
+Macro context service. The macro overlay (risk-on/risk-off flag, VIX level, credit spread regime) is an optional confidence modifier. If the service is unavailable, the macro alignment factor is treated as neutral (contributes zero to confidence adjustment). Regime labels continue without interruption.
+Metrics sink. Prometheus or equivalent metrics exposition. Failure to write metrics must never affect regime computation or output emission. Metrics writes are fire-and-forget with a local buffer; failures are counted locally and emitted when the sink recovers.
+Log sink. As established in Section 9.3, transition log writes are synchronous and must succeed before output is emitted. All other log writes (health telemetry, diagnostic traces) are asynchronous with a configurable local buffer. If the log sink is unreachable for transition events, the module holds output emission and retries with a configurable timeout (default: 2 seconds, 3 attempts). If all retries fail, the module writes to a local fallback log file, sets LOG_SINK_DEGRADED in status flags, and proceeds with output emission. It must not silently drop transition log records.
+Tier 3 — No internal network calls. The module must make no HTTP requests, database queries, or message queue reads within update(). All external data must be injected at construction or via recalibrate(). This constraint ensures that update() latency is bounded by local computation only, and that the module can be tested in complete isolation without network mocking.
+Dependency injection pattern: All Tier 2 services are provided to the constructor as optional protocol-typed interfaces, defaulting to None (which activates the graceful degradation path) or to local no-op implementations:
+pythonclass MarketRegimeDetector:
+    def __init__(
+        self,
+        instrument_id: str,
+        config: RegimeDetectorConfig,
+        calibration: CalibrationArtifact,
+        clock: Clock = SystemClock(),
+        logger: StructuredLogger | None = None,
+        garch_provider: GarchProvider | None = None,
+        macro_provider: MacroContextProvider | None = None,
+        metrics_sink: MetricsSink | None = None,
+    ) -> None: ...
+This pattern ensures that unit tests, backtests, and paper trading deployments can run the full module logic without any external services, while production deployments inject live implementations through their dependency injection framework of choice.
+
+10.5 Integration with the Trading System
+The module is a producer of regime state. It does not consume strategy signals, positions, or orders. Its integration surface is deliberately narrow: it receives market data and emits MarketRegime objects. Everything else — routing those objects to consumers, persisting them, alerting on them — is the trading system's responsibility, not the module's.
+Integration pattern: push-based event emission
+In a live trading system, the primary integration mechanism is an event bus or message broker (Kafka, Redis Streams, or an internal pub/sub system). The regime detector publishes MarketRegime events to a dedicated topic per instrument on each update() call. Downstream consumers (strategy engines, risk engines, position sizers, monitoring dashboards) subscribe independently. This decoupling ensures that a slow consumer cannot block regime computation and that new consumers can be added without modifying the detector.
+MarketDataFeed
+      │
+      ▼
+ [Ingestion Layer]
+      │  MarketBar
+      ▼
+MarketRegimeDetector
+      │  MarketRegime
+      ├──────────────────► Regime Event Bus (per instrument topic)
+      │                          │
+      │                          ├──► Strategy Engine
+      │                          ├──► Risk Engine
+      │                          ├──► Position Sizer
+      │                          └──► Monitoring / Dashboard
+      │
+      └──────────────────► Audit Log Sink (synchronous, transition events)
+Integration pattern: pull-based registry for synchronous consumers
+Strategies or risk checks that need the current regime synchronously within their own computation cycle should not consume from the event bus — that introduces latency uncertainty and ordering complexity. Instead, a RegimeDetectorRegistry provides a synchronous, in-process read interface:
+pythonclass RegimeDetectorRegistry:
+    """
+    In-process registry of MarketRegimeDetector instances.
+    Provides synchronous regime reads for strategy and risk consumers.
+    """
+
+    def register(
+        self,
+        detector: MarketRegimeDetector,
+    ) -> None: ...
+
+    def current_regime(
+        self,
+        instrument_id: str,
+    ) -> MarketRegime | None: ...
+
+    def current_confidence(
+        self,
+        instrument_id: str,
+    ) -> float | None: ...
+
+    def all_regimes(self) -> dict[str, MarketRegime]: ...
+
+    def update_all(
+        self,
+        bars: dict[str, MarketBar],
+    ) -> dict[str, MarketRegime]:
+        """
+        Advance all registered detectors with one bar each.
+        Intended for synchronized multi-instrument updates at bar close.
+        """
+        ...
+The registry holds references to live MarketRegimeDetector instances. It does not copy or cache regime state — current_regime() delegates directly to the detector's current_regime() property, ensuring that reads always reflect the most recently committed state.
+Integration with the backtesting engine:
+The backtesting integration uses update_batch() on a pre-loaded bar sequence. The regime detector must produce bit-for-bit identical labels in backtesting and live operation given the same input sequence and calibration artifact. Any divergence between live and backtest regime labels for the same bar is a critical reproducibility failure. To enforce this:
+
+The backtesting engine must pass the same CalibrationArtifact that was active at the historical time being replicated, not the current artifact.
+The Clock injected into the backtesting instance must be a ReplayClock that advances according to bar timestamps, not wall time, so that any time-dependent logic (e.g., recalibration scheduling) behaves as it would have historically.
+The backtesting engine must call reset() between independent simulation runs to prevent state leakage.
+
+Integration with the risk engine:
+The risk engine is a high-priority consumer that uses regime state to set position limits, margin requirements, and drawdown thresholds. Its integration requirements are stricter than strategy consumers:
+
+The risk engine must consume regime updates synchronously before any order validation for the same bar period. The event ordering guarantee must be enforced by the integration layer.
+The risk engine must act on confidence_tier — during VERY_LOW or LOW confidence, risk limits should fall back to conservative defaults rather than regime-specific values. The regime module makes this easy by providing the tier explicitly; the risk engine must consume it.
+The risk engine must subscribe to status_flags changes independently of regime label changes. A transition from empty flags to STRUCTURAL_BREAK_DETECTED is a risk event even if the regime label itself has not changed.
+
+Integration with strategy selection:
+Strategies that switch behavior by regime should consume regime_probability_distribution rather than primary_regime alone wherever their logic permits. Hard regime-conditional switching (full allocation to one strategy when trending, zero otherwise) amplifies the impact of misclassification at boundaries. Strategies that blend allocations proportional to regime probabilities produce smoother transitions and are less sensitive to the precise location of threshold boundaries — which are inherently uncertain. The module provides the full distribution to enable this; strategy authors should be guided to use it.
+Deployment topology:
+In production, each instrument's detector runs in a dedicated thread or lightweight process within a regime service. The service is horizontally scalable by instrument shard. It exposes the RegimeDetectorRegistry interface internally and the event bus topic externally. It does not share state between instrument detectors — cross-instrument correlation logic, if required, is a separate higher-order service that consumes from multiple instrument topics and maintains its own state.

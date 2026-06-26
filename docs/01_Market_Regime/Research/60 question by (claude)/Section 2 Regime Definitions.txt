@@ -1,0 +1,109 @@
+Two diagrams serve this section well: first, the full regime taxonomy as a structured map; second, an interactive 2D state space showing how the dimensions compose. Here they are with the prose answers between.
+
+---
+
+## Q1 — What market regimes should be supported?
+
+A production-grade module should support a minimum viable taxonomy of six named regimes, organized in two tiers by how they affect strategy behavior:
+
+The first tier covers the three normal-market regimes that govern everyday alpha routing: a bull trending regime (sustained upward momentum with low-to-moderate volatility), a bear trending regime (sustained downward momentum, often with elevated volatility), and a mean-reverting or range-bound regime (no directional bias, oscillating within a band, autocorrelation is negative at short lags).
+
+The second tier covers three stress or structural regimes: a high-volatility expansion regime (volatility spike without a clear directional trend — common during event risk or macro shocks), a risk-off / flight-to-safety regime (correlated drawdown across risk assets, spread widening, vol compression in safe havens), and a low-volatility compression regime (suppressed realized volatility, often preceding a breakout, where options are cheap and carry trades dominate).
+
+Beyond these six, an `unknown` or `unclassified` state is mandatory — covered in Q6.---
+
+## Q2 — How should each regime be formally defined?
+
+Formal definitions need to be measurable, parameterized, and asset-class-aware. The goal is not a verbal description but a set of testable conditions on observable features. Here is the formal specification for each:
+
+**Bull trend**: The N-day exponential moving average slope is significantly positive (e.g., > +k σ of the slope distribution), the Hurst exponent H > 0.55 over a rolling window, and realized volatility is below its 70th percentile. Momentum factor (12-1 month return) is in the top quartile of its rolling distribution.
+
+**Bear trend**: Same criteria as bull trend but slope significantly negative, and realized volatility is elevated (often above 60th percentile). Correlation of returns across assets may be rising. Put/call ratio and credit spreads may be included as corroborating signals.
+
+**Mean-reverting**: The first-order return autocorrelation is significantly negative (ρ₁ < −threshold), the Hurst exponent H < 0.45, and the N-day price range is contracting relative to its rolling median. ADX (average directional index) is low (typically < 20–25).
+
+**High-volatility expansion**: Realized volatility is above its 85th percentile *and* the change in volatility (vol-of-vol) is high, but the trend signal is weak or conflicted. VIX term structure may be inverted. No persistent autocorrelation in either direction.
+
+**Risk-off / flight-to-safety**: Cross-asset correlation rises sharply (equities and credit both falling), spread widening in IG and HY credit is detected, gold and short-duration bonds are outperforming. May overlap with bear trend or high-vol expansion — the distinguishing feature is *correlation structure* across assets, not just direction in one market.
+
+**Low-volatility compression**: Realized volatility is below its 20th percentile, the Bollinger Band width is at multi-month lows, and implied volatility (where available) is below realized — options pricing a quiet future. Historical analog: pre-breakout coil periods.
+
+**Unknown**: None of the above regimes satisfies its minimum posterior probability threshold (e.g., max regime probability < 0.40), or key features are missing or stale.
+
+---
+
+## Q3 — Should trend direction and volatility be separate dimensions or combined into a single state?
+
+They should be modeled as separate dimensions and combined deliberately, not collapsed into a single label from the start.
+
+The reason is that the two dimensions have different dynamics and different downstream dependencies. Trend direction is captured by momentum signals and autocorrelation structure, and it governs which alpha factors are active. Volatility level governs position sizing, execution behavior, and risk limits. A strategy may need to *change its alpha signal* based on direction while *keeping position sizes the same* — or vice versa. If you fuse both into a single state label upfront, you can't decompose the effect.
+
+The practical architecture is a **compositional two-axis space**: one axis is direction (bull, neutral/mean-reverting, bear) and the other is volatility level (low, normal, high). The regime taxonomy above is essentially a structured subset of the cells in this 3×3 grid — the cells that have coherent and distinct strategy implications. The `risk-off` regime occupies the (bear, high-vol) cell with an additional cross-asset correlation condition. `Low-vol compression` occupies the (neutral, low-vol) cell.
+
+The module should internally track both dimensions as separate latent variables and expose them both — so that downstream consumers can condition on direction alone, volatility alone, or the joint state.
+
+This two-axis structure becomes the reference for the next diagram.The six named regimes populate the cells with the clearest strategy implications. Three cells (dashed borders) represent valid but lower-priority states worth monitoring without dedicated strategy switching logic at first.
+
+---
+
+## Q4 — Are the regimes mutually exclusive?
+
+At the level of the *final hard label*, yes — by convention, a system that outputs a single regime at time t must pick one. But this is an architectural simplification, not a claim about market reality.
+
+The underlying regime *probabilities* are not mutually exclusive, and should not be forced to be zero-or-one. A market can be simultaneously 60% consistent with a bear trend and 40% consistent with risk-off. Forcing a hard classification loses that information. The correct answer is: emit a full probability vector, let the hard label be the argmax (when needed), and let downstream consumers weight their decisions by the full distribution.
+
+The *dimensions* are also not mutually exclusive. Volatility level and trend direction are orthogonal axes — a bear trend can have low, normal, or high volatility. The six named regimes are six specific (direction × volatility) cells, but the module should track both axes independently.
+
+---
+
+## Q5 — Can multiple regimes exist simultaneously?
+
+In a single-instrument, single-timeframe context, the answer is no at the level of an integrated state: there is one current market environment. But across three practical dimensions, "simultaneous regimes" is a meaningful and important concept:
+
+**Across timeframes.** A market can be in a long-term bull trend (weekly regime) while experiencing a short-term high-volatility regime (intraday or daily). The module should support multi-horizon regime tracking, with each horizon feeding different strategy components — a trend-following strategy might care about the monthly regime while a vol-targeting overlay cares about the daily.
+
+**Across instruments or asset classes.** Equities can be in a risk-off regime while credit is in high-vol expansion and rates are in a bull trend. If the module is designed to serve a multi-asset book, it must produce per-asset or per-asset-class regime readings in addition to any aggregate cross-asset regime.
+
+**Across regime dimensions.** As noted above, the direction dimension and the volatility dimension are always simultaneously defined. A position sizing component may need the volatility dimension only; a signal routing component needs the direction dimension. Both are "active" at once.
+
+The design implication is that the module's output contract should be a structured object — not a single string — carrying the full probability vector, the inferred direction state, the inferred volatility state, the confidence level, and per-horizon signals where configured.
+
+---
+
+## Q6 — How should unknown or ambiguous market conditions be represented?
+
+The `unknown` state must be a first-class output, not an afterthought or an error code. Several situations produce it:
+
+**Low maximum posterior probability.** If the highest probability across all regimes is below a calibrated threshold (e.g., 0.40), the module is too uncertain to commit. It should output `unknown` with the full raw probability vector attached, so the caller can see *which* regimes the uncertainty is spread across.
+
+**Transitional periods.** When the regime is actively switching, probabilities are in flux and the classification is unstable. A separate `transitioning` flag (or a dedicated `transitional` regime state) can be emitted alongside the best-guess label, signaling to downstream systems that hysteresis is active and confidence is low.
+
+**Feature unavailability.** When input features are stale, missing, or anomalous (e.g., a market halt, a data feed gap), the module cannot compute a reliable posterior. It should emit `unknown` with a `data_quality` annotation, not attempt to extrapolate from incomplete inputs.
+
+**Structurally novel conditions.** If all features fall outside their historical training distribution (e.g., negative oil prices in April 2020), the model is operating out-of-sample. A distributional novelty detector can flag this and force the output to `unknown` until the situation stabilizes.
+
+The `unknown` state should trigger a specific default behavior in all downstream consumers: fall back to the most conservative parameter set for each decision (smallest position sizes, most passive execution, tightest risk limits, no alpha signal routing). Unknown is not neutral — it is an asymmetric risk signal.
+
+## ChatGPT Review Notes
+
+### Adopt
+- Separate Trend and Volatility dimensions.
+- Include an UNKNOWN regime.
+- Define regimes using measurable indicators.
+- Support multi-timeframe expansion in the future.
+
+### Simplify for v2.3
+- Use 4 primary regimes:
+  - TREND
+  - RANGE
+  - VOLATILE
+  - UNKNOWN
+- Use ADX, ATR, EMA Slope, and BB Width only.
+- Use confidence score instead of full probability distributions.
+
+### Defer to Future Versions
+- Hurst Exponent
+- Cross-asset correlation
+- Hidden Markov Models
+- Posterior probability vectors
+- Macro risk-off detection

@@ -1,0 +1,327 @@
+Section 11: Testing Strategy
+
+What unit tests are required?
+Which edge cases should be tested?
+How should historical data be used for validation?
+What acceptance criteria define a correct implementation?
+What measurable performance, reliability, and maintainability requirements should the implementation satisfy before it is considered production-ready?
+
+
+Section 11: Testing Strategy
+
+11.1 Required Unit Tests
+Unit tests must cover every computational layer of the module in isolation. Each test class targets a single component with all dependencies either injected as fakes or driven from controlled fixture data. No unit test may perform network I/O, file I/O outside of fixture loading, or sleep. The full unit suite must complete in under 60 seconds on a standard development machine.
+The test suite is organized into six component groups.
+
+Group 1 — Configuration and Validation
+TestRegimeDetectorConfig
+├── test_valid_config_loads_without_error
+├── test_exit_percentile_exceeds_entry_percentile_raises
+├── test_confidence_weights_not_summing_to_one_raises
+├── test_crisis_confirmation_overridden_above_one_raises
+├── test_vol_floor_exceeds_ceiling_raises
+├── test_all_validation_errors_reported_simultaneously
+├── test_missing_required_field_raises_with_field_name
+├── test_optional_fields_default_correctly
+└── test_config_is_immutable_after_construction
+Configuration validation is the cheapest and most frequently triggered failure mode in production. Every validation rule enumerated in Section 10.3 must have a corresponding negative test that confirms the exact exception type and that the error message identifies the offending field by name.
+
+Group 2 — Feature Computation
+One test class per indicator. Shown here for ADX; the same structure applies to all configured indicators.
+TestAdxIndicator
+├── test_output_range_bounded_zero_to_hundred
+├── test_known_value_against_reference_implementation
+├── test_insufficient_history_returns_none
+├── test_exactly_sufficient_history_returns_value
+├── test_all_same_prices_returns_zero_adx
+├── test_monotone_increasing_prices_returns_high_adx
+├── test_normalization_maps_to_unit_interval
+├── test_normalization_stable_across_calibration_window_sizes
+├── test_imputed_bar_flagged_in_output
+└── test_nan_input_raises_data_quality_error
+
+TestVolatilityIndicator
+├── test_realized_vol_annualization_correct
+├── test_garch_unavailable_falls_back_to_realized
+├── test_garch_disagreement_above_tolerance_sets_flag
+├── test_percentile_mapping_monotone
+├── test_percentile_mapping_stable_at_boundary_values
+├── test_crisis_percentile_threshold_correctly_applied
+└── test_vol_floor_and_ceiling_guards_applied
+
+TestIndicatorRegistry
+├── test_all_configured_indicators_instantiated
+├── test_unavailable_indicator_excluded_from_vote
+├── test_indicator_weight_renormalization_on_exclusion
+└── test_cluster_independence_grouping_correct
+Reference values for test_known_value_against_reference_implementation must be computed using a trusted external library (e.g., TA-Lib or pandas-ta) on a fixed synthetic price series defined in a fixture file. The fixture and the expected output must both be committed to version control so that the reference is stable and reviewable.
+
+Group 3 — Threshold Evaluation
+TestThresholdEvaluator
+├── test_signal_above_entry_threshold_votes_trending
+├── test_signal_below_exit_threshold_votes_ranging
+├── test_signal_between_exit_and_entry_preserves_current_regime
+├── test_signal_at_exactly_entry_threshold_votes_trending
+├── test_signal_at_exactly_exit_threshold_preserves_current
+├── test_hysteresis_band_width_computed_correctly
+├── test_adaptive_threshold_applied_after_recalibration
+├── test_adaptive_threshold_not_applied_during_suppression
+├── test_drift_cap_enforced_on_large_calibration_update
+├── test_absolute_floor_prevents_zero_threshold
+├── test_absolute_ceiling_prevents_extreme_threshold
+├── test_percentile_computed_correctly_on_known_distribution
+└── test_percentile_stable_at_window_boundary
+The between-threshold test (test_signal_between_exit_and_entry_preserves_current_regime) must be run twice: once with the detector in a trending regime (expecting preservation of trending) and once in a ranging regime (expecting preservation of ranging). This is the canonical hysteresis correctness test.
+
+Group 4 — State Transition Logic
+This is the largest and most critical group. Every transition path in the state machine must have a dedicated test.
+TestConfirmationCounter
+├── test_counter_increments_on_consecutive_signal
+├── test_counter_resets_on_single_period_retreat
+├── test_transition_commits_at_exactly_required_count
+├── test_transition_does_not_commit_one_period_early
+├── test_different_required_counts_per_transition_type
+└── test_candidate_exposed_in_output_during_confirmation
+
+TestDurationLock
+├── test_transition_suppressed_before_minimum_duration
+├── test_transition_permitted_at_exactly_minimum_duration
+├── test_crisis_entry_bypasses_duration_lock
+├── test_duration_lock_flag_set_in_status_flags
+├── test_duration_periods_counted_correctly_across_bar_types
+└── test_duration_lock_log_event_emitted
+
+TestOscillationSuppression
+├── test_suppression_activates_at_threshold_transition_count
+├── test_suppression_raises_confirmation_requirement
+├── test_suppression_deactivates_when_rate_drops
+├── test_oscillation_warning_flag_set
+└── test_suppression_window_is_rolling_not_cumulative
+
+TestHysteresis
+├── test_entry_from_ranging_requires_entry_threshold
+├── test_exit_from_trending_requires_exit_threshold
+├── test_signal_in_band_preserves_ranging
+├── test_signal_in_band_preserves_trending
+├── test_asymmetric_crisis_band_harder_to_exit
+└── test_hysteresis_state_preserved_across_serialization
+
+TestConflictResolution
+├── test_minority_dissent_applies_confidence_penalty
+├── test_even_split_defers_transition
+├── test_even_split_assigns_default_regime_after_timeout
+├── test_magnitude_conflict_sets_reduced_confidence_flag
+├── test_scale_conflict_assigns_conservative_regime
+├── test_conflict_state_exposed_in_output
+└── test_high_precision_dissenter_applies_larger_penalty
+Each state transition test must construct the detector with an explicit initial state (using from_snapshot() with a crafted DetectorSnapshot) rather than driving it to the target state through a long sequence of bars. Building up state through a sequence couples the test to the sequence's intermediate behavior; direct state injection isolates the behavior under test.
+
+Group 5 — Confidence Calculation
+TestConfidenceComposite
+├── test_deep_in_regime_produces_high_confidence
+├── test_near_threshold_produces_low_confidence
+├── test_all_factors_weighted_correctly
+├── test_weights_renormalized_when_factor_unavailable
+├── test_unavailable_macro_provider_neutral_contribution
+├── test_calibration_recency_decays_linearly
+├── test_composite_bounded_in_zero_one
+├── test_composite_never_reaches_one
+└── test_calibrated_score_matches_isotonic_mapping
+
+TestPersistenceFactor
+├── test_zero_at_regime_entry
+├── test_grows_toward_p_max_asymptotically
+├── test_regime_specific_time_constants_applied
+├── test_zeroed_when_signal_confidence_below_floor
+├── test_resets_immediately_on_regime_transition
+└── test_crisis_p_max_lower_than_other_regimes
+
+TestIndicatorAgreement
+├── test_all_agree_produces_maximum_agreement_score
+├── test_all_dissent_produces_minimum_agreement_score
+├── test_high_precision_dissenter_penalizes_more_than_low
+├── test_correlated_indicators_clustered_not_double_counted
+├── test_dissent_penalty_capped
+└── test_precision_weights_loaded_from_calibration_artifact
+
+TestUncertaintyRepresentation
+├── test_full_distribution_sums_to_one
+├── test_all_regime_classes_present_in_distribution
+├── test_entropy_zero_for_certain_label
+├── test_entropy_maximum_for_uniform_distribution
+├── test_aleatoric_flag_when_top_two_within_tolerance
+├── test_epistemic_flag_when_status_flags_active
+├── test_confidence_interval_contains_point_estimate
+└── test_confidence_tier_boundary_values_correct
+
+Group 6 — Output Schema and Serialization
+TestMarketRegimeSchema
+├── test_all_mandatory_fields_present_in_output
+├── test_conditional_mandatory_fields_present_when_required
+├── test_conditional_mandatory_fields_null_when_not_required
+├── test_output_validates_against_json_schema
+├── test_serialization_roundtrip_produces_identical_object
+├── test_regime_epoch_id_stable_within_epoch
+├── test_regime_epoch_id_changes_on_transition
+├── test_computation_timestamp_after_observation_timestamp
+└── test_unknown_regime_during_initialization_period
+
+TestDetectorSnapshot
+├── test_snapshot_restores_identical_state
+├── test_restored_detector_produces_same_next_output
+├── test_snapshot_version_recorded
+├── test_snapshot_from_future_version_raises
+└── test_snapshot_roundtrip_through_json
+
+11.2 Edge Cases
+Edge cases represent conditions where the module's behavior is deterministic but non-obvious. Every edge case must have a named test that documents the expected behavior as clearly as it tests it.
+Data boundary conditions:
+
+First bar ever processed: output must have primary_regime = UNKNOWN, is_initialized = False, all history fields null, INITIALIZATION_PERIOD in status flags.
+Bar at exactly the initialization boundary: the bar that completes the minimum history must produce the first non-UNKNOWN label.
+Two bars with identical timestamps: must raise StaleInputError — equal timestamps are not strictly ascending.
+Bar with timestamp before the last processed timestamp: must raise StaleInputError regardless of how small the regression.
+Bar with all zero volume: must set DATA_QUALITY_WARNING; computation must not divide by zero.
+Bar with OHLC inconsistency (low > high, close outside high/low): must raise DataQualityError when strict_data_validation = True, set flag and proceed when False.
+Bar with NaN in any OHLCV field: must raise DataQualityError; NaN must not propagate into indicator computation.
+Extremely large price values (e.g., BTC at 10^9): normalization must not overflow float64.
+Extremely small price values (e.g., a penny stock): realized volatility computation must not produce infinity.
+
+Threshold and calibration boundary conditions:
+
+Signal at exactly the entry threshold: must trigger a transition candidate, not be rounded either way by floating-point comparison. Threshold comparisons must use >= for entry consistently.
+Signal at exactly the exit threshold: must be treated as still inside the regime (exit requires strictly below).
+Calibration window contains fewer distinct observations than the percentile computation requires: must use available data and flag CALIBRATION_STALE.
+Recalibration produces a threshold change that exactly equals max_adaptive_drift_per_cycle: must be accepted.
+Recalibration produces a threshold change exceeding the cap: must be clamped to the cap, not rejected.
+CalibrationArtifact with an expiry timestamp in the past: must set CALIBRATION_STALE immediately on load.
+
+State machine boundary conditions:
+
+Regime transition attempted during duration lock: must be suppressed, must log a DURATION_LOCK event, must not advance the confirmation counter.
+Confirmation counter reaches required count on the same bar that the duration lock expires: transition must commit — the two conditions are independent and must not block each other.
+Crisis entry while oscillation suppression is active: crisis entry must proceed immediately; oscillation suppression must not delay crisis capture under any circumstances.
+recalibrate() called while a candidate transition is in progress: the candidate must be re-evaluated against the new thresholds before the next update(). If the candidate no longer qualifies under new thresholds, it must be aborted and logged.
+reset() called while a candidate transition is in progress: the candidate must be discarded cleanly with no partial state retained.
+update_batch() with a sequence that crosses a calibration recalibration boundary: the recalibration must apply at the correct bar, not at the start or end of the batch.
+
+Concurrent access conditions:
+
+current_regime() called from a read thread while update() is executing in the write thread: must return either the pre-update or post-update regime, never a partially updated intermediate state.
+recalibrate() called while update() is executing: must not corrupt either operation; the calibration swap must be atomic with respect to the update cycle.
+Multiple calls to snapshot() in rapid succession: must produce identical snapshots if no update() has occurred between them.
+
+Confidence and uncertainty edge cases:
+
+All indicators unavailable (total signal loss): confidence must be 0.0 exactly, primary_regime must be set to UNKNOWN, UNKNOWN regime logged.
+Single indicator available (all others missing): weight renormalization must produce a well-defined confidence; must not divide by zero.
+Regime probability distribution where the top two probabilities are exactly equal: must select deterministically (by enum ordinal or configured tiebreak rule, not by dict iteration order).
+Persistence factor at exactly minimum_signal_confidence_for_persistence floor: persistence must be zeroed; at one epsilon above the floor, persistence must be applied.
+
+
+11.3 Historical Data Validation
+Historical validation answers a question unit tests cannot: does the module produce regime labels that are meaningful against real market behavior? This layer uses actual market data and requires separate infrastructure from the unit test suite — it is not run on every commit, but is run before every production release and after any material change to threshold logic or confidence calculation.
+Dataset requirements:
+The validation dataset must span a minimum of 20 years of daily bars for at least three instruments representing distinct asset classes and microstructures. Recommended: SPX (large-cap equity index), a 10-year Treasury futures series (fixed income), and a major FX pair (EURUSD). The dataset must include at minimum one example of each of the following market episodes, with analyst-annotated ground truth labels for those episodes:
+
+A sustained strong uptrend (e.g., 2017 equity bull run)
+A sustained ranging period with well-defined support and resistance
+A volatility crisis with rapid onset (e.g., March 2020, August 2015)
+A volatility crisis with gradual onset (e.g., 2008 financial crisis)
+A false trend signal that resolved back to ranging within 10 bars
+A low-volatility suppression period (e.g., 2017)
+A regime transition involving all three regime dimensions changing simultaneously
+
+Ground truth labels are not a mechanical computation — they require human annotation by a qualified analyst who reviews price charts, realized volatility time series, and contemporaneous market commentary. Annotation disagreements between multiple annotators must be recorded; observations with annotator disagreement are excluded from accuracy metrics but retained for boundary analysis.
+Validation tests run against the historical dataset:
+Accuracy validation:
+
+Compute the module's regime label for every bar in the annotated dataset using the calibration artifact that would have been active at that historical date (simulating live operation, not hindsight). Compare against ground truth labels. Required outcomes are enumerated in Section 11.4.
+Transition timing validation:
+
+For each annotated regime transition, measure the lag between the annotator-identified transition date and the module's confirmed transition date. Compute the distribution of lags. Acceptable outcomes are enumerated in Section 11.4.
+False positive rate by episode type:
+
+Compute the rate at which the module labels a trending regime during annotated ranging episodes, and vice versa. Compute separately for each episode type to identify systematic biases.
+Confidence calibration validation:
+
+Group all historical observations by confidence decile. Within each decile, compute the empirical accuracy of the label (fraction of observations where the module's label matches ground truth). Plot the calibration curve. A well-calibrated module produces a curve close to the diagonal. Measure the Expected Calibration Error (ECE) — required to be below 0.05.
+Stability validation:
+
+Run the module twice on the same historical dataset with identical configuration and calibration. Confirm that every output record is bit-for-bit identical. Any non-determinism is a defect.
+Regime duration distribution validation:
+
+Compare the distribution of regime durations produced by the module against the distribution of annotated regime durations. The module's distribution must not be systematically shorter (indicating excessive oscillation) or longer (indicating failure to capture transitions). A KS test between the two distributions must not reject at p < 0.05.
+Recalibration stability validation:
+
+Run the module in adaptive recalibration mode across the full dataset. At each recalibration point, check that the threshold values changed by less than max_adaptive_drift_per_cycle. Confirm that no recalibration event caused a retroactive relabeling of prior observations.
+
+11.4 Acceptance Criteria
+These are binary pass/fail criteria. A module that fails any one of them is not production-ready regardless of how well it satisfies the others.
+Correctness criteria:
+
+Overall regime classification accuracy against annotated ground truth is ≥ 0.75 on the full validation dataset, measured as the fraction of bars where the module's primary regime label matches the annotated label.
+Per-regime accuracy for the crisis regime class is ≥ 0.85. Crisis misclassification carries asymmetric cost and requires a higher accuracy floor.
+Per-regime accuracy for the ranging regime class is ≥ 0.70. Ranging is the most ambiguous class and has a lower required floor, but the floor must still be met.
+False positive trending rate during annotated ranging periods is ≤ 0.15 (at most 15% of ranging bars are incorrectly labeled as trending of any kind).
+False negative crisis rate during annotated crisis periods is ≤ 0.10 (the module must not miss more than 10% of crisis bars).
+
+Transition timing criteria:
+
+Median transition detection lag is ≤ 3 bars for crisis onset (the module must capture the start of a crisis episode within 3 daily bars in the median case).
+90th percentile transition detection lag is ≤ 5 bars for crisis onset.
+Median transition detection lag is ≤ 5 bars for trend onset.
+The module must not produce a confirmed transition earlier than 1 bar after the annotated transition date in more than 5% of cases (early transitions indicate the confirmation logic is being bypassed or the annotated date is being leaked).
+
+Calibration criteria:
+
+Expected Calibration Error (ECE) across all confidence deciles is ≤ 0.05.
+No single confidence decile has an empirical accuracy more than 0.12 below its nominal confidence level.
+The confidence score for crisis regime labels averages ≥ 0.65 during confirmed crisis episodes.
+The confidence score during the initialization period is exactly 0.0 for all UNKNOWN labels.
+
+Stability and reproducibility criteria:
+
+Identical inputs produce bit-for-bit identical outputs across all platforms and Python versions in the support matrix.
+The module produces identical labels in backtesting and live replay modes for the same input sequence and calibration artifact.
+No regime label changes when update() is called twice with the same bar (idempotency when fed duplicates under strict_data_validation = False with deduplication enabled).
+Snapshot and restore produces a detector whose next 100 outputs are identical to those of the original.
+
+Schema and contract criteria:
+
+Every output record passes JSON Schema validation with zero errors.
+Every mandatory field is populated in every output record.
+Every conditional mandatory field is populated when its precondition is met and explicitly null otherwise.
+The full output suite across the 20-year validation dataset contains zero schema validation failures.
+
+Degradation criteria:
+
+When the macro context provider is unavailable, regime labels match the full-provider output on ≥ 0.90 of bars.
+When the GARCH provider is unavailable, regime labels match the full-provider output on ≥ 0.85 of bars.
+When data_quality_score falls below 0.70, the output correctly sets DATA_QUALITY_WARNING on 100% of affected records.
+A total input feed failure (all bars unavailable) causes the module to halt output emission, not to emit stale labels silently.
+
+
+11.5 Production Readiness Requirements
+These are measurable, auditable requirements that must be satisfied before the module is approved for production deployment. They are distinct from acceptance criteria in that they govern operational characteristics rather than functional correctness.
+Performance requirements:
+P1 — Computation latency. The wall-clock time from update() invocation to return of the MarketRegime object, excluding log write time, must satisfy: p50 ≤ 5ms, p95 ≤ 20ms, p99 ≤ 50ms, measured on the target production hardware with all optional providers (GARCH, macro) connected. These bounds apply per instrument. Multi-instrument throughput scales linearly with the number of registered detectors up to the core count of the deployment host.
+P2 — Batch processing throughput. update_batch() must process ≥ 10,000 daily bars per second per instrument on the target hardware. This supports full-history backtests completing in under 1 second for a 40-year dataset.
+P3 — Memory footprint. The steady-state memory footprint of a single initialized detector, including retained history at history_retention_periods = 252, must not exceed 50MB. Memory must not grow unboundedly over time; all internal deques must be bounded.
+P4 — Startup time. create_detector() including config loading, calibration loading, and a 252-bar warm-up sequence must complete in under 2 seconds. Cold start in a container environment must not exceed 10 seconds including Python interpreter startup.
+Reliability requirements:
+R1 — No unhandled exceptions. Every exception path that can be triggered by external inputs (malformed bars, missing calibration data, unavailable providers) must be caught, wrapped in a typed exception from the module's exception hierarchy, and either raised with a structured message or handled gracefully per the degradation policy. Python's base Exception must never propagate uncaught out of any public method.
+R2 — No silent data corruption. State mutations must be atomic with respect to update(). If any exception occurs during state evaluation, internal state must remain identical to its pre-update() value. This must be verified by a test that injects an exception mid-evaluation and confirms state is unchanged.
+R3 — Log write failure handling. A failure to write a transition log record must not result in a silent success. The module must either retry successfully, write to the fallback log, or raise a LogWriteError that the caller can handle. Under no circumstances may a regime transition occur without a durable log record.
+R4 — Calibration expiry handling. A module running with an expired CalibrationArtifact beyond the maximum configured staleness must not silently continue — it must set CALIBRATION_STALE and reduce confidence scores by the recency decay factor. After a configurable maximum staleness (default: 30 days beyond scheduled recalibration), the module must halt output emission and require explicit operator intervention to resume.
+Test coverage requirements:
+T1 — Line coverage. Minimum 90% line coverage across all non-test source files, measured by the CI pipeline on every merge to the main branch. Coverage must be reported per file; no source file may fall below 80% even if the aggregate meets 90%.
+T2 — Branch coverage. Minimum 85% branch coverage. Every if/elif/else path in state transition logic must be exercised by at least one test.
+T3 — Mutation testing score. Run a mutation testing framework (e.g., mutmut or cosmic-ray) against the state transition and confidence calculation modules. The mutation score — fraction of injected mutations that cause at least one test to fail — must be ≥ 0.80. A mutation score below this indicates tests are passing without actually asserting on the behavior they exercise.
+T4 — Historical validation must pass in CI. The full historical validation suite (Section 11.3) must run and pass in the CI pipeline before any release is tagged. It may run on a dedicated validation runner rather than the standard build agent, but it must complete and produce a pass/fail signal that gates the release.
+Code quality requirements:
+Q1 — Type completeness. All public interfaces and all internal methods with non-trivial signatures must have complete type annotations. Running mypy --strict on the module source must produce zero errors.
+Q2 — No mutable default arguments. No function or method in the module may use a mutable default argument. This is a Python-specific correctness requirement; mutable defaults produce state shared across calls.
+Q3 — Cyclomatic complexity. No single method may have a cyclomatic complexity above 10, measured by a linter in CI. Methods approaching this limit are candidates for decomposition into helper methods with their own targeted tests.
+Q4 — Dependency surface. The module's required dependencies (those without which it cannot function) must be limited to the Python standard library and a small set of approved scientific computing packages (numpy, pandas, scipy). Optional dependencies (for GARCH, logging adapters, metrics sinks) must be truly optional — the module must import and run correctly if they are not installed, raising ImportError only when the optional feature is actually invoked. This must be verified by a CI job that installs only required dependencies and runs the full unit suite.
+Q5 — Changelog and version discipline. Every change to the public interface, configuration schema, output schema, or default threshold values must increment the semantic version and include a changelog entry. Breaking changes to the output schema require a major version increment and a documented migration path. The version embedded in module_version output fields must match the installed package version exactly.

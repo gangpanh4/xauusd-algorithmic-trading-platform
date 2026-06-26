@@ -1,0 +1,147 @@
+Section 9: Logging and Observability
+
+What events should be logged?
+What information should every regime transition log contain?
+Should logs use structured JSON?
+Which metrics should be exposed for monitoring?
+What information is useful for debugging incorrect classifications?
+
+
+
+
+Section 9: Logging and Observability
+
+9.1 Events to Log
+Logging must be event-driven, not purely time-driven. Emitting a log record on every observation tick conflates monitoring with data storage and produces volumes that are operationally unmanageable at scale. The correct design separates three distinct logging concerns — state change events, periodic health telemetry, and diagnostic traces — each with different retention, verbosity, and routing requirements.
+Category 1 — Regime State Change Events
+
+These are the highest-priority log records and must be emitted synchronously before the output object is released to downstream consumers. Any failure to write a state change log must block output emission and trigger an alerting path; a regime transition that occurred without a log record is an audit failure.
+Events in this category:
+
+Confirmed regime transition (from any regime to any regime)
+Candidate transition opened (a potential transition has begun accumulating confirmations)
+Candidate transition aborted (a candidate that was in progress was invalidated before confirmation)
+Regime epoch closed (the prior regime's closing record, complementary to the transition open record)
+Duration lock engaged (a transition was suppressed due to minimum duration enforcement)
+Duration lock released (minimum duration elapsed; transition evaluation resumed)
+Oscillation suppression activated
+Oscillation suppression deactivated
+Crisis regime entered (always logged as a distinct event type regardless of the general transition log, for routing to high-priority alert channels)
+Crisis regime exited
+
+Category 2 — System State Change Events
+
+These track changes to the module's operational configuration and calibration state, not its market assessment. Mandatory for audit and reproducibility.
+Events in this category:
+
+Module initialization completed (records initial configuration, calibration artifact versions, and first regime label)
+Adaptive recalibration completed (records old and new threshold values, calibration window dates, and any indicators whose weights changed materially)
+Structural break detected
+Structural break cleared
+Data quality degradation (score crosses below the configured warning floor)
+Data quality restored
+Input feed staleness detected (any input feed has not updated within its expected interval)
+Input feed restored
+Configuration change applied (records the before and after values of any modified parameter)
+
+Category 3 — Periodic Health Telemetry
+
+Emitted on a fixed schedule regardless of state changes. Provides a heartbeat and baseline against which anomaly detection can operate. Frequency: configurable per environment (default: every observation period in development, every 15 minutes in production real-time, every computed bar in backtesting mode).
+Records in this category:
+
+Confidence score and tier at current observation
+All status_flags active at emission time
+Transition candidate status (none, or candidate regime with confirmation count)
+Data quality score
+Feature computation latency (wall-clock time to compute all indicators)
+Input feed freshness (age of most recent data point per feed)
+
+Category 4 — Diagnostic Traces
+
+High-verbosity records emitted only in debug mode or when explicitly triggered by a diagnostic request. Never enabled by default in production to avoid I/O overhead. These records include full feature values, all indicator votes, the complete confidence factor breakdown, and the threshold evaluation trace for a single observation. They are the equivalent of a step-through debugger for a single bar.
+
+9.2 Regime Transition Log Content
+Every confirmed regime transition event must produce a self-contained log record — complete enough to reconstruct the circumstances of the transition without querying any other system. A transition log that requires joining against a feature store, a configuration database, or a prior log record to be interpretable is incomplete.
+Mandatory fields for every transition log record:
+Identity and timing:
+
+event_type: "REGIME_TRANSITION_CONFIRMED", event_id: UUID, instrument_id, timestamp (observation time of the transition), computation_timestamp (wall-clock), bar_type, module_version, calibration_version
+Transition description:
+
+from_regime, from_regime_epoch_id, from_regime_entry_timestamp, from_regime_duration_periods, to_regime, to_regime_epoch_id (newly generated UUID for the new epoch), transition_trigger (controlled vocabulary code from Section 8.1), transition_direction: Enum[ESCALATION, DE-ESCALATION, LATERAL] — whether the new regime represents greater market stress, lesser, or a lateral shift (e.g., trending-up to trending-down)
+Confirmation record:
+
+confirmation_periods_required, confirmation_periods_elapsed, confirmation_period_timestamps: List[datetime] — the timestamps of each confirmation period that contributed to meeting the confirmation requirement. This allows post-hoc verification that the confirmation window was clean and not contaminated by a suppressed dissent.
+Signal state at transition:
+
+primary_signal_value_at_transition (normalized), primary_signal_threshold_used, primary_signal_margin, secondary_signal_agreement_count, secondary_signal_total_count, confidence_at_transition, regime_entropy_at_transition, probability_of_new_regime_at_transition, probability_of_prior_regime_at_transition
+Hysteresis record:
+
+entry_threshold_used, exit_threshold_applicable_to_new_regime (the threshold that would trigger exit from the regime just entered), hysteresis_band_width
+Context:
+
+volatility_regime_at_transition, macro_context_flag_at_transition, active_status_flags_at_transition: List[str], data_quality_score_at_transition
+Suppression history during this transition:
+
+prior_candidate_abort_count: int — how many times a transition to this regime was attempted and aborted before this confirmation succeeded. A value greater than zero is a signal of borderline conditions and should increase scrutiny of the transition in monitoring.
+
+9.3 Structured JSON Logging
+Yes — all log records must use structured JSON. Unstructured or semi-structured log formats (formatted strings, mixed key-value pairs, ad hoc text) are not acceptable in a production-grade module whose logs feed monitoring pipelines, alerting systems, and audit queries.
+Schema enforcement: Every log record must validate against a versioned JSON Schema before emission. Schema violations must fail loudly — a log record that does not conform to its schema must not be silently emitted as a best-effort record. The schema version must appear as a top-level field in every record: "log_schema_version": "2.1.0". This allows log consumers to handle schema migrations correctly when the logging schema evolves.
+Required top-level fields present in every record regardless of event type:
+json{
+  "log_schema_version": "2.1.0",
+  "event_type": "REGIME_TRANSITION_CONFIRMED",
+  "event_id": "uuid-v4",
+  "service_name": "market_regime_detector",
+  "module_version": "1.4.2",
+  "calibration_version": "cal-2026-01-15",
+  "instrument_id": "SPX",
+  "timestamp": "2026-01-20T21:00:00Z",
+  "computation_timestamp": "2026-01-20T21:00:003Z",
+  "bar_type": "DAILY",
+  "environment": "production",
+  "hostname": "regime-svc-prod-03",
+  "severity": "INFO"
+}
+Severity levels: Use a strict severity taxonomy. DEBUG for diagnostic traces. INFO for normal state changes (regime transitions, calibration updates, health telemetry). WARNING for degraded but operational conditions (OSCILLATION_WARNING, CALIBRATION_STALE, data quality below floor). ERROR for conditions that impair output reliability (input feed failure, schema validation failure, threshold configuration error). CRITICAL for conditions that halt output emission (total signal loss, initialization failure, unrecoverable calibration error). Severity must be a controlled enum, not a free string.
+No PII or sensitive market data in logs: Log records are routed to observability infrastructure that may have broader access than the primary data pipeline. Raw price data, order flow, or position information must never appear in log records even when included in raw feature values. Normalized and percentile-mapped feature values are acceptable; absolute price levels are not.
+Log routing by event category: The four event categories from 9.1 should be routed to separate log streams or topics in the observability infrastructure. State change events route to the primary audit log (long retention, immutable). Periodic health telemetry routes to a metrics sink with shorter retention. Diagnostic traces route to a debug sink with minimal retention and access-controlled read permissions. This separation prevents diagnostic verbosity from polluting the audit record.
+
+9.4 Metrics for Monitoring
+Metrics are distinct from logs. Logs record events; metrics track the ongoing health of the system as quantitative time series. The module must expose metrics via a standard interface (Prometheus exposition format recommended for compatibility) with sensible default scrape intervals and alert thresholds.
+Category A — Regime State Metrics
+regime_current{instrument, regime} — gauge, value 1 for the active regime label, 0 for all others. Enables regime-conditional alerting and dashboarding across instruments.
+regime_confidence{instrument} — gauge, current confidence score. Alert threshold: below 0.45 sustained for more than 3 periods.
+regime_entropy{instrument} — gauge, current Shannon entropy. Useful for detecting persistent boundary ambiguity.
+regime_duration_periods{instrument} — gauge, periods elapsed in current regime. Unusually long or short durations signal potential classification problems.
+regime_transition_total{instrument, from_regime, to_regime} — counter, incremented on each confirmed transition. Transition rate over a rolling window is the primary oscillation detection metric.
+candidate_transition_active{instrument} — gauge, 1 when a candidate transition is in progress, 0 otherwise.
+candidate_transition_confirmation_progress{instrument} — gauge, fraction of required confirmations met for the active candidate (0.0 if none active).
+Category B — Signal Quality Metrics
+data_quality_score{instrument} — gauge, current composite data quality score. Alert threshold: below 0.70.
+input_feed_staleness_seconds{instrument, feed_name} — gauge, age of the most recent data point per input feed. Alert threshold: exceeds 2× expected update interval.
+indicator_imputation_rate{instrument, indicator_name} — gauge, rolling fraction of recent observations where this indicator was imputed rather than computed. Alert threshold: above 0.05 (5%) sustained over 10 periods.
+primary_signal_margin{instrument} — gauge, normalized distance of the primary signal from the nearest threshold. Values near zero indicate the system is operating close to a regime boundary; sustained near-zero values are a diagnostic signal even without a transition.
+Category C — Calibration Health Metrics
+calibration_age_days{instrument} — gauge, days since last successful recalibration. Alert threshold: exceeds recalibration_frequency + 2 business days.
+threshold_drift_magnitude{instrument, threshold_name} — gauge, fractional change applied to each threshold at the most recent recalibration. Large values indicate structural drift between calibration cycles.
+structural_break_active{instrument} — gauge, 1 when a structural break flag is active, 0 otherwise.
+calibration_accuracy{instrument, regime} — gauge, per-regime accuracy from the most recent calibration evaluation, reflecting how well the current thresholds classify historical labeled periods.
+Category D — Operational Performance Metrics
+computation_latency_seconds{instrument} — histogram, wall-clock time to compute a complete output record. Alert threshold: p99 exceeds 500ms for daily-bar deployments; lower thresholds required for intraday.
+output_emission_total{instrument, status} — counter, total output records emitted, labeled by whether emission was clean (status=ok), flagged (status=warned), or blocked (status=failed).
+log_write_failure_total{instrument} — counter, number of log write failures. Any non-zero value requires immediate investigation; a failed log write on a transition record is an audit integrity event.
+schema_validation_failure_total{instrument} — counter, number of records that failed schema validation before emission. Should always be zero in production; non-zero values indicate a code or configuration error.
+Dashboard design: Expose two dashboard tiers. An operational dashboard (primary audience: on-call engineers) showing regime state heatmap across instruments, confidence and entropy trends, active flag counts, input feed health, and computation latency. An analytical dashboard (primary audience: quant researchers) showing regime transition frequency over time, confidence distribution by regime class, calibration drift history, and indicator agreement rates. The two dashboards pull from the same metrics but are filtered and arranged for their distinct audiences.
+
+9.5 Debugging Incorrect Classifications
+Incorrect classifications — where the module labels a regime that a reasonable analyst or a realized-outcome check would dispute — are the most operationally consequential failure mode. The debugging process must be systematic and the module must emit everything needed to conduct it without reconstructing computation from scratch.
+The five-layer debugging framework:
+Layer 1 — Reproduce the label. Verify that the label can be reproduced exactly from the logged inputs. Check module_version, calibration_version, and feature_schema_version in the output record. Retrieve the normalized_features sub-object from the output. Rerun the threshold evaluation logic against those features using the versioned module and calibration. If the label does not reproduce exactly, the problem is non-determinism or a logging gap — investigate the computation pipeline before analyzing the market.
+Layer 2 — Audit the signal state. Examine regime_drivers from the diagnostics sub-object. Identify which indicators voted for the incorrect label and which dissented. Check margin_to_threshold for each driver: was the primary signal deeply in the incorrectly labeled regime, or barely over the threshold? A thin margin combined with a wrong label suggests the threshold itself is miscalibrated. A deep margin combined with a wrong label suggests the indicator is systematically wrong on this instrument or time period.
+Layer 3 — Audit the confidence state. Examine confidence_factor_breakdown. Identify which factors contributed to high confidence in the incorrect label. If persistence was the dominant factor, the module was anchored to a prior regime that had become stale — check suppression_log for suppressed transitions that should have been allowed through. If indicator_agreement was dominant, examine which indicators were agreeing and whether they share a common data source or computational lineage that could have introduced correlated error.
+Layer 4 — Audit the transition history. Retrieve the transition_history from diagnostics. Check prior_candidate_abort_count on the transition that established the incorrect regime: were there multiple aborted candidates before this one confirmed? If so, the confirmation logic may have been overfitted to a signal that was systematically misleading during this period. Check whether the transition into the incorrect regime occurred at a time when any status_flags were active — a transition that committed under OSCILLATION_WARNING or CALIBRATION_STALE is a known-risk decision that should have been treated more cautiously downstream.
+Layer 5 — Audit the calibration artifact. Retrieve the calibration artifact identified by calibration_version. Check the calibration accuracy metric for the incorrectly assigned regime class: was this regime consistently misclassified during calibration evaluation, suggesting the threshold has been wrong for this class throughout? Check the calibration window dates: did the calibration window happen to exclude a prior historical period that was structurally similar to the period being misclassified? If so, the calibration window is too short or poorly positioned relative to the market cycle.
+Tooling requirement: The module must expose a debug_replay interface that accepts a historical timestamp and instrument_id and returns the full diagnostic trace for that observation — equivalent to enabling FULL diagnostic mode retroactively for any historical record. This requires that the module store sufficient state to replay the computation at any historical point: specifically, the normalized feature values, the threshold set, the indicator weights, and the confidence factor values at that timestamp. These replay inputs should be stored in a dedicated debug artifact store with a configurable retention period (default: 90 days). Without this interface, debugging a misclassification reported after the fact requires manual reconstruction of historical state, which is slow, error-prone, and often impossible when adaptive thresholds have since been recalibrated.
+Systematic misclassification detection: Beyond debugging individual cases, the observability system should run a continuous retrospective accuracy check: compare regime labels emitted at time T against a realized-outcome signal computed at time T+N (e.g., subsequent realized volatility, subsequent trend persistence). Persistent divergence between emitted labels and realized outcomes for a specific regime class is the earliest warning that systematic miscalibration is accumulating. This check should emit its own metric realized_accuracy_rolling{instrument, regime} and alert when it drops below the calibration-time accuracy baseline by more than a configurable tolerance (default: 0.08, i.e., 8 percentage points).
