@@ -86,3 +86,23 @@ class RegimeDetectorConfig:
     minimum_regime_duration: int = 5
 
     strict_data_validation: bool = True
+
+    def __post_init__(self) -> None:
+        """
+        Validate configuration after initialization.
+        """
+
+        if self.trend_exit_percentile >= self.trend_entry_percentile:
+            raise ConfigurationError(
+                "trend_exit_percentile must be less than trend_entry_percentile."
+            )
+
+        if not 0.0 <= self.crisis_percentile <= 1.0:
+            raise ConfigurationError(
+                "crisis_percentile must be between 0.0 and 1.0."
+            )
+
+        if self.minimum_regime_duration < 1:
+            raise ConfigurationError(
+                "minimum_regime_duration must be at least 1."
+            )
