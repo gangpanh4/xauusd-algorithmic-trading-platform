@@ -8,17 +8,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
-from uuid import UUID
-
 
 class RegimeLabel(Enum):
     UNKNOWN = "UNKNOWN"
-    RANGING = "RANGING"
+
     TRENDING_BULL = "TRENDING_BULL"
     TRENDING_BEAR = "TRENDING_BEAR"
+
+    RANGING = "RANGING"
+
     LOW_VOLATILITY = "LOW_VOLATILITY"
     NORMAL_VOLATILITY = "NORMAL_VOLATILITY"
     HIGH_VOLATILITY = "HIGH_VOLATILITY"
+
     CRISIS = "CRISIS"
 
 

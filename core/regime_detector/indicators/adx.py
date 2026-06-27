@@ -82,7 +82,7 @@ class ADXIndicator:
 
         previous_high, previous_low, previous_close = self._history[-2]
 
-        current_high, current_low, current_close = self._history[-1]
+        current_high, current_low, _ = self._history[-1]
 
         true_range = self._true_range(
             previous_close=previous_close,
@@ -104,6 +104,22 @@ class ADXIndicator:
                 plus_dm=plus_dm,
                 minus_dm=minus_dm,
             )
+
+
+            return ADXResult(
+                adx=0.0,
+                plus_di=0.0,
+                minus_di=0.0,
+                trend_strength=0.0,
+            )
+
+
+        return ADXResult(
+            adx=self._adx,
+            plus_di=0.0,
+            minus_di=0.0,
+            trend_strength=self._adx / 100.0,
+        )
 
 
 
