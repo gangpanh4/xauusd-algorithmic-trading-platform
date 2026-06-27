@@ -46,6 +46,8 @@ class ADXIndicator:
 
         self._adx = 0.0
 
+        self._initialized = False
+
         self._dx_history = deque(maxlen=period)
 
 
@@ -59,21 +61,43 @@ class ADXIndicator:
         Update the indicator with one completed market bar.
         """
 
-        self._history.append(
-            (
-                high,
-                low,
-                close,
-            )
+
+        current_bar = (
+            high,
+            low,
+            close,
         )
 
-        return ADXResult(
-            adx=0.0,
-            plus_di=0.0,
-            minus_di=0.0,
-            trend_strength=0.0,
-        )
+        self._history.append(current_bar)
+
+
+        if not self.is_ready():
+            return ADXResult(
+                adx=0.0,
+                plus_di=0.0,
+                minus_di=0.0,
+                trend_strength=0.0,
+            )
     
+
+        previous_high, previous_low, previous_close = self._history[-2]
+
+        current_high, current_low, current_close = self._history[-1]
+
+        true_range = self._true_range(
+            previous_close=previous_close,
+            high=current_high,
+            low=current_low,
+        )
+
+        plus_dm, minus_dm = self._directional_movement(
+            previous_high=previous_high,
+            previous_low=previous_low,
+            current_high=current_high,
+            current_low=current_low,
+        )
+
+
 
     def is_ready(self) -> bool:
         """
