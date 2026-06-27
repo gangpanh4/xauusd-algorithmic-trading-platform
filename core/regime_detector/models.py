@@ -39,7 +39,7 @@ class StatusFlag(Enum):
     OSCILLATION_SUPPRESSION = "OSCILLATION_SUPPRESSION"
     LOG_SINK_DEGRADED = "LOG_SINK_DEGRADED"
 
-    @dataclass(frozen=True)
+@dataclass(frozen=True)
 class MarketBar:
     """
     Represents one validated market bar (OHLCV).
@@ -64,7 +64,7 @@ class MarketBar:
 
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    @dataclass(frozen=True)
+@dataclass(frozen=True)
 class MarketRegime:
     """
     Final regime assessment returned by the detector after processing
@@ -83,7 +83,7 @@ class MarketRegime:
 
     status_flags: frozenset[StatusFlag] = field(default_factory=frozenset)
 
-    @dataclass(frozen=True)
+@dataclass(frozen=True)
 class TransitionRecord:
     """
     Records a confirmed regime transition.
