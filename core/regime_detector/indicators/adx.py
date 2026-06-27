@@ -98,6 +98,14 @@ class ADXIndicator:
         )
 
 
+        if not self._initialized:
+            self._initialize_smoothing(
+                true_range=true_range,
+                plus_dm=plus_dm,
+                minus_dm=minus_dm,
+            )
+
+
 
     def is_ready(self) -> bool:
         """
@@ -175,6 +183,25 @@ class ADXIndicator:
             previous_value / period
         ) + new_value
     
+
+    def _initialize_smoothing(
+        self,
+        true_range: float,
+        plus_dm: float,
+        minus_dm: float,
+    ) -> None:
+        """
+        Initialize Wilder's smoothed values.
+        """
+
+        self._smoothed_tr = true_range
+
+        self._smoothed_plus_dm = plus_dm
+
+        self._smoothed_minus_dm = minus_dm
+
+        self._initialized = True
+
 
     @staticmethod
     def _calculate_di(

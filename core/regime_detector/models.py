@@ -102,3 +102,23 @@ class TransitionRecord:
     status_flags_at_transition: frozenset[StatusFlag] = field(default_factory=frozenset)
 
     prior_candidate_abort_count: int = 0
+
+@dataclass(frozen=True)
+class FeatureSet:
+    """
+    Computed market features used for regime evaluation.
+    """
+
+    adx: float
+
+    atr: float
+
+    efficiency_ratio: float
+
+    volatility_percentile: float
+
+    trend_strength: float
+
+    momentum: float
+
+    normalized_volatility: float
