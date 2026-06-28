@@ -110,6 +110,9 @@ class MarketRegimeDetector:
             close=bar.close,
         )
 
+        momentum_result = self._momentum.update(
+            close=bar.close,
+        )
 
         return FeatureSet(
             adx=adx_result.adx,
@@ -117,7 +120,7 @@ class MarketRegimeDetector:
             efficiency_ratio=er_result.efficiency_ratio,
             volatility_percentile=0.0,
             trend_strength=adx_result.trend_strength,
-            momentum=0.0,
+            momentum=momentum_result.momentum,
             normalized_volatility=atr_result.normalized_atr,
         )
 
