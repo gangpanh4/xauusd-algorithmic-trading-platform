@@ -46,7 +46,10 @@ class MarketRegimeDetector:
 
         regime = self._evaluate_regime(features)
 
-        self._update_state(regime)
+        self._update_state(
+            bar=bar,
+            regime=regime,
+        )
 
         return regime
 
@@ -70,6 +73,12 @@ class MarketRegimeDetector:
         """
         Compute all features required for regime detection.
         """
+
+        adx_result = self._adx.update(
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+        )
 
         return FeatureSet(
             adx=0.0,
@@ -95,6 +104,7 @@ class MarketRegimeDetector:
 
     def _update_state(
         self,
+        bar: MarketBar,
         regime: MarketRegime,
     ) -> None:
         """
