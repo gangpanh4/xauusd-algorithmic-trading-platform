@@ -8,6 +8,7 @@ from datetime import datetime
 
 from .config import RegimeDetectorConfig
 from .indicators.adx import ADXIndicator
+from .indicators.atr import ATRIndicator
 from .models import (
     ConfidenceTier,
     FeatureSet,
@@ -34,6 +35,9 @@ class MarketRegimeDetector:
             period=self.config.adx.lookback_period,
         )
 
+        self._atr = ATRIndicator(
+            period=self.config.adx.lookback_period,
+        )
 
 
     def process_bar(
@@ -84,14 +88,21 @@ class MarketRegimeDetector:
             close=bar.close,
         )
 
+        atr_result = self._atr.update(
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+        )
+
+
         return FeatureSet(
             adx=adx_result.adx,
-            atr=0.0,
+            atr=atr_result.atr,
             efficiency_ratio=0.0,
             volatility_percentile=0.0,
             trend_strength=adx_result.trend_strength,
             momentum=0.0,
-            normalized_volatility=0.0,
+            normalized_volatility=atr_result.normalized_atr,
         )
 
     def _evaluate_regime(
@@ -110,7 +121,7 @@ class MarketRegimeDetector:
             confidence = 0.40
 
         return MarketRegime(
-            observation_timestamp=datetime.utcnow(),
+            observation_timestamp=bar.timestamp,
             computation_timestamp=datetime.utcnow(),
             primary_regime=regime,
             confidence=confidence,
