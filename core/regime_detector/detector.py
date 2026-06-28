@@ -9,6 +9,9 @@ from datetime import datetime
 from .config import RegimeDetectorConfig
 from .indicators.adx import ADXIndicator
 from .indicators.atr import ATRIndicator
+from .indicators.efficiency_ratio import (
+    EfficiencyRatioIndicator,
+)
 from .models import (
     ConfidenceTier,
     FeatureSet,
@@ -17,6 +20,7 @@ from .models import (
     RegimeLabel,
 )
 from .state import DetectorState
+
 
 class MarketRegimeDetector:
     """
@@ -39,6 +43,9 @@ class MarketRegimeDetector:
             period=self.config.adx.lookback_period,
         )
 
+        self._efficiency_ratio = EfficiencyRatioIndicator(
+            period=self.config.adx.lookback_period,
+        )
 
     def process_bar(
         self,
@@ -94,11 +101,15 @@ class MarketRegimeDetector:
             close=bar.close,
         )
 
+        er_result = self._efficiency_ratio.update(
+            close=bar.close,
+        )
+
 
         return FeatureSet(
             adx=adx_result.adx,
             atr=atr_result.atr,
-            efficiency_ratio=0.0,
+            efficiency_ratio=er_result.efficiency_ratio,
             volatility_percentile=0.0,
             trend_strength=adx_result.trend_strength,
             momentum=0.0,
