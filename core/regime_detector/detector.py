@@ -81,11 +81,11 @@ class MarketRegimeDetector:
         )
 
         return FeatureSet(
-            adx=0.0,
+            adx=adx_result.adx,
             atr=0.0,
             efficiency_ratio=0.0,
             volatility_percentile=0.0,
-            trend_strength=0.0,
+            trend_strength=adx_result.trend_strength,
             momentum=0.0,
             normalized_volatility=0.0,
         )
@@ -110,4 +110,28 @@ class MarketRegimeDetector:
         """
         Update the detector state after a confirmed regime evaluation.
         """
-        raise NotImplementedError
+        self.state.previous_regime = self.state.current_regime
+
+        self.state.current_regime = regime.primary_regime
+
+        self.state.last_observation_time = (
+            bar.timestamp
+        )
+
+        self.state.last_result = regime
+
+        if (
+            self.state.current_regime_start is None
+            or self.state.previous_regime
+            != self.state.current_regime
+        ):
+            self.state.current_regime_start = (
+                bar.timestamp
+            )
+
+            self.state.bars_in_current_regime = 1
+
+        else:
+            self.state.bars_in_current_regime += 1
+
+        self.state.initialized = True
