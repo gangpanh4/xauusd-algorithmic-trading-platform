@@ -49,6 +49,7 @@ class ADXIndicator:
         self._initialized = False
 
         self._dx_history = deque(maxlen=period)
+        
 
 
     def update(
@@ -105,7 +106,6 @@ class ADXIndicator:
                 minus_dm=minus_dm,
             )
 
-
             return ADXResult(
                 adx=0.0,
                 plus_di=0.0,
@@ -113,13 +113,69 @@ class ADXIndicator:
                 trend_strength=0.0,
             )
 
+        self._smoothed_tr = self._wilder_smoothing(
+            previous_value=self._smoothed_tr,
+            new_value=true_range,
+            period=self._period,
+        )
+
+        self._smoothed_plus_dm = self._wilder_smoothing(
+            previous_value=self._smoothed_plus_dm,
+            new_value=plus_dm,
+            period=self._period,
+        )
+
+        self._smoothed_minus_dm = self._wilder_smoothing(
+            previous_value=self._smoothed_minus_dm,
+            new_value=minus_dm,
+            period=self._period,
+        )
+
+        plus_di = self._calculate_di(
+            smoothed_dm=self._smoothed_plus_dm,
+            smoothed_tr=self._smoothed_tr,
+        )
+
+        minus_di = self._calculate_di(
+            smoothed_dm=self._smoothed_minus_dm,
+            smoothed_tr=self._smoothed_tr,
+        )
+
+        dx = self._calculate_dx(
+            plus_di=plus_di,
+            minus_di=minus_di,
+        )
+
+        self._dx_history.append(dx)
+
+        if len(self._dx_history) < self._period:
+            return ADXResult(
+                adx=0.0,
+                plus_di=plus_di,
+                minus_di=minus_di,
+                trend_strength=0.0,
+            )
+
+        if self._adx == 0.0:
+            self._adx = (
+                sum(self._dx_history)
+                / len(self._dx_history)
+            )
+        else:
+            self._adx = self._wilder_smoothing(
+                previous_value=self._adx,
+                new_value=dx,
+                period=self._period,
+            )
 
         return ADXResult(
             adx=self._adx,
-            plus_di=0.0,
-            minus_di=0.0,
+            plus_di=plus_di,
+            minus_di=minus_di,
             trend_strength=self._adx / 100.0,
         )
+
+    
 
 
 
