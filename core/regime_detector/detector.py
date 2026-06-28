@@ -181,12 +181,24 @@ class MarketRegimeDetector:
 
         return score
 
-    def _calculate_volatility_score(self, features: FeatureSet) -> float:
+    def _calculate_volatility_score(
+        self, 
+        features: FeatureSet,
+    ) -> float:
         """
         Calculate the contribution of volatility
         to the overall market regime score.
         """
-        return 0.0
+        
+        score = 0.0
+
+        if features.normalized_volatility >= 0.03:
+            score += 2.0
+
+        elif features.normalized_volatility >= 0.015:
+            score += 1.0
+
+        return score
 
     def _calculate_momentum_score(
         self, 
