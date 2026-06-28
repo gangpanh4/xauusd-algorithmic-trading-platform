@@ -4,12 +4,16 @@ Market Regime Detection Engine.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from .config import RegimeDetectorConfig
 from .indicators.adx import ADXIndicator
 from .models import (
+    ConfidenceTier,
     FeatureSet,
     MarketBar,
     MarketRegime,
+    RegimeLabel,
 )
 from .state import DetectorState
 
@@ -98,8 +102,19 @@ class MarketRegimeDetector:
         Evaluate the current market regime from computed features.
         """
 
-        raise NotImplementedError(
-            "Regime evaluation is not implemented yet."
+        if features.adx >= self.config.adx.trending_threshold:
+            regime = RegimeLabel.TRENDING_BULL
+            confidence = 0.80
+        else:
+            regime = RegimeLabel.RANGING
+            confidence = 0.40
+
+        return MarketRegime(
+            observation_timestamp=datetime.utcnow(),
+            computation_timestamp=datetime.utcnow(),
+            primary_regime=regime,
+            confidence=confidence,
+            confidence_tier=ConfidenceTier.MEDIUM,
         )
 
     def _update_state(

@@ -21,6 +21,8 @@ class IndicatorConfig:
     lookback_period: int = 14
     normalization_window: int = 252
 
+    trending_threshold: float = 25.0
+
 
 
 @dataclass(frozen=True)
