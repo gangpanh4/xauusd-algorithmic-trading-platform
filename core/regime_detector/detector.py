@@ -20,6 +20,7 @@ from .models import (
     RegimeLabel,
 )
 from .state import DetectorState
+from .indicators.momentum import MomentumIndicator
 
 
 class MarketRegimeDetector:
@@ -44,6 +45,10 @@ class MarketRegimeDetector:
         )
 
         self._efficiency_ratio = EfficiencyRatioIndicator(
+            period=self.config.adx.lookback_period,
+        )
+
+        self._momentum = MomentumIndicator(
             period=self.config.adx.lookback_period,
         )
 
