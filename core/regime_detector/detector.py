@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from matplotlib.pyplot import bar
+
 from .config import RegimeDetectorConfig
 from .indicators.adx import ADXIndicator
 from .indicators.atr import ATRIndicator
@@ -206,18 +208,57 @@ class MarketRegimeDetector:
         )
 
     def _update_state(self, bar: MarketBar, regime: MarketRegime) -> None:
-        self.state.previous_regime = self.state.current_regime
-        self.state.current_regime = regime.primary_regime
         self.state.last_observation_time = bar.timestamp
         self.state.last_result = regime
 
-        if (
-            self.state.current_regime_start is None
-            or self.state.previous_regime != self.state.current_regime
-        ):
-            self.state.current_regime_start = bar.timestamp
-            self.state.bars_in_current_regime = 1
-        else:
-            self.state.bars_in_current_regime += 1
+        candidate = regime.primary_regime
 
-        self.state.initialized = True
+
+        # Initialize on the first valid observation.
+        if not self.state.initialized:
+            self.state.current_regime = candidate
+            self.state.previous_regime = candidate
+            self.state.current_regime_start = bar.timestamp
+            self.state.last_transition_time = bar.timestamp
+            self.state.bars_in_current_regime = 1
+            self.state.initialized = True
+            return
+
+        # No change detected
+        if candidate == self.state.current_regime:
+            self.state.pending_regime = RegimeLabel.UNKNOWN
+            self.state.pending_regime_count = 0
+
+        elif candidate == self.state.pending_regime:
+            self.state.pending_regime_count += 1
+
+        else:
+            self.state.pending_regime = candidate
+            self.state.pending_regime_count = 1
+
+        # Determine how many confirmations are required.
+        if candidate in (
+            RegimeLabel.TRENDING_BULL,
+            RegimeLabel.TRENDING_BEAR,
+        ):
+            required_confirmations = self.config.trend_confirmation_bars
+        else:
+            required_confirmations = self.config.range_confirmation_bars
+
+        # Commit the regime transition once confirmed.
+        if self.state.pending_regime_count >= required_confirmations:
+            self.state.previous_regime = self.state.current_regime
+            self.state.current_regime = self.state.pending_regime
+
+            self.state.current_regime_start = bar.timestamp
+            self.state.last_transition_time = bar.timestamp
+
+            self.state.pending_regime = RegimeLabel.UNKNOWN
+            self.state.pending_regime_count = 0
+
+            self.state.bars_in_current_regime = 1
+
+        # Otherwise continue counting bars in the current regime.
+        else:
+            if self.state.current_regime != RegimeLabel.UNKNOWN:
+                self.state.bars_in_current_regime += 1

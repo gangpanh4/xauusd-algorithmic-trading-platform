@@ -4,7 +4,7 @@ State management for the Market Regime Detection module.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from .models import (
@@ -19,11 +19,13 @@ class DetectorState:
     """
 
     current_regime: RegimeLabel = RegimeLabel.UNKNOWN
-
     previous_regime: RegimeLabel = RegimeLabel.UNKNOWN
 
-    current_regime_start: datetime | None = None
+    pending_regime: RegimeLabel = RegimeLabel.UNKNOWN
+    pending_regime_count: int = 0
 
+    last_transition_time: datetime | None = None
+    current_regime_start: datetime | None = None
     last_observation_time: datetime | None = None
 
     last_result: MarketRegime | None = None
@@ -31,12 +33,11 @@ class DetectorState:
     initialized: bool = False
 
     trend_confirmation_count: int = 0
-
     range_confirmation_count: int = 0
-
     crisis_confirmation_count: int = 0
 
     bars_in_current_regime: int = 0
+
 
     def reset(self) -> None:
         """
@@ -45,6 +46,9 @@ class DetectorState:
 
         self.current_regime = RegimeLabel.UNKNOWN
         self.previous_regime = RegimeLabel.UNKNOWN
+        self.pending_regime = RegimeLabel.UNKNOWN
+        self.pending_regime_count = 0
+        self.last_transition_time = None
 
         self.current_regime_start = None
         self.last_observation_time = None
