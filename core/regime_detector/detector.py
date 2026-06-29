@@ -12,6 +12,7 @@ from .indicators.atr import ATRIndicator
 from .indicators.efficiency_ratio import EfficiencyRatioIndicator
 from .indicators.momentum import MomentumIndicator
 from .indicators.ema import EMAIndicator
+from .indicators.ema_slope import EMASlopeIndicator
 
 from .models import (
     ConfidenceTier,
@@ -56,6 +57,10 @@ class MarketRegimeDetector:
         self._ema20 = EMAIndicator(period=20)
         self._ema50 = EMAIndicator(period=50)
         self._ema200 = EMAIndicator(period=200)
+
+        self._ema20_slope = EMASlopeIndicator(period=20)
+        self._ema50_slope = EMASlopeIndicator(period=50)
+        self._ema200_slope = EMASlopeIndicator(period=200)
 
     # =========================================================
     # INPUT PIPELINE
@@ -121,6 +126,18 @@ class MarketRegimeDetector:
             close=bar.close,
         )
 
+        ema20_slope_result = self._ema20_slope.update(
+            ema=ema20_result.ema,
+        )
+
+        ema50_slope_result = self._ema50_slope.update(
+            ema=ema50_result.ema,
+        )
+
+        ema200_slope_result = self._ema200_slope.update(
+            ema=ema200_result.ema,
+        )
+
 
         return FeatureSet(
             adx=adx_result.adx,
@@ -129,6 +146,10 @@ class MarketRegimeDetector:
             ema20=ema20_result.ema,
             ema50=ema50_result.ema,
             ema200=ema200_result.ema,
+            
+            ema20_slope=ema20_slope_result.slope,
+            ema50_slope=ema50_slope_result.slope,
+            ema200_slope=ema200_slope_result.slope,
 
             efficiency_ratio=er_result.efficiency_ratio,
             volatility_percentile=0.0,
@@ -189,7 +210,7 @@ class MarketRegimeDetector:
         Calculate the contribution of volatility
         to the overall market regime score.
         """
-        
+
         score = 0.0
 
         if features.normalized_volatility >= 0.03:
@@ -204,7 +225,19 @@ class MarketRegimeDetector:
         self, 
         features: FeatureSet,
     ) -> float:
-        return 0.0
+        """
+        Calculate momentum contribution to regime score.
+        """ 
+
+        score = 0.0
+
+        if features.momentum > 0:
+            score += 1.0
+
+        if features.efficiency_ratio >= 0.50:
+            score += 1.0
+
+        return score
 
     # =========================================================
     # REGIME ENGINE
@@ -222,6 +255,9 @@ class MarketRegimeDetector:
 
         total_score = trend_score + volatility_score + momentum_score
 
+        # -------------------------
+        # Regime classification
+        # -------------------------
         if total_score >= 3.0:
 
             if self._is_bullish_alignment(features):
@@ -237,12 +273,22 @@ class MarketRegimeDetector:
             regime = RegimeLabel.RANGING
             confidence = 0.40
 
+        # -------------------------
+        # Confidence tier mapping
+        # -------------------------
+        if confidence >= 0.80:
+            tier = ConfidenceTier.HIGH
+        elif confidence >= 0.50:
+            tier = ConfidenceTier.MEDIUM
+        else:
+            tier = ConfidenceTier.LOW
+
         return MarketRegime(
             observation_timestamp=bar.timestamp,
             computation_timestamp=datetime.utcnow(),
             primary_regime=regime,
             confidence=confidence,
-            confidence_tier=ConfidenceTier.MEDIUM,
+            confidence_tier=tier,
         )
 
     # =========================================================

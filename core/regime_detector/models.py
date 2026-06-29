@@ -110,17 +110,19 @@ class FeatureSet:
     """
     Computed market features used for regime evaluation.
     """
-
     adx: float
-
     atr: float
+    
+    ema20: float
+    ema50: float
+    ema200: float
+
+    ema20_slope: float
+    ema50_slope: float
+    ema200_slope: float
 
     efficiency_ratio: float
-
     volatility_percentile: float
-
     trend_strength: float
-
     momentum: float
-
     normalized_volatility: float
