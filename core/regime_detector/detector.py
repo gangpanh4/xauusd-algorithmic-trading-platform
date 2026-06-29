@@ -11,6 +11,7 @@ from .indicators.adx import ADXIndicator
 from .indicators.atr import ATRIndicator
 from .indicators.efficiency_ratio import EfficiencyRatioIndicator
 from .indicators.momentum import MomentumIndicator
+from .indicators.choppiness import ChoppinessIndicator
 from .indicators.ema import EMAIndicator
 from .indicators.ema_slope import EMASlopeIndicator
 
@@ -30,29 +31,18 @@ class MarketRegimeDetector:
     Core engine responsible for detecting the current market regime.
     """
 
-    def __init__(
-        self,
-        config: RegimeDetectorConfig,
-    ) -> None:
+    def __init__(self, config: RegimeDetectorConfig) -> None:
         self.config = config
         self.state = DetectorState()
 
         # Initialize technical indicators
-        self._adx = ADXIndicator(
-            period=self.config.adx.lookback_period,
-        )
-
-        self._atr = ATRIndicator(
-            period=self.config.adx.lookback_period,
-        )
-
+        self._adx = ADXIndicator(period=self.config.adx.lookback_period)
+        self._atr = ATRIndicator(period=self.config.adx.lookback_period)
         self._efficiency_ratio = EfficiencyRatioIndicator(
-            period=self.config.adx.lookback_period,
+            period=self.config.adx.lookback_period
         )
-
-        self._momentum = MomentumIndicator(
-            period=self.config.adx.lookback_period,
-        )
+        self._momentum = MomentumIndicator(period=self.config.adx.lookback_period)
+        self._choppiness = ChoppinessIndicator(period=self.config.adx.lookback_period)
 
         self._ema20 = EMAIndicator(period=20)
         self._ema50 = EMAIndicator(period=50)
@@ -66,222 +56,146 @@ class MarketRegimeDetector:
     # INPUT PIPELINE
     # =========================================================
 
-    def process_bar(
-        self,
-        bar: MarketBar,
-    ) -> MarketRegime:
-
+    def process_bar(self, bar: MarketBar) -> MarketRegime:
         self._validate_input(bar)
-
         features = self._compute_features(bar)
-
-        regime = self._evaluate_regime(
-            bar=bar,
-            features=features,
-        )
-
+        regime = self._evaluate_regime(bar=bar, features=features)
         self._update_state(bar, regime)
-
         return regime
-
-    # =========================================================
-    # VALIDATION
-    # =========================================================
 
     def _validate_input(self, bar: MarketBar) -> None:
         if bar is None:
             raise ValueError("MarketBar cannot be None.")
 
     # =========================================================
-    # FEATURES
+    # FEATURES & SCORING
     # =========================================================
 
     def _compute_features(self, bar: MarketBar) -> FeatureSet:
+        adx_result = self._adx.update(high=bar.high, low=bar.low, close=bar.close)
+        atr_result = self._atr.update(high=bar.high, low=bar.low, close=bar.close)
+        er_result = self._efficiency_ratio.update(close=bar.close)
+        momentum_result = self._momentum.update(close=bar.close)
+        choppiness_result = self._choppiness.update(high=bar.high, low=bar.low, close=bar.close)
 
-        adx_result = self._adx.update(
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-        )
-        atr_result = self._atr.update(
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-        )
+        ema20_result = self._ema20.update(close=bar.close)
+        ema50_result = self._ema50.update(close=bar.close)
+        ema200_result = self._ema200.update(close=bar.close)
 
-        er_result = self._efficiency_ratio.update(
-            close=bar.close,
-        )
-        momentum_result = self._momentum.update(
-            close=bar.close,
-        )
-
-        ema20_result = self._ema20.update(
-            close=bar.close,
-        )
-        ema50_result = self._ema50.update(
-            close=bar.close,
-        )
-        ema200_result = self._ema200.update(
-            close=bar.close,
-        )
-
-        ema20_slope_result = self._ema20_slope.update(
-            ema=ema20_result.ema,
-        )
-
-        ema50_slope_result = self._ema50_slope.update(
-            ema=ema50_result.ema,
-        )
-
-        ema200_slope_result = self._ema200_slope.update(
-            ema=ema200_result.ema,
-        )
-
+        ema20_slope_result = self._ema20_slope.update(ema20_result.ema)
+        ema50_slope_result = self._ema50_slope.update(ema50_result.ema)
+        ema200_slope_result = self._ema200_slope.update(ema200_result.ema)
 
         return FeatureSet(
             adx=adx_result.adx,
             atr=atr_result.atr,
-
             ema20=ema20_result.ema,
             ema50=ema50_result.ema,
             ema200=ema200_result.ema,
-            
             ema20_slope=ema20_slope_result.slope,
             ema50_slope=ema50_slope_result.slope,
             ema200_slope=ema200_slope_result.slope,
-
             efficiency_ratio=er_result.efficiency_ratio,
+            choppiness=choppiness_result.choppiness,
             volatility_percentile=0.0,
             trend_strength=adx_result.trend_strength,
             momentum=momentum_result.momentum,
             normalized_volatility=atr_result.normalized_atr,
         )
 
-    # =========================================================
-    # HELPER METHODS
-    # =========================================================
-
     def _is_bullish_alignment(self, features: FeatureSet) -> bool:
-        return (
-            features.ema20 > features.ema50
-            and features.ema50 > features.ema200
-        )
+        return features.ema20 > features.ema50 > features.ema200
 
     def _is_bearish_alignment(self, features: FeatureSet) -> bool:
-        return (
-            features.ema20 < features.ema50
-            and features.ema50 < features.ema200
-        )
+        return features.ema20 < features.ema50 < features.ema200
 
     def _is_strong_trend(self, features: FeatureSet) -> bool:
         return features.adx >= self.config.adx.trending_threshold
 
-    def _calculate_trend_score(
-        self, 
-        features: FeatureSet,
-    ) -> float:
-        """
-        Calculate how strongly the market is trending.
-
-        Uses:
-        - ADX to measure trend strength
-        - EMA alignment to measure trend direction
-        """
-
+    def _calculate_trend_score(self, features: FeatureSet) -> float:
         score = 0.0
-
         if self._is_strong_trend(features):
             score += 2.0
-
-        if (
-            self._is_bullish_alignment(features)
-            or self._is_bearish_alignment(features)
-        ):
+        if self._is_bullish_alignment(features) or self._is_bearish_alignment(features):
             score += 2.0
-
         return score
 
-    def _calculate_volatility_score(
-        self, 
-        features: FeatureSet,
-    ) -> float:
-        """
-        Calculate the contribution of volatility
-        to the overall market regime score.
-        """
-
+    def _calculate_volatility_score(self, features: FeatureSet) -> float:
         score = 0.0
-
-        if features.normalized_volatility >= 0.03:
+        if features.normalized_volatility >= self.config.volatility.high_threshold:
             score += 2.0
-
-        elif features.normalized_volatility >= 0.015:
+        elif features.normalized_volatility >= self.config.volatility.medium_threshold:
             score += 1.0
-
         return score
 
-    def _calculate_momentum_score(
-        self, 
-        features: FeatureSet,
-    ) -> float:
-        """
-        Calculate momentum contribution to regime score.
-        """ 
-
+    def _calculate_momentum_score(self, features: FeatureSet) -> float:
         score = 0.0
-
         if features.momentum > 0:
             score += 1.0
-
         if features.efficiency_ratio >= 0.50:
             score += 1.0
+        return score
 
+    def _calculate_ema_slope_score(self, features: FeatureSet) -> float:
+        score = 0.0
+        if all(
+            slope > 0
+            for slope in (
+                features.ema20_slope,
+                features.ema50_slope,
+                features.ema200_slope,
+            )
+        ):
+            score += 1.0
+        elif features.ema20_slope < 0 and features.ema50_slope < 0 and features.ema200_slope < 0:
+            score += 1.0
+        return score
+
+    def _calculate_choppiness_score(self, features: FeatureSet) -> float:
+        score = 0.0
+        if features.choppiness <= self.config.choppiness.trending_threshold:
+            score += 2.0
+        elif features.choppiness <= self.config.choppiness.neutral_threshold:
+            score += 1.0
         return score
 
     # =========================================================
     # REGIME ENGINE
     # =========================================================
 
-    def _evaluate_regime(
-        self,
-        bar: MarketBar,
-        features: FeatureSet,
-    ) -> MarketRegime:
+    def _evaluate_regime(self, bar: MarketBar, features: FeatureSet) -> MarketRegime:
+        if features.choppiness > self.config.choppiness.veto_threshold:
+            regime = RegimeLabel.RANGING
+            confidence = 0.60
+        else:
+            total_score = (
+                self._calculate_trend_score(features)
+                + self._calculate_volatility_score(features)
+                + self._calculate_momentum_score(features)
+                + self._calculate_ema_slope_score(features)
+                + self._calculate_choppiness_score(features)
+            )
 
-        trend_score = self._calculate_trend_score(features)
-        volatility_score = self._calculate_volatility_score(features)
-        momentum_score = self._calculate_momentum_score(features)
-
-        total_score = trend_score + volatility_score + momentum_score
-
-        # -------------------------
-        # Regime classification
-        # -------------------------
-        if total_score >= 3.0:
-
-            if self._is_bullish_alignment(features):
-                regime = RegimeLabel.TRENDING_BULL
-            elif self._is_bearish_alignment(features):
-                regime = RegimeLabel.TRENDING_BEAR
+            if total_score >= self.config.regime.min_score_threshold:
+                if self._is_bullish_alignment(features):
+                    regime = RegimeLabel.TRENDING_BULL
+                elif self._is_bearish_alignment(features):
+                    regime = RegimeLabel.TRENDING_BEAR
+                else:
+                    regime = RegimeLabel.RANGING
+                confidence = min(0.45 + total_score / 10.0, 0.95)
             else:
                 regime = RegimeLabel.RANGING
+                confidence = 0.40
 
-            confidence = min(0.5 + total_score / 6.0, 0.95)
 
-        else:
-            regime = RegimeLabel.RANGING
-            confidence = 0.40
-
-        # -------------------------
-        # Confidence tier mapping
-        # -------------------------
         if confidence >= 0.80:
             tier = ConfidenceTier.HIGH
         elif confidence >= 0.50:
             tier = ConfidenceTier.MEDIUM
         else:
             tier = ConfidenceTier.LOW
+
 
         return MarketRegime(
             observation_timestamp=bar.timestamp,
@@ -291,16 +205,7 @@ class MarketRegimeDetector:
             confidence_tier=tier,
         )
 
-    # =========================================================
-    # STATE UPDATE
-    # =========================================================
-
-    def _update_state(
-        self,
-        bar: MarketBar,
-        regime: MarketRegime,
-    ) -> None:
-
+    def _update_state(self, bar: MarketBar, regime: MarketRegime) -> None:
         self.state.previous_regime = self.state.current_regime
         self.state.current_regime = regime.primary_regime
         self.state.last_observation_time = bar.timestamp

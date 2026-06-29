@@ -20,9 +20,37 @@ class IndicatorConfig:
     weight: float = 1.0
     lookback_period: int = 14
     normalization_window: int = 252
-
     trending_threshold: float = 25.0
 
+
+@dataclass(frozen=True)
+class VolatilityConfig:
+    """
+    Volatility scoring thresholds.
+    """
+
+    high_threshold: float = 2.0
+    medium_threshold: float = 1.0
+
+
+@dataclass(frozen=True)
+class ChoppinessConfig:
+    """
+    Choppiness Index thresholds.
+    """
+
+    trending_threshold: float = 38.2
+    neutral_threshold: float = 50.0
+    veto_threshold: float = 61.8
+
+
+@dataclass(frozen=True)
+class RegimeConfig:
+    """
+    Regime scoring configuration.
+    """
+
+    min_score_threshold: float = 6.0
 
 
 @dataclass(frozen=True)
@@ -33,13 +61,9 @@ class ThresholdConfig:
 
     trend_entry_percentile: float = 0.70
     trend_exit_percentile: float = 0.55
-
     crisis_percentile: float = 0.95
-
     minimum_confidence: float = 0.60
-
     max_adaptive_drift_per_cycle: float = 0.02
-
 
 
 @dataclass(frozen=True)
@@ -53,7 +77,6 @@ class ValidationConfig:
     history_retention_periods: int = 252
 
 
-
 @dataclass(frozen=True)
 class MarketRegimeConfig:
     """
@@ -65,7 +88,6 @@ class MarketRegimeConfig:
     validation: ValidationConfig = field(default_factory=ValidationConfig)
 
 
-
 @dataclass(frozen=True)
 class RegimeDetectorConfig:
     """
@@ -73,6 +95,9 @@ class RegimeDetectorConfig:
     """
 
     adx: IndicatorConfig = field(default_factory=IndicatorConfig)
+    volatility: VolatilityConfig = field(default_factory=VolatilityConfig)
+    choppiness: ChoppinessConfig = field(default_factory=ChoppinessConfig)
+    regime: RegimeConfig = field(default_factory=RegimeConfig)
 
     history_retention_periods: int = 252
 
