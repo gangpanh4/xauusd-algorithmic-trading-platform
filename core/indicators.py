@@ -223,7 +223,7 @@ def is_within_trading_session(cfg, now=None) -> bool:
         return True
 
     from datetime import datetime, UTC, timedelta
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(UTC)
     hour = now.hour
 
     start = cfg.TRADING_START_HOUR_UTC

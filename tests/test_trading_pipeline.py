@@ -1,86 +1,58 @@
-from datetime import datetime, timedelta, UTC
-import random
+from datetime import datetime, UTC
 
-from core.regime_detector.config import RegimeDetectorConfig
-from core.regime_detector.detector import MarketRegimeDetector
-from core.regime_detector.models import MarketBar
+from core.regime_detector.models import (
+    MarketBar,
+)
 
-from core.signal_generator.config import SignalGeneratorConfig
-from core.signal_generator.detector import SignalGenerator
+from core.trading_pipeline.config import (
+    TradingPipelineConfig,
+)
 
-from core.risk_manager.config import RiskManagerConfig
-from core.risk_manager.manager import RiskManager
+from core.trading_pipeline.pipeline import (
+    TradingPipeline,
+)
 
 
 def test_trading_pipeline():
 
-    regime_detector = MarketRegimeDetector(
-        RegimeDetectorConfig(
-            debug_logging=False,
-        )
+    config = TradingPipelineConfig()
+
+    pipeline = TradingPipeline(config)
+
+    bar = MarketBar(
+        timestamp=datetime.now(UTC),
+        open=3300.0,
+        high=3302.0,
+        low=3298.0,
+        close=3301.0,
+        volume=1000,
     )
 
-    signal_generator = SignalGenerator(
-        SignalGeneratorConfig(
-            debug_logging=False,
-        )
+    result = pipeline.process_bar(
+        bar,
+        account_balance=10_000.0,
+        stop_loss_distance=2.5,
+        pip_value=1.0,
     )
-
-    risk_manager = RiskManager(
-        RiskManagerConfig(
-            debug_logging=False,
-        )
-    )
-
-    start = datetime.now(UTC)
-
-    price = 3300.0
-
-    trade_plan = None
-
-    for i in range(250):
-
-        open_price = price
-        close_price = open_price + random.uniform(-1.0, 1.0)
-
-        high_price = max(open_price, close_price) + random.uniform(0.2, 0.8)
-        low_price = min(open_price, close_price) - random.uniform(0.2, 0.8)
-
-        bar = MarketBar(
-            timestamp=start + timedelta(minutes=i),
-            open=open_price,
-            high=high_price,
-            low=low_price,
-            close=close_price,
-            volume=1000,
-        )
-
-        regime = regime_detector.process_bar(bar)
-
-        signal = signal_generator.generate_signal(regime)
-
-        trade_plan = risk_manager.evaluate_signal(
-            signal=signal,
-            account_balance=10000.0,
-            stop_loss_distance=250.0,
-            pip_value=1.0,
-        )
-
-        price = close_price
 
     print()
     print("=" * 60)
-    print("FINAL TRADE PLAN")
+    print("TRADING PIPELINE")
     print("=" * 60)
 
-    print(f"Decision : {trade_plan.decision.value}")
-    print(f"Signal   : {trade_plan.signal.signal.value}")
-    print(f"Size     : {trade_plan.position_size:.2f}")
-    print(f"Risk %   : {trade_plan.risk_percent:.2%}")
-    print(f"Reward % : {trade_plan.reward_percent:.2%}")
-    print(f"Reason   : {trade_plan.reason}")
+    print(
+        f"Regime   : {result.regime.primary_regime.value}"
+    )
 
-    assert trade_plan is not None
+    print(
+        f"Signal   : {result.signal.signal.value}"
+    )
+
+    print(
+        f"Decision : {result.trade_plan.decision.value}"
+    )
+
+    print("=" * 60)
 
 
 if __name__ == "__main__":
