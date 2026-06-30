@@ -93,9 +93,9 @@ class TransitionRecord:
 
     timestamp: datetime
 
-    from_regime: RegimeLabel
+    previous_regime: RegimeLabel
 
-    to_regime: RegimeLabel
+    new_regime: RegimeLabel
 
     confidence: float
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from matplotlib.pyplot import bar
 
 from .config import RegimeDetectorConfig
 from .indicators.adx import ADXIndicator
@@ -23,6 +22,7 @@ from .models import (
     MarketBar,
     MarketRegime,
     RegimeLabel,
+    TransitionRecord,
 )
 
 from .state import DetectorState
@@ -286,6 +286,16 @@ class MarketRegimeDetector:
 
             self.state.current_regime_start = bar.timestamp
             self.state.last_transition_time = bar.timestamp
+
+            transition = TransitionRecord(
+                timestamp=bar.timestamp,
+                previous_regime=self.state.previous_regime,
+                new_regime=self.state.current_regime,
+                confidence=regime.confidence,
+                reason="Confirmation threshold reached",
+            )
+
+            self.state.transition_history.append(transition)
 
             self.state.pending_regime = RegimeLabel.UNKNOWN
             self.state.pending_regime_count = 0

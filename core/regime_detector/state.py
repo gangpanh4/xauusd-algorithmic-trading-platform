@@ -4,12 +4,13 @@ State management for the Market Regime Detection module.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from .models import (
     MarketRegime,
     RegimeLabel,
+    TransitionRecord,
 )
 
 @dataclass
@@ -39,6 +40,8 @@ class DetectorState:
     crisis_confirmation_count: int = 0
 
     bars_in_current_regime: int = 0
+
+    transition_history: list[TransitionRecord] = field(default_factory=list)
 
     processed_bar_count: int = 0
 
