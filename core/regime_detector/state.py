@@ -69,5 +69,7 @@ class DetectorState:
         self.crisis_confirmation_count = 0
 
         self.bars_in_current_regime = 0
+
+        self.transition_history.clear()
         
         self.processed_bar_count = 0

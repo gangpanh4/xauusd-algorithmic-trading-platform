@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict
 
-from .exceptions import ConfigurationError
+from .exceptions import ConfigValidationError
 
 
 @dataclass(frozen=True)
@@ -114,22 +114,24 @@ class RegimeDetectorConfig:
 
     strict_data_validation: bool = True
 
+    debug_logging: bool = False
+
     def __post_init__(self) -> None:
         """
         Validate configuration after initialization.
         """
 
         if self.trend_exit_percentile >= self.trend_entry_percentile:
-            raise ConfigurationError(
+            raise ConfigValidationError(
                 "trend_exit_percentile must be less than trend_entry_percentile."
             )
 
         if not 0.0 <= self.crisis_percentile <= 1.0:
-            raise ConfigurationError(
+            raise ConfigValidationError(
                 "crisis_percentile must be between 0.0 and 1.0."
             )
 
         if self.minimum_regime_duration < 1:
-            raise ConfigurationError(
+            raise ConfigValidationError(
                 "minimum_regime_duration must be at least 1."
             )

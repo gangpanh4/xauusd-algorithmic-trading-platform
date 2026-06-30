@@ -79,6 +79,13 @@ class MarketRegimeDetector:
 
         self._update_state(bar, regime)
 
+        if self.config.debug_logging:
+            self._log_regime(
+                bar=bar,
+                features=features,
+                regime=regime,
+            )
+
         self.state.warmup_complete = self._is_warmup_complete()
 
         return regime
@@ -306,3 +313,35 @@ class MarketRegimeDetector:
         else:
             if self.state.current_regime != RegimeLabel.UNKNOWN:
                 self.state.bars_in_current_regime += 1
+
+    def _log_regime(
+        self,
+        bar: MarketBar,
+        features: FeatureSet,
+        regime: MarketRegime,
+    ) -> None:
+        """
+        Print debug information for the current regime assessment.
+        """
+
+        print("=" * 60)
+        print("Market Regime Detector")
+        print(f"Time            : {bar.timestamp}")
+        print()
+
+        print(f"Regime          : {regime.primary_regime.value}")
+        print(f"Confidence      : {regime.confidence:.2f}")
+        print()
+
+        print(f"ADX             : {features.adx:.2f}")
+        print(f"ATR             : {features.atr:.2f}")
+        print(f"Momentum        : {features.momentum:.2f}")
+        print(f"Choppiness      : {features.choppiness:.2f}")
+        print()
+
+        print(f"Current         : {self.state.current_regime.value}")
+        print(f"Pending         : {self.state.pending_regime.value}")
+        print(f"Pending Count   : {self.state.pending_regime_count}")
+        print(f"Bars In Regime  : {self.state.bars_in_current_regime}")
+
+        print("=" * 60)

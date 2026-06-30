@@ -36,12 +36,11 @@ class ADXIndicator:
 
         self._period = period
 
-        self._history = deque(maxlen=period)
+        # Need period + 1 bars to compute period TR/DM values.
+        self._history = deque(maxlen=period + 1)
 
         self._smoothed_tr = 0.0
-
         self._smoothed_plus_dm = 0.0
-
         self._smoothed_minus_dm = 0.0
 
         self._adx = 0.0
@@ -100,16 +99,29 @@ class ADXIndicator:
 
 
         if not self._initialized:
-            self._initialize_smoothing(
-                true_range=true_range,
-                plus_dm=plus_dm,
-                minus_dm=minus_dm,
+            self._initialize_smoothing()
+
+            plus_di = self._calculate_di(
+                smoothed_dm=self._smoothed_plus_dm,
+                smoothed_tr=self._smoothed_tr,
             )
+
+            minus_di = self._calculate_di(
+                smoothed_dm=self._smoothed_minus_dm,
+                smoothed_tr=self._smoothed_tr,
+            )
+
+            dx = self._calculate_dx(
+                plus_di=plus_di,
+                minus_di=minus_di,
+            )
+
+            self._dx_history.append(dx)
 
             return ADXResult(
                 adx=0.0,
-                plus_di=0.0,
-                minus_di=0.0,
+                plus_di=plus_di,
+                minus_di=minus_di,
                 trend_strength=0.0,
             )
 
@@ -162,9 +174,9 @@ class ADXIndicator:
                 / len(self._dx_history)
             )
         else:
-            self._adx = self._wilder_smoothing(
-                previous_value=self._adx,
-                new_value=dx,
+            self._adx = self._smooth_adx(
+                previous_adx=self._adx,
+                new_dx=dx,
                 period=self._period,
             )
 
@@ -175,8 +187,6 @@ class ADXIndicator:
             trend_strength=self._adx / 100.0,
         )
 
-    
-
 
 
     def is_ready(self) -> bool:
@@ -184,7 +194,7 @@ class ADXIndicator:
         Return True when enough history exists to compute ADX.
         """
 
-        return len(self._history) >= self._period
+        return len(self._history) >= self._period + 1
     
 
     def history_size(self) -> int:
@@ -258,19 +268,44 @@ class ADXIndicator:
 
     def _initialize_smoothing(
         self,
-        true_range: float,
-        plus_dm: float,
-        minus_dm: float,
     ) -> None:
         """
-        Initialize Wilder's smoothed values.
+        Initialize Wilder's smoothed values using the first
+        ``period`` True Range and Directional Movement values.
         """
 
-        self._smoothed_tr = true_range
+        tr_sum = 0.0
+        plus_sum = 0.0
+        minus_sum = 0.0
 
-        self._smoothed_plus_dm = plus_dm
+        for index in range(1, len(self._history)):
+            previous_high, previous_low, previous_close = (
+                self._history[index - 1]
+            )
 
-        self._smoothed_minus_dm = minus_dm
+            current_high, current_low, _ = (
+                self._history[index]
+            )
+
+            tr_sum += self._true_range(
+                previous_close=previous_close,
+                high=current_high,
+                low=current_low,
+            )
+
+            plus_dm, minus_dm = self._directional_movement(
+                previous_high=previous_high,
+                previous_low=previous_low,
+                current_high=current_high,
+                current_low=current_low,
+            )
+
+            plus_sum += plus_dm
+            minus_sum += minus_dm
+
+        self._smoothed_tr = tr_sum
+        self._smoothed_plus_dm = plus_sum
+        self._smoothed_minus_dm = minus_sum
 
         self._initialized = True
 
@@ -308,3 +343,21 @@ class ADXIndicator:
             abs(plus_di - minus_di)
             / denominator
         ) * 100.0
+    
+    @staticmethod
+    def _smooth_adx(
+        previous_adx: float,
+        new_dx: float,
+        period: int,
+    ) -> float:
+        """
+        Apply Wilder's smoothing to the ADX average.
+        """
+
+        return (
+            (
+                previous_adx
+                * (period - 1)
+            )
+            + new_dx
+        ) / period
