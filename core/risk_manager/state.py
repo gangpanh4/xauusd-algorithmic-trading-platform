@@ -28,6 +28,8 @@ class RiskManagerState:
 
     rejected_trade_count: int = 0
 
+    skipped_trade_count: int = 0
+
     processed_signal_count: int = 0
 
     def reset(self) -> None:
@@ -44,5 +46,7 @@ class RiskManagerState:
         self.approved_trade_count = 0
 
         self.rejected_trade_count = 0
+
+        self.skipped_trade_count = 0
 
         self.processed_signal_count = 0

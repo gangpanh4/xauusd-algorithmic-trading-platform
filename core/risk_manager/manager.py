@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, UTC
 
-from core.signal_generator.models import TradingSignal
+from core.signal_generator.models import SignalType, TradingSignal
 
 from .config import RiskManagerConfig
 from .models import (
@@ -43,6 +43,27 @@ class RiskManager:
         """
         Convert a trading signal into a trade plan.
         """
+
+
+        if signal.signal == SignalType.HOLD:
+
+            trade_plan = TradePlan(
+                timestamp=datetime.now(UTC),
+                signal=signal,
+                decision=RiskDecision.SKIP,
+                position_size=0.0,
+                stop_loss=0.0,
+                take_profit=0.0,
+                risk_percent=0.0,
+                reward_percent=0.0,
+                risk_reward_ratio=0.0,
+                reason="No trading opportunity.",
+            )
+
+            self._update_state(trade_plan)
+
+            return trade_plan
+
 
         position_size = PositionSizer.calculate_position_size(
             account_balance=account_balance,
@@ -102,6 +123,13 @@ class RiskManager:
         self.state.processed_signal_count += 1
 
         if trade_plan.decision == RiskDecision.APPROVE:
+
             self.state.approved_trade_count += 1
-        else:
+
+        elif trade_plan.decision == RiskDecision.REJECT:
+
             self.state.rejected_trade_count += 1
+
+        elif trade_plan.decision == RiskDecision.SKIP:
+
+            self.state.skipped_trade_count += 1

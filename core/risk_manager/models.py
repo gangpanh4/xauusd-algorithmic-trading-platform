@@ -16,9 +16,9 @@ class RiskDecision(Enum):
     """
     Final decision produced by the Risk Manager.
     """
-
     APPROVE = "APPROVE"
     REJECT = "REJECT"
+    SKIP = "SKIP"
 
 
 @dataclass(frozen=True)
