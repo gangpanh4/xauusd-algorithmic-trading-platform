@@ -32,11 +32,15 @@ class DetectorState:
 
     initialized: bool = False
 
+    warmup_complete: bool = False
+
     trend_confirmation_count: int = 0
     range_confirmation_count: int = 0
     crisis_confirmation_count: int = 0
 
     bars_in_current_regime: int = 0
+
+    processed_bar_count: int = 0
 
 
     def reset(self) -> None:
@@ -55,9 +59,12 @@ class DetectorState:
         self.last_result = None
 
         self.initialized = False
+        self.warmup_complete = False
 
         self.trend_confirmation_count = 0
         self.range_confirmation_count = 0
         self.crisis_confirmation_count = 0
 
         self.bars_in_current_regime = 0
+        
+        self.processed_bar_count = 0

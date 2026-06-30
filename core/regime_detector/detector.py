@@ -60,9 +60,27 @@ class MarketRegimeDetector:
 
     def process_bar(self, bar: MarketBar) -> MarketRegime:
         self._validate_input(bar)
+
         features = self._compute_features(bar)
-        regime = self._evaluate_regime(bar=bar, features=features)
+
+        if not self._is_warmup_complete():
+            regime = MarketRegime(
+                observation_timestamp=bar.timestamp,
+                computation_timestamp=datetime.utcnow(),
+                primary_regime=RegimeLabel.UNKNOWN,
+                confidence=0.0,
+                confidence_tier=ConfidenceTier.LOW,
+            )
+        else:
+            regime = self._evaluate_regime(
+                bar=bar,
+                features=features,
+            )
+
         self._update_state(bar, regime)
+
+        self.state.warmup_complete = self._is_warmup_complete()
+
         return regime
 
     def _validate_input(self, bar: MarketBar) -> None:
@@ -72,6 +90,20 @@ class MarketRegimeDetector:
     # =========================================================
     # FEATURES & SCORING
     # =========================================================
+
+    def _is_warmup_complete(self) -> bool:
+        """
+        Returns True once all indicators have accumulated enough history.
+        """
+
+        required_bars = max(
+            self.config.adx.lookback_period,
+            20,
+            50,
+            200,
+        )
+
+        return self.state.processed_bar_count >= required_bars
 
     def _compute_features(self, bar: MarketBar) -> FeatureSet:
         adx_result = self._adx.update(high=bar.high, low=bar.low, close=bar.close)
@@ -210,6 +242,8 @@ class MarketRegimeDetector:
     def _update_state(self, bar: MarketBar, regime: MarketRegime) -> None:
         self.state.last_observation_time = bar.timestamp
         self.state.last_result = regime
+
+        self.state.processed_bar_count += 1
 
         candidate = regime.primary_regime
 
