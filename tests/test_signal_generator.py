@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, UTC
 
 from core.regime_detector.models import (
     ConfidenceTier,
@@ -30,8 +30,8 @@ def test_signal_generator():
 
     # Create fake market regime
     regime = MarketRegime(
-        observation_timestamp=datetime.utcnow(),
-        computation_timestamp=datetime.utcnow(),
+        observation_timestamp=datetime.now(UTC),
+        computation_timestamp=datetime.now(UTC),
         primary_regime=RegimeLabel.TRENDING_BULL,
         confidence=0.87,
         confidence_tier=ConfidenceTier.HIGH,

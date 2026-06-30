@@ -5,7 +5,7 @@ State management for the Market Regime Detection module.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, UTC
 
 from .models import (
     MarketRegime,

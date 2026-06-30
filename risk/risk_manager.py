@@ -24,7 +24,7 @@ Rules enforced:
 import logging
 import os
 import json
-from datetime import datetime, date, timezone
+from datetime import datetime, UTC, date, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 

@@ -91,7 +91,7 @@ class TrailManager:
             return
 
         try:
-            from datetime import datetime, timedelta, UTC
+            from datetime import datetime, UTC, timedelta
             from utils.telegram_alert import send_trade_closed_alert
 
             # Closing deals share the position's ticket as position_id

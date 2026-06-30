@@ -15,7 +15,7 @@ UPGRADE PATH:
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, UTC, timedelta, timezone
 from typing import Optional
 import json
 

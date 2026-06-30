@@ -17,7 +17,7 @@ from core.regime_detector.models import (
     MarketRegime,
 )
 
-from datetime import datetime
+from datetime import datetime, UTC
 
 
 class SignalGenerator:
@@ -59,7 +59,7 @@ class SignalGenerator:
             strength = SignalStrength.WEAK
 
         result = TradingSignal(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             signal=signal,
             strength=strength,
             confidence=confidence,

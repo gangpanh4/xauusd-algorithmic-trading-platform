@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, UTC, timedelta
 
 from core.regime_detector.config import RegimeDetectorConfig
 from core.regime_detector.detector import MarketRegimeDetector
@@ -14,7 +14,7 @@ detector = MarketRegimeDetector(config)
 
 
 # Generate fake market data
-start = datetime.utcnow()
+start = datetime.now(UTC)
 import random
 
 random.seed(42)

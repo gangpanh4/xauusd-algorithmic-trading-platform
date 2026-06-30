@@ -5,7 +5,7 @@ Core data models for the Market Regime Detection module.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, UTC
 from enum import Enum
 from typing import Any
 

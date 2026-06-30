@@ -4,7 +4,7 @@ Market Regime Detection Engine.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 
 
 from .config import RegimeDetectorConfig
@@ -66,7 +66,7 @@ class MarketRegimeDetector:
         if not self._is_warmup_complete():
             regime = MarketRegime(
                 observation_timestamp=bar.timestamp,
-                computation_timestamp=datetime.utcnow(),
+                computation_timestamp=datetime.now(UTC),
                 primary_regime=RegimeLabel.UNKNOWN,
                 confidence=0.0,
                 confidence_tier=ConfidenceTier.LOW,
@@ -240,7 +240,7 @@ class MarketRegimeDetector:
 
         return MarketRegime(
             observation_timestamp=bar.timestamp,
-            computation_timestamp=datetime.utcnow(),
+            computation_timestamp=datetime.now(UTC),
             primary_regime=regime,
             confidence=confidence,
             confidence_tier=tier,

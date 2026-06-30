@@ -222,7 +222,7 @@ def is_within_trading_session(cfg, now=None) -> bool:
     if not getattr(cfg, "TIME_FILTER_ENABLED", False):
         return True
 
-    from datetime import datetime, timezone
+    from datetime import datetime, UTC, timedelta
     now = now or datetime.now(tz=timezone.utc)
     hour = now.hour
 

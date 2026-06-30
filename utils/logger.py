@@ -8,7 +8,7 @@ import logging
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 
 
