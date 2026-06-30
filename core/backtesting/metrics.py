@@ -64,3 +64,57 @@ def count_trade_outcomes(
         losses,
         breakeven,
     )
+
+
+def calculate_average_profit(
+    result: BacktestResult,
+) -> float:
+    """
+    Calculate average profit per trade.
+    """
+
+    if not result.trades:
+        return 0.0
+
+    return (
+        calculate_net_profit(result)
+        / len(result.trades)
+    )
+
+
+def calculate_largest_win(
+    result: BacktestResult,
+) -> float:
+    """
+    Return the largest winning trade.
+    """
+
+    wins = [
+        trade.profit_loss
+        for trade in result.trades
+        if trade.profit_loss > 0.0
+    ]
+
+    if not wins:
+        return 0.0
+
+    return max(wins)
+
+
+def calculate_largest_loss(
+    result: BacktestResult,
+) -> float:
+    """
+    Return the largest losing trade.
+    """
+
+    losses = [
+        trade.profit_loss
+        for trade in result.trades
+        if trade.profit_loss < 0.0
+    ]
+
+    if not losses:
+        return 0.0
+
+    return min(losses)
