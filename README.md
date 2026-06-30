@@ -1,156 +1,285 @@
-# XAUUSD AI Trading Signal Generator
+# XAUUSD Algorithmic Trading Platform
 
-A professional-grade signal generator for **Gold (XAU/USD)** on **MetaTrader 5**,
-built to be extended into a fully automated trading bot.
+> **Version:** 3.0 Core
+> **Release Date:** June 2026
+> **Development Status:** Foundation Complete ✅
 
----
 
-## ✅ Features
+A modular algorithmic trading platform for **XAUUSD (Gold/USD)** built with
+clean software architecture and designed for long-term extensibility.
 
-| Component | Description |
-|---|---|
-| **EMA 200 Trend Filter** | Primary trend direction — only trade with the trend |
-| **EMA 50 Cross** | Secondary confirmation of momentum |
-| **RSI (14)** | Avoids overbought buys / oversold sells |
-| **MACD** | Histogram crossover for entry timing |
-| **Bollinger Bands** | Warns if price is stretched to extremes |
-| **ATR Stop Loss** | Dynamic SL/TP sized to current volatility |
-| **News Filter** | Blocks trades 30 min before/after high-impact events |
-| **Risk Manager** | Daily loss limit, max positions, lot size calculator |
-| **Confidence Score** | Weighted 0–100% score; below 60% = NO TRADE |
-| **Telegram Alerts** | Optional real-time signal push notifications |
+The project focuses on creating a professional trading framework where market
+analysis, signal generation, risk management, execution, and backtesting are
+independent modules that can evolve without rewriting the entire system.
 
 ---
 
-## 📁 Project Structure
+# Project Vision
+
+Instead of building a single hard-coded trading bot, this project builds a
+complete trading platform capable of supporting multiple trading strategies,
+backtesting, demo trading, and live MT5 execution.
+
+Future strategies such as:
+
+- EMA Pullback
+- Breakout Trading
+- ICT / Smart Money Concepts
+- AI-Assisted Trading
+
+can all plug into the same trading pipeline.
+
+---
+
+# Current Status
+
+## ✅ Version 3.0 Core Completed
+
+### Indicator Engine
+
+Implemented:
+
+- ADX
+- ATR
+- Momentum
+- Choppiness Index
+- EMA Slope
+
+---
+
+### Market Regime Detection
+
+Implemented market states:
+
+- TRENDING_BULL
+- TRENDING_BEAR
+- RANGING
+- UNKNOWN
+
+Features:
+
+- Confidence Scoring
+- Warm-up Handling
+- Transition Confirmation
+- Regime State Machine
+- Transition History
+
+---
+
+### Signal Generation
+
+Supported signals:
+
+- BUY
+- SELL
+- HOLD
+
+Current strategy:
+
+- TRENDING_BULL → BUY
+- TRENDING_BEAR → SELL
+- RANGING → HOLD
+- UNKNOWN → HOLD
+
+---
+
+### Risk Management
+
+Implemented:
+
+- Position Sizing
+- Trade Approval
+- Risk / Reward Calculation
+- Trade Plan Generation
+
+---
+
+### Trading Pipeline
+
+End-to-end orchestration connecting:
+
+Market Data →
+
+Indicators →
+
+Market Regime →
+
+Signal Generator →
+
+Risk Manager →
+
+Trade Plan
+
+---
+
+### Backtesting Engine
+
+Foundation completed.
+
+Implemented:
+
+- Historical Replay Engine
+- Metrics
+- Reporting
+- Trade Recording
+- Engine Lifecycle
+- State Management
+
+---
+
+# Project Architecture
 
 ```
-xauusd_signal_bot/
-├── main.py                  ← Entry point
-├── config.py                ← All parameters (edit here first)
-├── requirements.txt
+                Market Data (OHLCV)
+                        │
+                        ▼
+                Indicator Engine
+                        │
+                        ▼
+           Market Regime Detector
+                        │
+                        ▼
+               Signal Generator
+                        │
+                        ▼
+                 Risk Manager
+                        │
+                        ▼
+               Trading Pipeline
+                        │
+          ┌─────────────┴─────────────┐
+          ▼                           ▼
+ Backtesting Engine        MT5 Execution (v3.1)
+```
+
+---
+
+# Project Structure
+
+```
+core/
+
+├── regime_detector/
 │
-├── core/
-│   ├── mt5_connector.py     ← MT5 data fetch + order execution
-│   └── indicators.py        ← EMA, RSI, ATR, MACD, BB
+├── signal_generator/
 │
-├── signals/
-│   └── signal_engine.py     ← BUY / SELL / NO TRADE logic + confidence
+├── risk_manager/
 │
-├── news/
-│   └── news_filter.py       ← ForexFactory calendar blackout
+├── trading_pipeline/
 │
-├── risk/
-│   └── risk_manager.py      ← Daily loss guard, position limits
+├── backtesting/
 │
-├── utils/
-│   ├── logger.py            ← File + console logging, signal JSON export
-│   └── telegram_alert.py    ← Push notifications
-│
-├── logs/                    ← signal_bot.log (auto-created)
-└── output/                  ← signals.json (auto-created)
+└── mt5_execution/      (Coming in v3.1)
 ```
 
 ---
 
-## 🚀 Quick Start
+# Development Roadmap
 
-### 1. Install dependencies
-```bash
-pip install -r requirements.txt
-# For live MT5 (Windows only):
-pip install MetaTrader5
-```
+## Version 3.0 Core ✅
 
-### 2. Run in demo mode (no MT5 needed)
-```bash
-python main.py --demo
-```
-
-### 3. Run once with live MT5 data
-Edit `config.py` → set `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`
-```bash
-python main.py
-```
-
-### 4. Run continuously (poll every 60 seconds)
-```bash
-python main.py --loop --interval 60
-```
-
-### 5. View signal history
-```bash
-python main.py --stats
-```
+- Indicator Engine
+- Market Regime Detector
+- Signal Generator
+- Risk Manager
+- Trading Pipeline
+- Backtesting Foundation
 
 ---
 
-## ⚙️ Configuration (`config.py`)
+## Version 3.1
 
-Key settings to adjust:
-
-```python
-SYMBOL            = "XAUUSD"
-TIMEFRAME         = "H1"          # M15 / H1 / H4 / D1
-
-RISK_PER_TRADE_PCT = 1.0          # % of balance per trade
-MAX_DAILY_LOSS_PCT = 3.0          # Kill switch
-MIN_CONFIDENCE     = 0.60         # Below this = NO TRADE
-MIN_RISK_REWARD    = 1.5          # Skip if R:R too low
-
-NEWS_FILTER_ENABLED   = True
-NEWS_BLACKOUT_MINUTES = 30
-
-LIVE_TRADING = False              # ← Set True to enable auto-execution
-```
+- MT5 Execution Engine
+- Demo Trading
+- Order Management
+- Position Monitoring
 
 ---
 
-## 📊 Signal Output Example
+## Version 3.2
 
-```
-============================================================
-  XAUUSD Signal  |  2024-01-15T09:30:00
-============================================================
-  Signal     : BUY
-  Confidence : 82.0%
-  Entry      : 2025.40
-  Stop Loss  : 2019.20  (6.2 pips)
-  Take Profit: 2035.70
-  R:R Ratio  : 1:1.66
-  Lot Size   : 0.15
-────────────────────────────────────────────────────────────
-  Reasoning:
-    ✓ Price above EMA 200 → Bullish trend
-    ✓ EMA 50 above EMA 200 → Double confirmation bullish
-    ✓ RSI (54.2) in healthy bullish zone (40–65)
-    ✓ MACD fresh crossover ↑ confirms bullish momentum
-    ✓ R:R ratio 1:1.66 ≥ minimum 1:1.5
-  Warnings:
-    ⚠ Volume 0.8× below average — low conviction
-============================================================
-```
+Entry Strategy Engine
+
+Strategies:
+
+- EMA Pullback
+- Breakout
+- Trend Continuation
 
 ---
 
-## 🤖 Upgrade Path: Full Auto-Bot
+## Version 3.3
 
-This project is designed to be upgraded step-by-step:
+Advanced Trading Strategies
 
-| Step | Change | File |
-|---|---|---|
-| 1 | Set `LIVE_TRADING = True` | `config.py` |
-| 2 | Fill in MT5 credentials | `config.py` |
-| 3 | Enable Telegram alerts | `config.py` |
-| 4 | Enable loop mode | `python main.py --loop` |
-| 5 | Add trailing stop logic | `core/mt5_connector.py` → `modify_order()` |
-| 6 | Add multi-timeframe confirmation | `core/indicators.py` + `main.py` |
-| 7 | Add ML confidence model | `signals/ml_model.py` (new file) |
+- ICT
+- Smart Money Concepts
+- Liquidity Sweeps
+- Order Blocks
+- Fair Value Gaps
 
 ---
 
-## ⚠️ Disclaimer
+## Version 4.0
 
-This software is for **educational purposes only**. Forex and gold trading
-carries significant risk. Always test on a **demo account** before using
-real capital. Past signal performance does not guarantee future results.
+Artificial Intelligence
+
+- AI Strategy Selection
+- Adaptive Risk Management
+- Machine Learning Optimization
+
+---
+
+# Testing
+
+Implemented tests:
+
+- Market Regime Detector
+- Signal Generator
+- Risk Manager
+- Trading Pipeline
+- Backtesting Engine
+
+Every major module includes dedicated tests before integration.
+
+---
+
+# Design Principles
+
+This project follows several software engineering principles:
+
+- Modular architecture
+- Separation of concerns
+- Strong typing
+- Configuration-driven behavior
+- State management
+- Test-first integration
+- Extensible strategy design
+
+---
+
+# Current Limitations
+
+Version 3.0 Core focuses on infrastructure.
+
+Not yet implemented:
+
+- MT5 Live Execution
+- Demo Trading
+- Entry Strategy Engine
+- ICT
+- AI Optimization
+- Advanced Trade Simulation
+
+These features are planned for future versions.
+
+---
+
+# License
+
+This project is intended for educational and research purposes.
+
+Always test new strategies on historical data and demo accounts before using
+real capital.
+
+Trading financial markets involves significant risk.
