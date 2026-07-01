@@ -4,9 +4,10 @@ Trade Simulator.
 
 from __future__ import annotations
 
-from .models import (
-    BacktestTrade,
-)
+from core.regime_detector.models import MarketBar
+from core.risk_manager.models import TradePlan
+
+from .models import BacktestTrade
 
 
 class TradeSimulator:
@@ -16,13 +17,18 @@ class TradeSimulator:
 
     def simulate(
         self,
-        trade: BacktestTrade,
+        trade_plan: TradePlan,
+        entry_bar: MarketBar,
+        future_bars: list[MarketBar],
     ) -> BacktestTrade:
         """
-        Simulate a completed trade.
+        Simulate a trade using future market bars.
 
-        Currently this is a placeholder and simply
-        returns the provided trade.
+        NOTE:
+        This is the first implementation step.
+        Trade execution logic will be added next.
         """
 
-        return trade
+        raise NotImplementedError(
+            "Trade simulation has not been implemented yet."
+        )

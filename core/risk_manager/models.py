@@ -23,22 +23,23 @@ class RiskDecision(Enum):
 
 @dataclass(frozen=True)
 class TradePlan:
-    """
-    Complete trade execution plan produced by the Risk Manager.
-    """
-
     timestamp: datetime
 
     signal: TradingSignal
 
     decision: RiskDecision
 
+    # Position
     position_size: float
 
-    stop_loss: float
+    # Execution prices
+    entry_price: float
 
-    take_profit: float
+    stop_loss_price: float
 
+    take_profit_price: float
+
+    # Risk information
     risk_percent: float
 
     reward_percent: float

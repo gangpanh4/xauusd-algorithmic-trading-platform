@@ -27,6 +27,7 @@ from .models import (
     BacktestResult,
 )
 from .state import BacktestState
+from .simulator import TradeSimulator
 
 
 class BacktestingEngine:
@@ -42,6 +43,8 @@ class BacktestingEngine:
         self.config = config
 
         self.state = BacktestState()
+
+        self.simulator = TradeSimulator()
 
         self.pipeline = TradingPipeline(
             TradingPipelineConfig(),
@@ -60,7 +63,7 @@ class BacktestingEngine:
 
         self._initialize()
 
-        for bar in historical_bars:
+        for index, bar in enumerate(historical_bars):
 
             self.state.processed_bar_count += 1
 
@@ -71,13 +74,19 @@ class BacktestingEngine:
                 pip_value=1.0,
             )
 
-            self._record_trade(result)
+            future_bars = historical_bars[index + 1 :]
+            
+            self._record_trade(
+                result=result,
+                future_bars=future_bars,
+            )
 
         return self._finalize()
 
     def _record_trade(
         self,
         result: PipelineResult,
+        future_bars: list[MarketBar],
     ) -> None:
         """
         Record an approved trade.
@@ -88,7 +97,13 @@ class BacktestingEngine:
         if trade_plan.decision != RiskDecision.APPROVE:
             return
 
-        self.state.trades.append(trade_plan)
+        trade = self.simulator.simulate(
+            trade_plan=trade_plan,
+            entry_bar=bar,
+            future_bars=future_bars,
+        )
+        
+        self.state.trades.append(trade)
 
         self.state.executed_trade_count += 1
 
