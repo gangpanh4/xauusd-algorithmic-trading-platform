@@ -155,18 +155,22 @@ class BacktestingEngine:
         self.state.end_time = datetime.now(UTC)
 
         wins = sum(
-            trade.outcome.name == "WIN"
+            1
             for trade in self.state.trades
+            if trade.outcome.name == "WIN"
         )
 
         losses = sum(
-            trade.outcome.name == "LOSS"
+            1
             for trade in self.state.trades
-        )
-            for trade in self.state.trades
+            if trade.outcome.name == "LOSS"
         )
 
-        breakeven = len(self.state.trades) - wins - losses
+        breakeven = (
+            len(self.state.trades)
+            - wins
+            - losses
+        )
 
         net_profit = sum(
             trade.net_profit
