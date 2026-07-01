@@ -66,24 +66,39 @@ class MarketBar:
 
     metadata: dict[str, Any] = field(default_factory=dict)
 
-@dataclass(frozen=True)
+@dataclass
 class MarketRegime:
     """
-    Final regime assessment returned by the detector after processing
-    one MarketBar.
+    Backward-compatible market regime model.
     """
 
-    observation_timestamp: datetime
+    # Old API
+    label: RegimeLabel = RegimeLabel.UNKNOWN
 
-    computation_timestamp: datetime
+    # New API
+    primary_regime: RegimeLabel | None = None
 
-    primary_regime: RegimeLabel
+    confidence: float = 0.0
 
-    confidence: float
+    observation_timestamp: datetime = field(
+        default_factory=lambda: datetime.now(UTC)
+    )
 
-    confidence_tier: ConfidenceTier
+    computation_timestamp: datetime = field(
+        default_factory=lambda: datetime.now(UTC)
+    )
 
-    status_flags: frozenset[StatusFlag] = field(default_factory=frozenset)
+    confidence_tier: ConfidenceTier = ConfidenceTier.VERY_LOW
+
+    status_flags: frozenset[StatusFlag] = field(
+        default_factory=frozenset
+    )
+
+    def __post_init__(self):
+        if self.primary_regime is None:
+            self.primary_regime = self.label
+        else:
+            self.label = self.primary_regime
 
 @dataclass(frozen=True)
 class TransitionRecord:

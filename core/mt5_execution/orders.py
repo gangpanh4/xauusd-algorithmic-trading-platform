@@ -67,10 +67,15 @@ def build_mt5_request(
         else mt5.ORDER_TYPE_SELL
     )
 
-    price = get_market_price(
-        request.symbol,
-        request.side,
-    )
+    # Use the supplied entry price during tests/backtesting.
+    # Otherwise use the live MT5 market price.
+    if request.entry_price > 0:
+        price = request.entry_price
+    else:
+        price = get_market_price(
+            request.symbol,
+            request.side,
+        )
 
     return {
         "action": mt5.TRADE_ACTION_DEAL,

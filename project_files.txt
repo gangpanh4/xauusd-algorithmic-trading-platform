@@ -1,7 +1,7 @@
 ./.git/COMMIT_EDITMSG
+./.git/HEAD
 ./.git/config
 ./.git/description
-./.git/HEAD
 ./.git/hooks/applypatch-msg.sample
 ./.git/hooks/commit-msg.sample
 ./.git/hooks/fsmonitor-watchman.sample
@@ -34,6 +34,7 @@
 ./.git/objects/04/fd9ab2bdb41c8980de3d5c6be39a09caa0d44d
 ./.git/objects/05/e053204d12bbfab64a6c401729e8bdc16dab6d
 ./.git/objects/06/7de519262305270f7bda8ea1f503c52d6f23f7
+./.git/objects/06/9432545e2dbb4330abae4e76d0f63bd5fd7342
 ./.git/objects/06/b17878f78c5ab7bc3676df3676815936e7b0ab
 ./.git/objects/07/aa5091c5c5e6629f36b98e02d172b851269ce6
 ./.git/objects/07/f7ecaa9d7901b1f6f8dee22e8cc098d712451b
@@ -71,6 +72,7 @@
 ./.git/objects/1a/87e9057ee924d784edd0c32bc7936fe5965c20
 ./.git/objects/1a/b8e89ec8b2023ce263c65cb2dbb8d840c77b6b
 ./.git/objects/1a/cee75c026991e13e932f92b76754b0c9a26b4a
+./.git/objects/1b/075691eaaeaa8b15ca07220e51a8bdbb5b6508
 ./.git/objects/1b/7e92b19538abec29d62830265da61a9dc16ba0
 ./.git/objects/1c/5ee81ba3e63e87103774ebb7fd54326f4ac335
 ./.git/objects/1d/16efffd580713b5d65dd289340ed8ead2202a8
@@ -86,6 +88,7 @@
 ./.git/objects/26/95d56d75a1a35adfafe646aadddaef221b5fea
 ./.git/objects/27/306b673fc8a73fdb0ad437750abd208973a871
 ./.git/objects/27/aa0d86de9543fa8994a8963f7f6efa03c86345
+./.git/objects/27/fc877ab1c78ec0ed0d714ebd47c4ac98493a00
 ./.git/objects/27/fece2f6d9ff6ae4355c5776aaa72325676ef0a
 ./.git/objects/28/c31bbe2012124134ced1534dc3a72357fa1940
 ./.git/objects/28/d624145e57f95634eef9cfa9c89f5368ffac57
@@ -112,8 +115,10 @@
 ./.git/objects/36/3cd1c4c1b251a085b8511c151f53120063be2d
 ./.git/objects/36/642be191ff4ad849d58c85645d65980e002cd8
 ./.git/objects/36/cf2afb55017b04101b0f9c3ae9d4d8d506bd17
+./.git/objects/37/0ec9e4508bf4470171f9b8214455c99084debc
 ./.git/objects/37/e9e6cc4803f5f77fa0b30e89e16d8607e2f273
 ./.git/objects/38/2d0c75367496b58f93cb2ee906689040335d67
+./.git/objects/38/a7fca563242e30b47e016fd6215146b13dcf1f
 ./.git/objects/38/e6ef820f639d23c4da605ad448f4eaa891bb3e
 ./.git/objects/39/15b1f0fdcad19966fa04afe06b803d04654447
 ./.git/objects/39/215af2e89c8000647d874a2e58d4024476a617
@@ -200,6 +205,7 @@
 ./.git/objects/6c/ef0c60010c812046a90e5a123aee8142ebb060
 ./.git/objects/6d/0a39e9cc0ff7d4f51ad23206f366905e0760f0
 ./.git/objects/6d/b5204580f43482d4e65081fa4d47f8e0738419
+./.git/objects/6f/158cb18b6b5e5a6db128af81d2bf82e2eea347
 ./.git/objects/6f/532138408709414d1d5742fcacaaec8f8637b2
 ./.git/objects/6f/68c6c3eb3244ab0320b3aff8b5431ab2a77a22
 ./.git/objects/6f/84015e078857d33fa9d9b6675df0e2e689f9c5
@@ -217,6 +223,7 @@
 ./.git/objects/76/b540789349b3221c4af295d0148dad127bd7bb
 ./.git/objects/76/f211aca951b18525d093f12080fa7c9cb203f9
 ./.git/objects/79/5b80ff83f6d142b33d2852e44fb253d3def00e
+./.git/objects/79/7de8802cd9e0984bd202d3ab65f41eed9c830f
 ./.git/objects/7b/a25ae4585989e7ae811f056bd00a329f0a6612
 ./.git/objects/7c/8d4bbab2a7a7cac53855bc1bf647fb76453cf2
 ./.git/objects/7d/5ac5684294fdaf45a669942107dd9201b10f57
@@ -275,6 +282,7 @@
 ./.git/objects/a1/ded060631ae0e63777205ca8d6fcc6b5e18dea
 ./.git/objects/a2/4401e1f43915413ea33842932e6d4a3e9d3b17
 ./.git/objects/a2/b0e20b8e605797b599f584d840505d5bb2b1be
+./.git/objects/a3/4f880c0b8617a540bef75978ca0c7e1a3b3d62
 ./.git/objects/a4/04d5f0c16beb75edca192dcfdf34bf536eacd2
 ./.git/objects/a4/a7165ece3f4b122e163039ce1fbfebc2e2f3ca
 ./.git/objects/a5/26f3838e456e33079764dd0924243817d83e41
@@ -349,6 +357,7 @@
 ./.git/objects/ce/00c9f3992d22f1521c09953ccf0901c5435572
 ./.git/objects/ce/c96a7eab26fe1879a22aa71744ba1c4d3b7fc6
 ./.git/objects/ce/deb2297cd51aaaa39c6f4011e7107ebb230832
+./.git/objects/cf/e8c87a28750ab5e63ee14505ec69d99ba220c4
 ./.git/objects/d0/1ab56b7cc77b0d255020778d71789faf9cc5fb
 ./.git/objects/d0/4120d8552fac782c8aabc47652b67046869c92
 ./.git/objects/d0/5ee878c5ba584ca140f0a60cb2be4bce0fd340
@@ -356,7 +365,9 @@
 ./.git/objects/d1/069fe7a8c6cabf233ae5de890dc5e54cc27d76
 ./.git/objects/d1/55803a802097390f902e7f71c68da4cef4af9c
 ./.git/objects/d1/fb2166331d51ad7256be50f2b0c1f4bf4e3266
+./.git/objects/d2/516e024de122f12235aea7b72fb724f40552c9
 ./.git/objects/d2/742fb82d215a499de96007d66d69c79ffd6319
+./.git/objects/d2/99c65c5d8f1bc6a28bfbc2fe80aa861888a4f6
 ./.git/objects/d2/baf85aabd46b31b05b3e5307bc2a46ca44ec17
 ./.git/objects/d2/ecdcc4ad514e80e2e6cbda60ad94a0c88595d7
 ./.git/objects/d3/3a06bf08e82f3d9171ef775e279fdcd43b15fd
@@ -367,6 +378,7 @@
 ./.git/objects/d5/c2ccd1c0d2b5a8c4e11c1c4ab909f4addbffbf
 ./.git/objects/d6/0e79e7c6bd0fab852d9d3ad5195a20a29fce31
 ./.git/objects/d6/3993dbf12b9f648cafd84eeccd48908d719a1f
+./.git/objects/d6/418e9f7429954d7f329cb4f0727616563f87bb
 ./.git/objects/d6/b3ac4670938a05ebc2852870d69b4b58bc15a2
 ./.git/objects/d8/44dd9af21912cd10c2edf607e7da3e902e38c5
 ./.git/objects/d8/864dc60791455360c60258ea354712b1403b95
@@ -440,7 +452,24 @@
 ./.git/refs/tags/v3.0-core
 ./.git/refs/tags/v3.1-demo-execution
 ./.gitignore
+./README.md
+./__pycache__/config.cpython-314.pyc
 ./config.py
+./core/__init__.py
+./core/__pycache__/__init__.cpython-314.pyc
+./core/__pycache__/indicators.cpython-314.pyc
+./core/__pycache__/mt5_connector.cpython-314.pyc
+./core/__pycache__/position_manager.cpython-314.pyc
+./core/backtesting/__init__.py
+./core/backtesting/__pycache__/__init__.cpython-314.pyc
+./core/backtesting/__pycache__/config.cpython-314.pyc
+./core/backtesting/__pycache__/engine.cpython-314.pyc
+./core/backtesting/__pycache__/history_loader.cpython-314.pyc
+./core/backtesting/__pycache__/metrics.cpython-314.pyc
+./core/backtesting/__pycache__/models.cpython-314.pyc
+./core/backtesting/__pycache__/reporter.cpython-314.pyc
+./core/backtesting/__pycache__/runner.cpython-314.pyc
+./core/backtesting/__pycache__/state.cpython-314.pyc
 ./core/backtesting/config.py
 ./core/backtesting/engine.py
 ./core/backtesting/history_loader.py
@@ -450,30 +479,33 @@
 ./core/backtesting/runner.py
 ./core/backtesting/simulator.py
 ./core/backtesting/state.py
-./core/backtesting/__init__.py
-./core/backtesting/__pycache__/config.cpython-314.pyc
-./core/backtesting/__pycache__/engine.cpython-314.pyc
-./core/backtesting/__pycache__/history_loader.cpython-314.pyc
-./core/backtesting/__pycache__/metrics.cpython-314.pyc
-./core/backtesting/__pycache__/models.cpython-314.pyc
-./core/backtesting/__pycache__/reporter.cpython-314.pyc
-./core/backtesting/__pycache__/runner.cpython-314.pyc
-./core/backtesting/__pycache__/state.cpython-314.pyc
-./core/backtesting/__pycache__/__init__.cpython-314.pyc
+./core/execution_adapter/__init__.py
 ./core/execution_adapter/adapter.py
 ./core/execution_adapter/config.py
 ./core/execution_adapter/models.py
-./core/execution_adapter/__init__.py
 ./core/indicators.py
-./core/live_trading/config.py
-./core/live_trading/engine.py
-./core/live_trading/models.py
-./core/live_trading/state.py
 ./core/live_trading/__pycache__/config.cpython-314.pyc
 ./core/live_trading/__pycache__/engine.cpython-314.pyc
 ./core/live_trading/__pycache__/models.cpython-314.pyc
 ./core/live_trading/__pycache__/state.cpython-314.pyc
+./core/live_trading/config.py
+./core/live_trading/engine.py
+./core/live_trading/models.py
+./core/live_trading/state.py
 ./core/mt5_connector.py
+./core/mt5_execution/__init__.py
+./core/mt5_execution/__pycache__/__init__.cpython-314.pyc
+./core/mt5_execution/__pycache__/account.cpython-314.pyc
+./core/mt5_execution/__pycache__/close_position.cpython-314.pyc
+./core/mt5_execution/__pycache__/config.cpython-314.pyc
+./core/mt5_execution/__pycache__/executor.cpython-314.pyc
+./core/mt5_execution/__pycache__/models.cpython-314.pyc
+./core/mt5_execution/__pycache__/orders.cpython-314.pyc
+./core/mt5_execution/__pycache__/positions.cpython-314.pyc
+./core/mt5_execution/__pycache__/price_levels.cpython-314.pyc
+./core/mt5_execution/__pycache__/service.cpython-314.pyc
+./core/mt5_execution/__pycache__/state.cpython-314.pyc
+./core/mt5_execution/__pycache__/symbols.cpython-314.pyc
 ./core/mt5_execution/account.py
 ./core/mt5_execution/close_position.py
 ./core/mt5_execution/config.py
@@ -486,44 +518,9 @@
 ./core/mt5_execution/service.py
 ./core/mt5_execution/state.py
 ./core/mt5_execution/symbols.py
-./core/mt5_execution/__init__.py
-./core/mt5_execution/__pycache__/account.cpython-314.pyc
-./core/mt5_execution/__pycache__/close_position.cpython-314.pyc
-./core/mt5_execution/__pycache__/config.cpython-314.pyc
-./core/mt5_execution/__pycache__/executor.cpython-314.pyc
-./core/mt5_execution/__pycache__/models.cpython-314.pyc
-./core/mt5_execution/__pycache__/orders.cpython-314.pyc
-./core/mt5_execution/__pycache__/positions.cpython-314.pyc
-./core/mt5_execution/__pycache__/price_levels.cpython-314.pyc
-./core/mt5_execution/__pycache__/service.cpython-314.pyc
-./core/mt5_execution/__pycache__/state.cpython-314.pyc
-./core/mt5_execution/__pycache__/symbols.cpython-314.pyc
-./core/mt5_execution/__pycache__/__init__.cpython-314.pyc
 ./core/position_manager.py
-./core/regime_detector/config.py
-./core/regime_detector/detector.py
-./core/regime_detector/exceptions.py
-./core/regime_detector/factory.py
-./core/regime_detector/indicators/adx.py
-./core/regime_detector/indicators/atr.py
-./core/regime_detector/indicators/choppiness.py
-./core/regime_detector/indicators/efficiency_ratio.py
-./core/regime_detector/indicators/ema.py
-./core/regime_detector/indicators/ema_slope.py
-./core/regime_detector/indicators/momentum.py
-./core/regime_detector/indicators/__pycache__/adx.cpython-314.pyc
-./core/regime_detector/indicators/__pycache__/atr.cpython-314.pyc
-./core/regime_detector/indicators/__pycache__/choppiness.cpython-314.pyc
-./core/regime_detector/indicators/__pycache__/efficiency_ratio.cpython-314.pyc
-./core/regime_detector/indicators/__pycache__/ema.cpython-314.pyc
-./core/regime_detector/indicators/__pycache__/ema_slope.cpython-314.pyc
-./core/regime_detector/indicators/__pycache__/momentum.cpython-314.pyc
-./core/regime_detector/models.py
-./core/regime_detector/signal_generator/models.py
-./core/regime_detector/signal_generator/state.py
-./core/regime_detector/snapshot.py
-./core/regime_detector/state.py
 ./core/regime_detector/__init__.py
+./core/regime_detector/__pycache__/__init__.cpython-314.pyc
 ./core/regime_detector/__pycache__/config.cpython-314.pyc
 ./core/regime_detector/__pycache__/detector.cpython-314.pyc
 ./core/regime_detector/__pycache__/exceptions.cpython-314.pyc
@@ -531,7 +528,37 @@
 ./core/regime_detector/__pycache__/models.cpython-314.pyc
 ./core/regime_detector/__pycache__/snapshot.cpython-314.pyc
 ./core/regime_detector/__pycache__/state.cpython-314.pyc
-./core/regime_detector/__pycache__/__init__.cpython-314.pyc
+./core/regime_detector/config.py
+./core/regime_detector/detector.py
+./core/regime_detector/exceptions.py
+./core/regime_detector/factory.py
+./core/regime_detector/indicators/__pycache__/adx.cpython-314.pyc
+./core/regime_detector/indicators/__pycache__/atr.cpython-314.pyc
+./core/regime_detector/indicators/__pycache__/choppiness.cpython-314.pyc
+./core/regime_detector/indicators/__pycache__/efficiency_ratio.cpython-314.pyc
+./core/regime_detector/indicators/__pycache__/ema.cpython-314.pyc
+./core/regime_detector/indicators/__pycache__/ema_slope.cpython-314.pyc
+./core/regime_detector/indicators/__pycache__/momentum.cpython-314.pyc
+./core/regime_detector/indicators/adx.py
+./core/regime_detector/indicators/atr.py
+./core/regime_detector/indicators/choppiness.py
+./core/regime_detector/indicators/efficiency_ratio.py
+./core/regime_detector/indicators/ema.py
+./core/regime_detector/indicators/ema_slope.py
+./core/regime_detector/indicators/momentum.py
+./core/regime_detector/models.py
+./core/regime_detector/signal_generator/models.py
+./core/regime_detector/signal_generator/state.py
+./core/regime_detector/snapshot.py
+./core/regime_detector/state.py
+./core/risk_manager/__init__.py
+./core/risk_manager/__pycache__/__init__.cpython-314.pyc
+./core/risk_manager/__pycache__/config.cpython-314.pyc
+./core/risk_manager/__pycache__/manager.cpython-314.pyc
+./core/risk_manager/__pycache__/models.cpython-314.pyc
+./core/risk_manager/__pycache__/position_sizer.cpython-314.pyc
+./core/risk_manager/__pycache__/rules.cpython-314.pyc
+./core/risk_manager/__pycache__/state.cpython-314.pyc
 ./core/risk_manager/config.py
 ./core/risk_manager/exceptions.py
 ./core/risk_manager/manager.py
@@ -539,40 +566,27 @@
 ./core/risk_manager/position_sizer.py
 ./core/risk_manager/rules.py
 ./core/risk_manager/state.py
-./core/risk_manager/__init__.py
-./core/risk_manager/__pycache__/config.cpython-314.pyc
-./core/risk_manager/__pycache__/manager.cpython-314.pyc
-./core/risk_manager/__pycache__/models.cpython-314.pyc
-./core/risk_manager/__pycache__/position_sizer.cpython-314.pyc
-./core/risk_manager/__pycache__/rules.cpython-314.pyc
-./core/risk_manager/__pycache__/state.cpython-314.pyc
-./core/risk_manager/__pycache__/__init__.cpython-314.pyc
+./core/signal_generator/__init__.py
+./core/signal_generator/__pycache__/__init__.cpython-314.pyc
+./core/signal_generator/__pycache__/config.cpython-314.pyc
+./core/signal_generator/__pycache__/detector.cpython-314.pyc
+./core/signal_generator/__pycache__/models.cpython-314.pyc
+./core/signal_generator/__pycache__/rules.cpython-314.pyc
+./core/signal_generator/__pycache__/state.cpython-314.pyc
 ./core/signal_generator/config.py
 ./core/signal_generator/detector.py
 ./core/signal_generator/exceptions.py
 ./core/signal_generator/models.py
 ./core/signal_generator/rules.py
 ./core/signal_generator/state.py
-./core/signal_generator/__init__.py
-./core/signal_generator/__pycache__/config.cpython-314.pyc
-./core/signal_generator/__pycache__/detector.cpython-314.pyc
-./core/signal_generator/__pycache__/models.cpython-314.pyc
-./core/signal_generator/__pycache__/rules.cpython-314.pyc
-./core/signal_generator/__pycache__/state.cpython-314.pyc
-./core/signal_generator/__pycache__/__init__.cpython-314.pyc
-./core/trading_pipeline/config.py
-./core/trading_pipeline/models.py
-./core/trading_pipeline/pipeline.py
 ./core/trading_pipeline/__init__.py
+./core/trading_pipeline/__pycache__/__init__.cpython-314.pyc
 ./core/trading_pipeline/__pycache__/config.cpython-314.pyc
 ./core/trading_pipeline/__pycache__/models.cpython-314.pyc
 ./core/trading_pipeline/__pycache__/pipeline.cpython-314.pyc
-./core/trading_pipeline/__pycache__/__init__.cpython-314.pyc
-./core/__init__.py
-./core/__pycache__/indicators.cpython-314.pyc
-./core/__pycache__/mt5_connector.cpython-314.pyc
-./core/__pycache__/position_manager.cpython-314.pyc
-./core/__pycache__/__init__.cpython-314.pyc
+./core/trading_pipeline/config.py
+./core/trading_pipeline/models.py
+./core/trading_pipeline/pipeline.py
 ./docs/00_Project/Architecture_Overview.md
 ./docs/00_Project/Coding_Standards.md
 ./docs/00_Project/Project_Roadmap.md
@@ -581,6 +595,16 @@
 ./docs/01_Market_Regime/Design/Market_Regime_Architecture.md
 ./docs/01_Market_Regime/Questionnaire/Market_Regime_Questionnaire.md
 ./docs/01_Market_Regime/Research/60 question by (claude)/Claude_Research_Section_4.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 1 Objectives.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 10 Module Architecture.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 11 Testing Strategy.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 2 Regime Definitions.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 3 Input Data.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 5 Threshold Selection.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 6 State Transition Logic.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 7 Confidence Calculation.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 8 Output Specification.txt
+./docs/01_Market_Regime/Research/60 question by (claude)/Section 9 Logging and Observability.txt
 ./docs/01_Market_Regime/Research/60 question by (claude)/efficiency_indicator_spectrum.png
 ./docs/01_Market_Regime/Research/60 question by (claude)/efficiency_indicator_spectrum.svg
 ./docs/01_Market_Regime/Research/60 question by (claude)/feature_adaptation_framework.png
@@ -595,16 +619,6 @@
 ./docs/01_Market_Regime/Research/60 question by (claude)/regime_taxonomy_map.png
 ./docs/01_Market_Regime/Research/60 question by (claude)/regime_timeframe_tiers.png
 ./docs/01_Market_Regime/Research/60 question by (claude)/regime_timeframe_tiers.svg
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 1 Objectives.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 10 Module Architecture.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 11 Testing Strategy.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 2 Regime Definitions.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 3 Input Data.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 5 Threshold Selection.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 6 State Transition Logic.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 7 Confidence Calculation.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 8 Output Specification.txt
-./docs/01_Market_Regime/Research/60 question by (claude)/Section 9 Logging and Observability.txt
 ./docs/01_Market_Regime/Research/Academic_Notes.md
 ./docs/01_Market_Regime/Research/Claude_Technical_Spec_Response.md
 ./docs/01_Market_Regime/Research/Manus_Research_Report.md
@@ -615,8 +629,6 @@
 ./docs/01_Market_Regime/Specification/Market_Regime_Specification_v1.md
 ./docs/ARCHITECTURE.md
 ./docs/CHANGELOG.md
-./docs/legacy/READMEv3.md
-./docs/legacy/Version 3.0 Core.md
 ./docs/Market_Regime_Detection/Market_Regime_Detection_Spec_v1.0.md
 ./docs/Market_Regime_Detection/Market_Regime_Detection_Spec_v1.1.md
 ./docs/Market_Regime_Detection/Patch_List.md
@@ -626,16 +638,18 @@
 ./docs/ROADMAP.md
 ./docs/VERSION_3_2_ARCHITECTURE.md
 ./docs/VERSION_HISTORY.md
+./docs/legacy/READMEv3.md
+./docs/legacy/Version 3.0 Core.md
 ./logs/.gitkeep
 ./logs/signal_bot.log
 ./main.py
 ./market_data/bar_builder.py
 ./market_data/mt5_feed.py
 ./market_data/poller.py
-./news/news_filter.py
 ./news/__init__.py
-./news/__pycache__/news_filter.cpython-314.pyc
 ./news/__pycache__/__init__.cpython-314.pyc
+./news/__pycache__/news_filter.cpython-314.pyc
+./news/news_filter.py
 ./output/.gitkeep
 ./output/daily_state.json
 ./output/last_candle_state.json
@@ -643,20 +657,37 @@
 ./output/trail_state.json
 ./project_files.txt
 ./project_tree.txt
-./README.md
 ./requirements.txt
-./risk/risk_manager.py
-./risk/trail_manager.py
 ./risk/__init__.py
+./risk/__pycache__/__init__.cpython-314.pyc
 ./risk/__pycache__/risk_manager.cpython-314.pyc
 ./risk/__pycache__/trail_manager.cpython-314.pyc
-./risk/__pycache__/__init__.cpython-314.pyc
-./signals/signal_engine.py
+./risk/risk_manager.py
+./risk/trail_manager.py
 ./signals/__init__.py
-./signals/__pycache__/signal_engine.cpython-314.pyc
 ./signals/__pycache__/__init__.cpython-314.pyc
-./tests/test_backtesting.py
+./signals/__pycache__/signal_engine.cpython-314.pyc
+./signals/signal_engine.py
+./tests/__pycache__/test_backtest_runner.cpython-314.pyc
+./tests/__pycache__/test_backtesting.cpython-314.pyc
+./tests/__pycache__/test_close_position.cpython-314.pyc
+./tests/__pycache__/test_detector.cpython-314.pyc
+./tests/__pycache__/test_execution_service.cpython-314.pyc
+./tests/__pycache__/test_history_loader.cpython-314.pyc
+./tests/__pycache__/test_live_trading_engine.cpython-314.pyc
+./tests/__pycache__/test_mt5_account.cpython-314.pyc
+./tests/__pycache__/test_mt5_connection.cpython-314.pyc
+./tests/__pycache__/test_mt5_positions.cpython-314.pyc
+./tests/__pycache__/test_mt5_request.cpython-314.pyc
+./tests/__pycache__/test_mt5_symbol.cpython-314.pyc
+./tests/__pycache__/test_order_execution.cpython-314.pyc
+./tests/__pycache__/test_order_validation.cpython-314.pyc
+./tests/__pycache__/test_regime_detector.cpython-314.pyc
+./tests/__pycache__/test_risk_manager.cpython-314.pyc
+./tests/__pycache__/test_signal_generator.cpython-314.pyc
+./tests/__pycache__/test_trading_pipeline.cpython-314.pyc
 ./tests/test_backtest_runner.py
+./tests/test_backtesting.py
 ./tests/test_close_position.py
 ./tests/test_demo_buy.py
 ./tests/test_detector.py
@@ -677,30 +708,11 @@
 ./tests/test_risk_manager.py
 ./tests/test_signal_generator.py
 ./tests/test_trading_pipeline.py
-./tests/__pycache__/test_backtesting.cpython-314.pyc
-./tests/__pycache__/test_backtest_runner.cpython-314.pyc
-./tests/__pycache__/test_close_position.cpython-314.pyc
-./tests/__pycache__/test_detector.cpython-314.pyc
-./tests/__pycache__/test_execution_service.cpython-314.pyc
-./tests/__pycache__/test_history_loader.cpython-314.pyc
-./tests/__pycache__/test_live_trading_engine.cpython-314.pyc
-./tests/__pycache__/test_mt5_account.cpython-314.pyc
-./tests/__pycache__/test_mt5_connection.cpython-314.pyc
-./tests/__pycache__/test_mt5_positions.cpython-314.pyc
-./tests/__pycache__/test_mt5_request.cpython-314.pyc
-./tests/__pycache__/test_mt5_symbol.cpython-314.pyc
-./tests/__pycache__/test_order_execution.cpython-314.pyc
-./tests/__pycache__/test_order_validation.cpython-314.pyc
-./tests/__pycache__/test_regime_detector.cpython-314.pyc
-./tests/__pycache__/test_risk_manager.cpython-314.pyc
-./tests/__pycache__/test_signal_generator.cpython-314.pyc
-./tests/__pycache__/test_trading_pipeline.cpython-314.pyc
-./utils/candle_guard.py
-./utils/logger.py
-./utils/telegram_alert.py
 ./utils/__init__.py
+./utils/__pycache__/__init__.cpython-314.pyc
 ./utils/__pycache__/candle_guard.cpython-314.pyc
 ./utils/__pycache__/logger.cpython-314.pyc
 ./utils/__pycache__/telegram_alert.cpython-314.pyc
-./utils/__pycache__/__init__.cpython-314.pyc
-./__pycache__/config.cpython-314.pyc
+./utils/candle_guard.py
+./utils/logger.py
+./utils/telegram_alert.py

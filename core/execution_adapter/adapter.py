@@ -18,6 +18,7 @@ from .config import (
 )
 
 from .models import (
+    ExecutionPlan,
     ExecutionRequest,
 )
 
@@ -43,24 +44,28 @@ class ExecutionAdapter:
         """
 
         trade_plan = pipeline_result.trade_plan
+        signal = pipeline_result.signal
+        direction = getattr(signal, "direction", None)
+        if direction is None:
+            direction = getattr(signal, "signal", None)
 
         side = (
             OrderSide.BUY
-            if signal.action is TradingAction.BUY
+            if direction.name == "BUY"
             else OrderSide.SELL
         )
 
-        order_request = OrderRequest(
+        execution_plan = ExecutionPlan(
             symbol="XAUUSD",
             side=side,
             volume=trade_plan.position_size,
-            entry_price=0.0,
-            stop_loss=0.0,
-            take_profit=0.0,
+            account_balance=0.0,
+            stop_loss_distance=trade_plan.stop_loss,
+            risk_reward_ratio=trade_plan.risk_reward_ratio,
             comment=self.config.default_comment,
         )
 
         return ExecutionRequest(
             pipeline_result=pipeline_result,
-            order_request=order_request,
+            execution_plan=execution_plan,
         )

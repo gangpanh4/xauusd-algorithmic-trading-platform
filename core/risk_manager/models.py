@@ -5,7 +5,7 @@ Core data models for the Risk Management module.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -13,39 +13,40 @@ from core.signal_generator.models import TradingSignal
 
 
 class RiskDecision(Enum):
-    """
-    Final decision produced by the Risk Manager.
-    """
     APPROVE = "APPROVE"
     REJECT = "REJECT"
     SKIP = "SKIP"
 
 
-@dataclass(frozen=True)
+@dataclass
 class TradePlan:
-    timestamp: datetime
+    # Optional for backward compatibility
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    signal: TradingSignal | None = None
 
-    signal: TradingSignal
-
-    decision: RiskDecision
+    decision: RiskDecision = RiskDecision.SKIP
 
     # Position
-    position_size: float
+    position_size: float = 0.0
 
-    # Execution prices
-    entry_price: float
+    # Prices
+    entry_price: float = 0.0
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
 
-    stop_loss_price: float
+    # Risk
+    risk_percent: float = 0.0
+    reward_percent: float = 0.0
+    risk_reward_ratio: float = 0.0
 
-    take_profit_price: float
-
-    # Risk information
-    risk_percent: float
-
-    reward_percent: float
-
-    risk_reward_ratio: float
-
-    reason: str
+    reason: str = ""
 
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def stop_loss_price(self) -> float:
+        return self.stop_loss
+
+    @property
+    def take_profit_price(self) -> float:
+        return self.take_profit
