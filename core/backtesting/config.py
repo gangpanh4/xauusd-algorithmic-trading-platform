@@ -4,7 +4,11 @@ Configuration for the Backtesting Engine.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from core.trading_pipeline.config import (
+    TradingPipelineConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -12,6 +16,10 @@ class BacktestConfig:
     """
     Configuration options for the Backtesting Engine.
     """
+
+    pipeline: TradingPipelineConfig = field(
+        default_factory=TradingPipelineConfig,
+    )
 
     initial_balance: float = 10_000.0
 
