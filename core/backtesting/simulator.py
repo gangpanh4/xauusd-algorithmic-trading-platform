@@ -4,15 +4,20 @@ Trade Simulator.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
+from .models import (
+    BacktestTrade,
+    ExitReason,
+    TradeOutcome,
+)
 from core.regime_detector.models import MarketBar
 from core.risk_manager.models import TradePlan
-
-from .models import BacktestTrade
 
 
 class TradeSimulator:
     """
-    Simulates historical trade execution.
+    Historical trade simulator.
     """
 
     def simulate(
@@ -21,40 +26,39 @@ class TradeSimulator:
         entry_bar: MarketBar,
         future_bars: list[MarketBar],
     ) -> BacktestTrade:
-        """
-        Execute a historical trade candle-by-candle.
-
-        Current implementation:
-
-        - Opens on entry_bar.close
-        - Checks every future candle
-        - Stops at Stop Loss
-        - Stops at Take Profit
-        - Closes on final candle if neither is hit
-        """
 
         entry_price = entry_bar.close
 
-        exit_price = future_bars[-1].close if future_bars else entry_price
-        exit_bar = future_bars[-1] if future_bars else entry_bar
-        exit_reason = "END_OF_DATA"
+        direction = getattr(
+            trade_plan.signal,
+            "direction",
+            getattr(trade_plan.signal, "signal", None),
+        )
 
-        is_buy = trade_plan.direction.upper() == "BUY"
+        direction = direction.name if direction else "BUY"
 
-        for bar in future_bars:
+        is_buy = direction == "BUY"
+
+        exit_price = entry_price
+        exit_bar = entry_bar
+        exit_reason = ExitReason.END_OF_DATA
+
+        holding_bars = 0
+
+        for holding_bars, bar in enumerate(future_bars, start=1):
 
             if is_buy:
 
                 if bar.low <= trade_plan.stop_loss:
                     exit_price = trade_plan.stop_loss
                     exit_bar = bar
-                    exit_reason = "STOP_LOSS"
+                    exit_reason = ExitReason.STOP_LOSS
                     break
 
                 if bar.high >= trade_plan.take_profit:
                     exit_price = trade_plan.take_profit
                     exit_bar = bar
-                    exit_reason = "TAKE_PROFIT"
+                    exit_reason = ExitReason.TAKE_PROFIT
                     break
 
             else:
@@ -62,27 +66,56 @@ class TradeSimulator:
                 if bar.high >= trade_plan.stop_loss:
                     exit_price = trade_plan.stop_loss
                     exit_bar = bar
-                    exit_reason = "STOP_LOSS"
+                    exit_reason = ExitReason.STOP_LOSS
                     break
 
                 if bar.low <= trade_plan.take_profit:
                     exit_price = trade_plan.take_profit
                     exit_bar = bar
-                    exit_reason = "TAKE_PROFIT"
+                    exit_reason = ExitReason.TAKE_PROFIT
                     break
 
-        pnl = (
+            exit_price = bar.close
+            exit_bar = bar
+
+        gross_profit = (
             exit_price - entry_price
             if is_buy
             else entry_price - exit_price
-        )
+        ) * trade_plan.position_size
+
+        commission = 0.0
+        spread_cost = 0.0
+
+        net_profit = gross_profit - commission - spread_cost
+
+        if net_profit > 0:
+            outcome = TradeOutcome.WIN
+        elif net_profit < 0:
+            outcome = TradeOutcome.LOSS
+        else:
+            outcome = TradeOutcome.BREAKEVEN
+
+        risk = abs(entry_price - trade_plan.stop_loss)
+
+        reward = abs(exit_price - entry_price)
+
+        rr = reward / risk if risk else 0.0
 
         return BacktestTrade(
-            trade_plan=trade_plan,
-            entry_bar=entry_bar,
-            exit_bar=exit_bar,
+            entry_time=entry_bar.timestamp,
+            exit_time=exit_bar.timestamp,
+            direction=direction,
             entry_price=entry_price,
             exit_price=exit_price,
-            profit=pnl,
+            position_size=trade_plan.position_size,
+            spread_cost=spread_cost,
+            commission=commission,
+            gross_profit=gross_profit,
+            net_profit=net_profit,
+            outcome=outcome,
             exit_reason=exit_reason,
+            holding_bars=holding_bars,
+            holding_time=timedelta(minutes=holding_bars),
+            risk_reward=rr,
         )

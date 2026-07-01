@@ -43,10 +43,13 @@ class RiskManager:
         """
         Convert a trading signal into a trade plan.
         """
+        direction = getattr(
+            signal,
+            "direction",
+            getattr(signal, "signal", SignalType.HOLD),
+        )
 
-
-        if signal.signal == SignalType.HOLD:
-
+        if direction == SignalType.HOLD:
             trade_plan = TradePlan(
                 timestamp=datetime.now(UTC),
                 signal=signal,
@@ -64,15 +67,44 @@ class RiskManager:
 
             return trade_plan
 
+        # --------------------------------------------------
+        # Balance source
+        # --------------------------------------------------
+        working_balance = account_balance
+        if self.config.use_virtual_balance:
+            working_balance = self.config.virtual_balance
 
-        position_size = PositionSizer.calculate_position_size(
-            account_balance=account_balance,
-            risk_percent=self.config.max_risk_per_trade,
-            stop_loss_distance=stop_loss_distance,
-            pip_value=pip_value,
+        # --------------------------------------------------
+        # Lot sizing
+        # --------------------------------------------------
+        if self.config.lot_sizing_mode.name == "FIXED":
+            position_size = self.config.fixed_lot_size
+        elif self.config.lot_sizing_mode.name == "DYNAMIC":
+            # Scale from a 100 USD reference.
+            multiplier = max(1.0, working_balance / 100.0)
+            position_size = round(
+                self.config.fixed_lot_size * multiplier,
+                2,
+            )
+        else:
+            position_size = PositionSizer.calculate_position_size(
+                account_balance=working_balance,
+                risk_percent=self.config.risk_percent / 100.0,
+                stop_loss_distance=stop_loss_distance,
+                pip_value=pip_value,
+            )
+
+        # Safety limits
+        position_size = max(
+            self.config.minimum_position_size,
+            position_size,
+        )
+        position_size = min(
+            self.config.maximum_position_size,
+            position_size,
         )
 
-        risk_reward_ratio = 2.0
+        risk_reward_ratio = self.config.minimum_risk_reward_ratio
 
         approved, reason = approve_trade(
             position_size=position_size,
@@ -93,11 +125,8 @@ class RiskManager:
             position_size=position_size,
             stop_loss=stop_loss_distance,
             take_profit=stop_loss_distance * risk_reward_ratio,
-            risk_percent=self.config.max_risk_per_trade,
-            reward_percent=(
-                self.config.max_risk_per_trade
-                * risk_reward_ratio
-            ),
+            risk_percent=self.config.risk_percent,
+            reward_percent=self.config.risk_percent * risk_reward_ratio,
             risk_reward_ratio=risk_reward_ratio,
             reason=reason,
         )
