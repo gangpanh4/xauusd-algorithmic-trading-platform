@@ -1,22 +1,14 @@
 from datetime import datetime, UTC
 
-from core.regime_detector.models import (
-    MarketBar,
-)
+from core.trading_pipeline.pipeline import TradingPipeline
+from core.trading_pipeline.config import TradingPipelineConfig
 
-from core.trading_pipeline.config import (
-    TradingPipelineConfig,
-)
-
-from core.trading_pipeline.pipeline import (
-    TradingPipeline,
-)
+from core.regime_detector.models import MarketBar
 
 
 def test_trading_pipeline():
 
     config = TradingPipelineConfig()
-
     pipeline = TradingPipeline(config)
 
     bar = MarketBar(
@@ -35,25 +27,27 @@ def test_trading_pipeline():
         pip_value=1.0,
     )
 
-    print()
-    print("=" * 60)
-    print("TRADING PIPELINE")
-    print("=" * 60)
+    assert result is not None
+    assert result.regime is not None
+    assert result.signal is not None
+    assert result.trade_plan is not None
 
-    print(
-        f"Regime   : {result.regime.primary_regime.value}"
-    )
+    plan = result.trade_plan
 
-    print(
-        f"Signal   : {result.signal.signal.value}"
-    )
+    assert hasattr(plan, "entry_price")
 
-    print(
-        f"Decision : {result.trade_plan.decision.value}"
-    )
+    # ---- CONTRACT-AWARE ASSERTIONS ----
 
-    print("=" * 60)
+    if plan.decision.value == "APPROVE":
 
+        assert plan.entry_price == bar.close
+        assert plan.stop_loss != 0
+        assert plan.take_profit != 0
+        assert plan.position_size > 0
 
-if __name__ == "__main__":
-    test_trading_pipeline()
+    else:
+
+        assert plan.entry_price == 0.0
+        assert plan.position_size == 0.0
+        assert plan.stop_loss == 0.0
+        assert plan.take_profit == 0.0

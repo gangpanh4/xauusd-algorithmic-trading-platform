@@ -4,8 +4,6 @@ Trade Simulator.
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from .models import (
     BacktestTrade,
     ExitReason,
@@ -17,7 +15,7 @@ from core.risk_manager.models import TradePlan
 
 class TradeSimulator:
     """
-    Historical trade simulator.
+    Executes a TradePlan against historical market data.
     """
 
     def simulate(
@@ -27,7 +25,8 @@ class TradeSimulator:
         future_bars: list[MarketBar],
     ) -> BacktestTrade:
 
-        entry_price = entry_bar.close
+        entry_price = trade_plan.entry_price
+        entry_time = entry_bar.timestamp
 
         direction = getattr(
             trade_plan.signal,
@@ -36,16 +35,16 @@ class TradeSimulator:
         )
 
         direction = direction.name if direction else "BUY"
-
         is_buy = direction == "BUY"
 
-        exit_price = entry_price
-        exit_bar = entry_bar
+        exit_price = None
+        exit_bar = None
         exit_reason = ExitReason.END_OF_DATA
-
         holding_bars = 0
 
-        for holding_bars, bar in enumerate(future_bars, start=1):
+        for i, bar in enumerate(future_bars, start=1):
+
+            holding_bars = i
 
             if is_buy:
 
@@ -75,36 +74,39 @@ class TradeSimulator:
                     exit_reason = ExitReason.TAKE_PROFIT
                     break
 
-            exit_price = bar.close
-            exit_bar = bar
+        # End of data fallback
+        if exit_price is None:
+            exit_bar = future_bars[-1] if future_bars else entry_bar
+            exit_price = exit_bar.close
 
-        gross_profit = (
-            exit_price - entry_price
-            if is_buy
-            else entry_price - exit_price
-        ) * trade_plan.position_size
+        exit_time = exit_bar.timestamp
+
+        # Profit calculation
+        if is_buy:
+            gross_profit = (exit_price - entry_price) * trade_plan.position_size
+        else:
+            gross_profit = (entry_price - exit_price) * trade_plan.position_size
 
         commission = 0.0
         spread_cost = 0.0
-
         net_profit = gross_profit - commission - spread_cost
 
-        if net_profit > 0:
-            outcome = TradeOutcome.WIN
-        elif net_profit < 0:
-            outcome = TradeOutcome.LOSS
-        else:
-            outcome = TradeOutcome.BREAKEVEN
+        outcome = (
+            TradeOutcome.WIN
+            if net_profit > 0
+            else TradeOutcome.LOSS
+            if net_profit < 0
+            else TradeOutcome.BREAKEVEN
+        )
 
         risk = abs(entry_price - trade_plan.stop_loss)
-
         reward = abs(exit_price - entry_price)
 
-        rr = reward / risk if risk else 0.0
+        risk_reward = reward / risk if risk else 0.0
 
         return BacktestTrade(
-            entry_time=entry_bar.timestamp,
-            exit_time=exit_bar.timestamp,
+            entry_time=entry_time,
+            exit_time=exit_time,
             direction=direction,
             entry_price=entry_price,
             exit_price=exit_price,
@@ -116,6 +118,6 @@ class TradeSimulator:
             outcome=outcome,
             exit_reason=exit_reason,
             holding_bars=holding_bars,
-            holding_time=timedelta(minutes=holding_bars),
-            risk_reward=rr,
+            holding_time=exit_time - entry_time,
+            risk_reward=risk_reward,
         )

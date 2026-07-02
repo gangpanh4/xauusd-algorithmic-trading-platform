@@ -1,16 +1,9 @@
-from core.live_trading.config import (
-    LiveTradingConfig,
-)
+from datetime import datetime, UTC
 
-from core.live_trading.engine import (
-    LiveTradingEngine,
-)
+from core.live_trading.engine import LiveTradingEngine
+from core.live_trading.config import LiveTradingConfig
 
-from core.regime_detector.models import (
-    MarketBar,
-)
-
-from datetime import UTC, datetime
+from core.regime_detector.models import MarketBar
 
 
 def test_live_trading_engine():
@@ -37,17 +30,26 @@ def test_live_trading_engine():
         pip_value=1.0,
     )
 
-    print()
+    assert result is not None
+    assert result.pipeline_result is not None
 
-    print("=" * 60)
-    print("LIVE TRADING ENGINE")
-    print("=" * 60)
-    print(f"Executed : {result.trade_executed}")
-    print(f"Bars      : {engine.state.processed_bars}")
-    print("=" * 60)
+    trade_plan = result.pipeline_result.trade_plan
 
-    engine.stop()
+    assert trade_plan is not None
+    assert hasattr(trade_plan, "entry_price")
 
+    # ---- CONTRACT AWARE ASSERTIONS ----
 
-if __name__ == "__main__":
-    test_live_trading_engine()
+    if trade_plan.decision.value == "APPROVE":
+
+        assert trade_plan.entry_price == bar.close
+        assert trade_plan.stop_loss != 0
+        assert trade_plan.take_profit != 0
+        assert trade_plan.position_size > 0
+
+    else:
+
+        assert trade_plan.entry_price == 0.0
+        assert trade_plan.stop_loss == 0.0
+        assert trade_plan.take_profit == 0.0
+        assert trade_plan.position_size == 0.0

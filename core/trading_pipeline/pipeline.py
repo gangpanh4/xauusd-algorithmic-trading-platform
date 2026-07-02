@@ -26,7 +26,16 @@ from .models import PipelineResult
 
 class TradingPipeline:
     """
-    Coordinates the trading decision workflow.
+    Coordinates the complete trading workflow.
+
+    Responsibilities:
+        1. Determine market regime.
+        2. Generate a trading signal.
+        3. Build a TradePlan through the Risk Manager.
+        4. Return the complete PipelineResult.
+
+    The TradingPipeline owns the market entry price because it
+    processes the current completed MarketBar.
     """
 
     def __init__(
@@ -57,8 +66,7 @@ class TradingPipeline:
         pip_value: float,
     ) -> PipelineResult:
         """
-        Process one completed market bar through the entire
-        trading pipeline.
+        Process one completed market bar through the trading pipeline.
         """
 
         regime = self.regime_detector.process_bar(
@@ -71,10 +79,11 @@ class TradingPipeline:
 
         trade_plan = self.risk_manager.evaluate_signal(
             signal=signal,
+            entry_price=bar.close,
             account_balance=account_balance,
             stop_loss_distance=stop_loss_distance,
             pip_value=pip_value,
-            )
+        )
 
         return PipelineResult(
             regime=regime,
