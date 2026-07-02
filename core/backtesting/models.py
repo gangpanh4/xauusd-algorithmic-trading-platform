@@ -99,3 +99,4 @@ class BacktestResult:
     consecutive_losses: int = 0
 
     trades: list[BacktestTrade] = field(default_factory=list)
+

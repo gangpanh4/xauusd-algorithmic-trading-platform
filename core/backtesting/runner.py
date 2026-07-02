@@ -4,15 +4,20 @@ Historical Backtest Runner.
 
 from __future__ import annotations
 
-import MetaTrader5 as mt5
-
-from core.trading_pipeline.pipeline import TradingPipeline
+from pathlib import Path
 
 from .config import BacktestConfig
 from .engine import BacktestingEngine
+from .exporter import BacktestExporter
 from .history_loader import HistoryLoader
 from .models import BacktestResult
+from .reporter import (
+    print_report,
+    save_report,
+)
 from .state import BacktestState
+from .statistics import StatisticsCalculator
+from dataclasses import asdict
 
 
 class BacktestRunner:
@@ -31,13 +36,15 @@ class BacktestRunner:
 
         self.loader = HistoryLoader()
 
-        self.pipeline = TradingPipeline(
-            self.config.pipeline,
+        self.engine = BacktestingEngine(
+            config,
         )
 
-        self.engine = BacktestingEngine(
-            self.config,
+        self.exporter = BacktestExporter(
+            config.output_directory,
         )
+
+        self.statistics = StatisticsCalculator()
 
     def run(
         self,
@@ -70,31 +77,44 @@ class BacktestRunner:
 
         return result
 
-    def print_summary(
+    def generate_reports(
         self,
         result: BacktestResult,
     ) -> None:
+        """
+        Generate all Sprint 1 reports.
+        """
 
-        print()
-        print("=" * 70)
-        print("BACKTEST SUMMARY")
-        print("=" * 70)
+        output_dir = Path(
+            self.config.output_directory,
+        )
 
-        print(f"Trades           : {result.total_trades}")
-        print(f"Wins             : {result.winning_trades}")
-        print(f"Losses           : {result.losing_trades}")
-        print(f"Breakeven        : {result.breakeven_trades}")
+        output_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
-        print()
+        print_report(result)
 
-        print(f"Win Rate         : {result.win_rate:.2f}%")
-        print(f"Net Profit       : {result.net_profit:.2f}")
-        print(f"Gross Profit     : {result.gross_profit:.2f}")
-        print(f"Gross Loss       : {result.gross_loss:.2f}")
-        print(f"Profit Factor    : {result.profit_factor:.2f}")
-        print(f"Max Drawdown     : {result.max_drawdown:.2f}")
+        save_report(
+            result,
+            output_dir / "backtest_report.txt",
+        )
 
-        print("=" * 70)
+        self.exporter.export_summary(result)
+
+        self.exporter.export_trade_log(result)
+
+        self.exporter.export_equity_curve(
+            result,
+            self.config.initial_balance,
+        )
+
+        stats = self.statistics.calculate(result)
+
+        self.exporter.export_statistics(
+            asdict(stats),
+        )
 
     def print_trade_log(
         self,
@@ -106,10 +126,13 @@ class BacktestRunner:
         print("TRADE LOG")
         print("=" * 70)
 
-        for i, trade in enumerate(result.trades, start=1):
+        for index, trade in enumerate(
+            result.trades,
+            start=1,
+        ):
 
             print(
-                f"{i:03d} | "
+                f"{index:03d} | "
                 f"{trade.direction:<4} | "
                 f"{trade.entry_price:.2f} -> "
                 f"{trade.exit_price:.2f} | "
