@@ -4,8 +4,11 @@ State management for the Signal Generation module.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, UTC
+
+from core.regime_detector.models import RegimeLabel
 
 from .models import (
     TradingSignal,
@@ -33,6 +36,25 @@ class SignalGeneratorState:
 
     processed_bar_count: int = 0
 
+    last_regime: RegimeLabel | None = None
+
+    # -------------------------------------------------
+    # Experiment 002A
+    # Regime Intelligence Statistics
+    # -------------------------------------------------
+
+    trend_scores: Counter = field(default_factory=Counter)
+
+    momentum_scores: Counter = field(default_factory=Counter)
+
+    volatility_scores: Counter = field(default_factory=Counter)
+
+    ema_scores: Counter = field(default_factory=Counter)
+
+    choppiness_scores: Counter = field(default_factory=Counter)
+
+    total_scores: Counter = field(default_factory=Counter)
+
     def reset(self) -> None:
         """
         Reset the signal generator to its initial state.
@@ -51,3 +73,5 @@ class SignalGeneratorState:
         self.consecutive_hold_count = 0
 
         self.processed_bar_count = 0
+
+        self.last_regime = None

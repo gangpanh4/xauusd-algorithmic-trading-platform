@@ -16,6 +16,10 @@ from core.signal_generator.detector import (
     SignalGenerator,
 )
 
+from core.intelligence.edge.opportunity_ranker import (
+    OpportunityRanker,
+)
+
 from core.risk_manager.manager import (
     RiskManager,
 )
@@ -49,8 +53,11 @@ class TradingPipeline:
             config.regime_detector,
         )
 
+        self.opportunity_ranker = OpportunityRanker()
+
         self.signal_generator = SignalGenerator(
             config.signal_generator,
+            self.opportunity_ranker,
         )
 
         self.risk_manager = RiskManager(
@@ -73,9 +80,26 @@ class TradingPipeline:
             bar,
         )
 
+        # Temporary debug instrumentation
+        count = self.regime_detector.state.processed_bar_count
+
+        if count % 5000 == 0:
+            print("\n========== REGIME DEBUG ==========")
+            print(f"Processed Bars : {count}")
+            print(f"Primary Regime : {regime.primary_regime}")
+            print(f"Confidence     : {regime.confidence}")
+            print("==================================")
+
         signal = self.signal_generator.generate_signal(
             regime,
         )
+
+        if regime.confidence >= 0.90:
+            print("\n========== SIGNAL DEBUG ==========")
+            print(f"Regime      : {regime.primary_regime}")
+            print(f"Confidence  : {regime.confidence}")
+            print(f"Signal      : {signal.signal}")
+            print("==================================")
 
         trade_plan = self.risk_manager.evaluate_signal(
             signal=signal,
@@ -84,6 +108,11 @@ class TradingPipeline:
             stop_loss_distance=stop_loss_distance,
             pip_value=pip_value,
         )
+
+        if regime.confidence >= 0.90:
+            print(f"Risk Decision : {trade_plan.decision}")
+            print(f"Reason        : {trade_plan.reason}")
+            print("==================================")
 
         return PipelineResult(
             regime=regime,

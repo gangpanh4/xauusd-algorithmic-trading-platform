@@ -4,20 +4,20 @@ Historical Backtest Runner.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 
 from .config import BacktestConfig
 from .engine import BacktestingEngine
 from .exporter import BacktestExporter
-from .history_loader import HistoryLoader
 from .models import BacktestResult
+from .multi_timeframe_loader import MultiTimeframeLoader
 from .reporter import (
     print_report,
     save_report,
 )
 from .state import BacktestState
 from .statistics import StatisticsCalculator
-from dataclasses import asdict
 
 
 class BacktestRunner:
@@ -34,7 +34,7 @@ class BacktestRunner:
 
         self.state = BacktestState()
 
-        self.loader = HistoryLoader()
+        self.loader = MultiTimeframeLoader()
 
         self.engine = BacktestingEngine(
             config,
@@ -58,21 +58,24 @@ class BacktestRunner:
 
         self.state.reset()
 
-        history = self.loader.load_history(
+        context = self.loader.load(
             symbol=symbol,
-            timeframe=timeframe,
             bars=bars,
         )
 
-        if not history:
+        if not context.m15_bars:
             raise RuntimeError(
                 "No historical data returned."
             )
 
-        result = self.engine.run(history)
+        result = self.engine.run(context)
 
-        self.state.processed_bar_count = len(history)
-        self.state.executed_trade_count = result.total_trades
+        self.state.processed_bar_count = len(
+            context.m15_bars
+        )
+        self.state.executed_trade_count = (
+            result.total_trades
+        )
         self.state.completed = True
 
         return result

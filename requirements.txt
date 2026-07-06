@@ -1,18 +1,20 @@
-# XAUUSD Signal Bot — Python dependencies
-# Install with: pip install -r requirements.txt
+# ==========================================================
+# XAUUSD Algorithmic Trading Platform v1.0
+# Python Requirements
+# ==========================================================
 
-# Core
-pandas>=2.0.0
+# Numerical Computing
 numpy>=1.24.0
+pandas>=2.0.0
 
-# MetaTrader 5 (Windows only; skip on Linux/Mac for demo mode)
-# MetaTrader5>=5.0.45
+# MetaTrader 5
+MetaTrader5>=5.0.45
 
-# HTTP (news filter + Telegram)
+# HTTP
 requests>=2.31.0
 
-# Optional: schedule for cron-style looping
-schedule>=1.2.0
+# Testing
+pytest>=9.1.1
 
-# Optional: rich terminal output
-# rich>=13.0.0
+# Scheduling
+schedule>=1.2.0

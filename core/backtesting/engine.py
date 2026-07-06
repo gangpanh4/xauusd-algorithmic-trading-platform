@@ -15,6 +15,9 @@ from core.risk_manager.models import (
 from core.trading_pipeline.config import (
     TradingPipelineConfig,
 )
+from core.trading_pipeline.market_context import (
+    MarketContext,
+)
 from core.trading_pipeline.models import (
     PipelineResult,
 )
@@ -55,7 +58,7 @@ class BacktestingEngine:
 
     def run(
         self,
-        historical_bars: list[MarketBar],
+        context: MarketContext,
     ) -> BacktestResult:
         """
         Execute the backtest.
@@ -63,9 +66,34 @@ class BacktestingEngine:
 
         self._initialize()
 
+        historical_bars = context.m15_bars
+
         for index, bar in enumerate(historical_bars):
 
+            window = historical_bars[
+                max(0, index - 500): index + 1
+            ]
+
+            context = MarketContext(
+                current_bar=bar,
+                m5_bars=window,
+                m15_bars=window,
+                h1_bars=window,
+                h4_bars=window,
+            )
+
             self.state.processed_bar_count += 1
+
+            # --------------------------------------------------
+            # Only allow one active trade at a time
+            # --------------------------------------------------
+            if self.state.active_trade is not None:
+
+                if bar.timestamp < self.state.active_trade.exit_time:
+                    continue
+
+                # Previous trade has finished
+                self.state.active_trade = None
 
             result = self.pipeline.process_bar(
                 bar,
@@ -74,8 +102,29 @@ class BacktestingEngine:
                 pip_value=1.0,
             )
 
+            if index < 20:
+                print("=" * 60)
+                print(f"Bar #{index}")
+
+                print(
+                    "Signal:",
+                    result.signal.signal,
+                    "| Confidence:",
+                    round(result.signal.confidence, 3),
+                )
+
+                print(
+                    "Risk:",
+                    result.trade_plan.decision,
+                )
+
+                print(
+                    "Reason:",
+                    result.trade_plan.reason,
+                )
+
             future_bars = historical_bars[index + 1 :]
-            
+
             self._record_trade(
                 result=result,
                 entry_bar=bar,
@@ -104,7 +153,10 @@ class BacktestingEngine:
             entry_bar=entry_bar,
             future_bars=future_bars,
         )
-        
+
+        # Keep track of the currently open trade
+        self.state.active_trade = trade
+
         self.state.trades.append(trade)
 
         self.state.current_equity += trade.net_profit

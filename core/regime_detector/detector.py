@@ -208,13 +208,31 @@ class MarketRegimeDetector:
         if features.choppiness > self.config.choppiness.veto_threshold:
             regime = RegimeLabel.RANGING
             confidence = 0.60
+
+            trend_score = 0.0
+            volatility_score = 0.0
+            momentum_score = 0.0
+            ema_score = 0.0
+            choppiness_score = 0.0
+            total_score = 0.0
+
         else:
+            trend_score = self._calculate_trend_score(features)
+
+            volatility_score = self._calculate_volatility_score(features)
+
+            momentum_score = self._calculate_momentum_score(features)
+
+            ema_score = self._calculate_ema_slope_score(features)
+
+            choppiness_score = self._calculate_choppiness_score(features)
+
             total_score = (
-                self._calculate_trend_score(features)
-                + self._calculate_volatility_score(features)
-                + self._calculate_momentum_score(features)
-                + self._calculate_ema_slope_score(features)
-                + self._calculate_choppiness_score(features)
+                trend_score
+                + volatility_score
+                + momentum_score
+                + ema_score
+                + choppiness_score
             )
 
             if total_score >= self.config.regime.min_score_threshold:
@@ -229,7 +247,6 @@ class MarketRegimeDetector:
                 regime = RegimeLabel.RANGING
                 confidence = 0.40
 
-
         if confidence >= 0.80:
             tier = ConfidenceTier.HIGH
         elif confidence >= 0.50:
@@ -237,13 +254,19 @@ class MarketRegimeDetector:
         else:
             tier = ConfidenceTier.LOW
 
-
         return MarketRegime(
             observation_timestamp=bar.timestamp,
             computation_timestamp=datetime.now(UTC),
             primary_regime=regime,
             confidence=confidence,
             confidence_tier=tier,
+
+            trend_score=trend_score,
+            momentum_score=momentum_score,
+            volatility_score=volatility_score,
+            ema_score=ema_score,
+            choppiness_score=choppiness_score,
+            total_score=total_score,
         )
 
     def _update_state(self, bar: MarketBar, regime: MarketRegime) -> None:
@@ -253,7 +276,6 @@ class MarketRegimeDetector:
         self.state.processed_bar_count += 1
 
         candidate = regime.primary_regime
-
 
         # Initialize on the first valid observation.
         if not self.state.initialized:

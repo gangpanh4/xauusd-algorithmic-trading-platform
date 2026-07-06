@@ -94,6 +94,22 @@ class MarketRegime:
         default_factory=frozenset
     )
 
+    # -------------------------------------------------
+    # Regime Intelligence (Version 1.1)
+    # -------------------------------------------------
+
+    trend_score: float = 0.0
+
+    momentum_score: float = 0.0
+
+    volatility_score: float = 0.0
+
+    ema_score: float = 0.0
+
+    choppiness_score: float = 0.0
+
+    total_score: float = 0.0
+
     def __post_init__(self):
         if self.primary_regime is None:
             self.primary_regime = self.label

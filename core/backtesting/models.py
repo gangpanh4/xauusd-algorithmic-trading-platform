@@ -51,6 +51,23 @@ class BacktestTrade:
 
     risk_reward: float = 0.0
 
+    # -------------------------------------------------
+    # Trade Lifecycle Analytics (Sprint 2)
+    # -------------------------------------------------
+
+    max_favorable_excursion: float = 0.0
+    max_adverse_excursion: float = 0.0
+
+    highest_price: float = 0.0
+    lowest_price: float = 0.0
+
+    breakeven_triggered: bool = False
+    trailing_stop_triggered: bool = False
+
+    partial_exit_taken: bool = False
+
+    lifecycle_events: tuple[str, ...] = ()
+
     metadata: dict = field(default_factory=dict)
 
     @property
@@ -99,4 +116,3 @@ class BacktestResult:
     consecutive_losses: int = 0
 
     trades: list[BacktestTrade] = field(default_factory=list)
-

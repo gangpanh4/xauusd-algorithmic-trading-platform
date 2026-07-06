@@ -40,6 +40,8 @@ class BacktestState:
 
     trades: list[BacktestTrade] = field(default_factory=list)
 
+    active_trade: BacktestTrade | None = None
+
     def reset(self) -> None:
         """
         Reset the engine state.
@@ -66,4 +68,5 @@ class BacktestState:
         self.executed_trade_count = 0
 
         self.trades.clear()
-        
+
+        self.active_trade = None

@@ -15,6 +15,8 @@ class SignalGeneratorConfig:
 
     minimum_signal_confidence: float = 0.70
 
+    minimum_total_score: float = 6.0
+
     signal_cooldown_bars: int = 3
 
     allow_duplicate_signals: bool = False

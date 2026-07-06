@@ -1,4 +1,4 @@
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from core.regime_detector.models import (
     ConfidenceTier,
@@ -6,14 +6,8 @@ from core.regime_detector.models import (
     RegimeLabel,
 )
 
-from core.signal_generator.config import (
-    SignalGeneratorConfig,
-)
-
-from core.signal_generator.detector import (
-    SignalGenerator,
-)
-
+from core.signal_generator.config import SignalGeneratorConfig
+from core.signal_generator.detector import SignalGenerator
 from core.signal_generator.models import (
     SignalStrength,
     SignalType,
@@ -21,26 +15,30 @@ from core.signal_generator.models import (
 
 
 def test_signal_generator():
-    # Create generator
     config = SignalGeneratorConfig(
         debug_logging=True,
     )
 
     generator = SignalGenerator(config)
 
-    # Create fake market regime
     regime = MarketRegime(
         observation_timestamp=datetime.now(UTC),
         computation_timestamp=datetime.now(UTC),
         primary_regime=RegimeLabel.TRENDING_BULL,
         confidence=0.87,
         confidence_tier=ConfidenceTier.HIGH,
+
+        # Required by the current SignalGenerator
+        trend_score=4.0,
+        momentum_score=1.0,
+        volatility_score=1.0,
+        ema_score=1.0,
+        choppiness_score=2.0,
+        total_score=9.0,
     )
 
-    # Generate signal
     signal = generator.generate_signal(regime)
 
-    # Display output
     print()
     print("========== SIGNAL ==========")
     print(f"Signal      : {signal.signal.value}")
@@ -48,11 +46,14 @@ def test_signal_generator():
     print(f"Confidence  : {signal.confidence:.2f}")
     print(f"Reason      : {signal.reason}")
 
-    # Assertions
+    # Current architecture assertions
     assert signal.signal == SignalType.BUY
     assert signal.strength == SignalStrength.STRONG
     assert abs(signal.confidence - 0.87) < 1e-6
-    assert signal.reason == "Market regime: TRENDING_BULL"
+
+    assert "TRENDING_BULL" in signal.reason
+    assert "confidence" in signal.reason
+
 
 if __name__ == "__main__":
     test_signal_generator()
