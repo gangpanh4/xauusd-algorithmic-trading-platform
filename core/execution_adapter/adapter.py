@@ -59,8 +59,13 @@ class ExecutionAdapter:
             symbol="XAUUSD",
             side=side,
             volume=trade_plan.position_size,
+            entry_price=trade_plan.entry_price,
+            stop_loss=trade_plan.stop_loss,
+            take_profit=trade_plan.take_profit,
             account_balance=0.0,
-            stop_loss_distance=trade_plan.stop_loss,
+            stop_loss_distance=abs(
+                trade_plan.entry_price - trade_plan.stop_loss
+            ),
             risk_reward_ratio=trade_plan.risk_reward_ratio,
             comment=self.config.default_comment,
         )

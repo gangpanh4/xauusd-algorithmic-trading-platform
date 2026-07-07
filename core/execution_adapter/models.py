@@ -19,6 +19,9 @@ class ExecutionPlan:
     symbol: str
     side: OrderSide
     volume: float
+    entry_price: float
+    stop_loss: float
+    take_profit: float
     account_balance: float
     stop_loss_distance: float
     risk_reward_ratio: float
@@ -47,8 +50,8 @@ class ExecutionRequest:
             symbol=self.execution_plan.symbol,
             side=self.execution_plan.side,
             volume=self.execution_plan.volume,
-            entry_price=0.0,
-            stop_loss=0.0,
-            take_profit=0.0,
+            entry_price=self.execution_plan.entry_price,
+            stop_loss=self.execution_plan.stop_loss,
+            take_profit=self.execution_plan.take_profit,
             comment=self.execution_plan.comment,
         )

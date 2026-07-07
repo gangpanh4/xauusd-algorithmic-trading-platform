@@ -27,7 +27,7 @@ const os = require('os');
 
 // Configuration
 const CONFIG = {
-  maxAgents: 15,
+  maxAgents: 10,
   // Session-cost display. Claude Code's cost.total_cost_usd is a client-side
   // estimate that "may differ from your actual bill" and reads as misleading on
   // subscription plans, where token usage is not billed per dollar. These let

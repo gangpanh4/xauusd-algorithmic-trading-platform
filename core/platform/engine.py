@@ -16,11 +16,13 @@ This module intentionally contains no trading strategy logic.
 from __future__ import annotations
 
 import logging
+import time
 
 import MetaTrader5 as mt5
 
 from core.backtesting.config import BacktestConfig
 from core.backtesting.runner import BacktestRunner
+from core.data.market_data import MarketDataService
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 
@@ -113,6 +115,41 @@ class TradingPlatform:
         try:
             engine.start()
 
+            market_data = MarketDataService(
+                symbol="XAUUSD",
+                timeframe=mt5.TIMEFRAME_M15,
+            )
+
+            logger.info("Loading historical bars...")
+
+            history = market_data.get_historical_bars(500)
+
+            logger.info(
+                "Loaded %d historical bars.",
+                len(history),
+            )
+
+            logger.info("Warming up trading engine...")
+
+            account = mt5.account_info()
+
+            if account is None:
+                raise RuntimeError(
+                    "Unable to retrieve account information."
+                )
+
+            for bar in history:
+
+                engine.process_bar(
+                    bar,
+                    account_balance=account.balance,
+                    stop_loss_distance=100.0,
+                    pip_value=1.0,
+                    warmup=True,
+                )
+
+            logger.info("Warm-up completed.")
+
             logger.info(
                 "Live Trading Engine started successfully."
             )
@@ -121,12 +158,37 @@ class TradingPlatform:
                 "Platform is ready to process market bars."
             )
 
-            #
-            # Future:
-            #
-            # while running:
-            #     engine.process_bar(...)
-            #
+            try:
+                while True:
+
+                    bar = market_data.get_latest_closed_bar()
+
+                    if bar is not None:
+
+                        account = mt5.account_info()
+
+                        if account is None:
+                            logger.warning(
+                                "Unable to retrieve account information."
+                            )
+                            continue
+
+                        engine.process_bar(
+                            bar,
+                            account_balance=account.balance,
+                            stop_loss_distance=100.0,
+                            pip_value=1.0,
+                        )
+
+                    time.sleep(
+                        config.poll_interval_seconds,
+                    )
+
+            except KeyboardInterrupt:
+
+                logger.info(
+                    "Stopping live trading..."
+                )
 
         finally:
 

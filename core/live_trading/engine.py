@@ -4,10 +4,14 @@ Live Trading Engine.
 
 from __future__ import annotations
 
+import logging
+
+from core.execution_adapter.adapter import ExecutionAdapter
+from core.execution_adapter.config import ExecutionAdapterConfig
 from core.mt5_execution.executor import (
     MT5Executor,
 )
-
+from core.risk_manager.models import RiskDecision
 from core.trading_pipeline.pipeline import (
     TradingPipeline,
 )
@@ -23,6 +27,8 @@ from .models import (
 from .state import (
     LiveTradingState,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LiveTradingEngine:
@@ -45,6 +51,10 @@ class LiveTradingEngine:
 
         self.executor = MT5Executor(
             config.execution,
+        )
+
+        self.adapter = ExecutionAdapter(
+            ExecutionAdapterConfig(),
         )
 
     def start(self) -> None:
@@ -74,12 +84,18 @@ class LiveTradingEngine:
         account_balance: float,
         stop_loss_distance: float,
         pip_value: float,
+        warmup: bool = False,
     ) -> LiveTradingResult:
         """
         Process one completed market bar.
         """
 
         self.state.processed_bars += 1
+
+        logger.info(
+            "Processing new bar: %s",
+            bar.timestamp,
+        )
 
         pipeline_result = self.pipeline.process_bar(
             bar,
@@ -88,8 +104,55 @@ class LiveTradingEngine:
             pip_value=pip_value,
         )
 
+        if warmup:
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=None,
+                trade_executed=False,
+            )
+
+        logger.info(
+            "Signal=%s Decision=%s",
+            pipeline_result.signal.direction,
+            pipeline_result.trade_plan.decision,
+        )
+
+        trade_plan = pipeline_result.trade_plan
+
+        logger.info(
+            "Entry=%s SL=%s TP=%s Volume=%s",
+            trade_plan.entry_price,
+            trade_plan.stop_loss,
+            trade_plan.take_profit,
+            trade_plan.position_size,
+        )
+
+        if trade_plan.decision != RiskDecision.APPROVE:
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=None,
+                trade_executed=False,
+            )
+
+        execution_request = self.adapter.adapt(
+            pipeline_result,
+        )
+
+        logger.info("Sending order to MT5...")
+
+        execution_result = self.executor.execute_order(
+            execution_request.order_request,
+        )
+
+        logger.info(
+            "Execution result: %s",
+            execution_result,
+        )
+
+        self.state.executed_trades += 1
+
         return LiveTradingResult(
             pipeline_result=pipeline_result,
-            execution_result=None,
-            trade_executed=False,
+            execution_result=execution_result,
+            trade_executed=True,
         )
