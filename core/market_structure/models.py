@@ -1,28 +1,15 @@
-"""
-Shared data models for the Market Structure Engine.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
-from core.market_structure.enums import SwingType
+# Existing classes and definitions below...
 
-
-@dataclass(slots=True, frozen=True)
-class SwingPoint:
+@dataclass(frozen=True, slots=True)
+class BOSEvent:
     """
-    Immutable representation of a confirmed market swing.
-
-    SwingPoint objects are produced exclusively by the SwingDetector
-    and consumed by downstream market structure detectors.
+    Represents an event detected by the Break of Structure (BOS) detector.
     """
 
     timestamp: datetime
-    index: int
-    price: float
-    swing_type: SwingType
-
-    # Index of the candle where this swing became confirmed.
+    break_type: BreakType
+    swing_point: SwingPoint
     confirmation_index: int
