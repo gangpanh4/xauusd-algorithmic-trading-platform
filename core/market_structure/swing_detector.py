@@ -129,6 +129,7 @@ class SwingDetector:
 
         return bars[-(self.config.pivot_right + 1)]
 
+
     def _is_swing_high(
         self,
         pivot: MarketBar,
@@ -146,12 +147,12 @@ class SwingDetector:
 
         # Validate left side.
         for bar in bars[:center_index]:
-            if pivot.high < (bar.high + tolerance):
+            if pivot.high <= (bar.high + tolerance):
                 return False
 
         # Validate right side.
         for bar in bars[center_index + 1 :]:
-            if pivot.high < (bar.high + tolerance):
+            if pivot.high <= (bar.high + tolerance):
                 return False
 
         return True
@@ -173,15 +174,16 @@ class SwingDetector:
 
         # Validate left side.
         for bar in bars[:center_index]:
-            if pivot.low > (bar.low - tolerance):
+            if pivot.low >= (bar.low - tolerance):
                 return False
 
         # Validate right side.
         for bar in bars[center_index + 1 :]:
-            if pivot.low > (bar.low - tolerance):
+            if pivot.low >= (bar.low - tolerance):
                 return False
 
         return True
+
 
     def _create_swing_point(
         self,
