@@ -129,3 +129,9 @@ POSITION_SYNC_ON_STARTUP = True
 MTF_ENTRY_ENABLED = False   # Require M15 MACD crossover trigger before entry
 MTF_TRIGGER_TF     = "M15"
 MTF_CANDLES        = 150   # M15 candles to fetch for the trigger check
+
+# ── BOS Detector Configuration ───────────────────────────────
+BOS_DETECTOR_CONFIG = {
+    "param1": 10,
+    "param2": 0.75
+}
