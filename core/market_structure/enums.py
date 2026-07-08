@@ -1,3 +1,14 @@
+"""
+Shared enumerations for the Market Structure Engine.
+
+These enums define the common vocabulary used by Swing Detection,
+Break of Structure (BOS), Change of Character (CHoCH), Liquidity,
+Order Blocks, and Fair Value Gaps.
+
+The goal is to provide strongly typed values rather than string literals,
+ensuring consistency across all market structure modules.
+"""
+
 from __future__ import annotations
 
 from enum import Enum, auto
@@ -56,29 +67,3 @@ class FairValueGapType(Enum):
 
     BULLISH = auto()
     BEARISH = auto()
-
-class BOSEventType(Enum):
-    """
-    Type of BOSEvent.
-    """
-
-    DETECTED = auto()
-    CLEARED = auto()
-
-
-class BOSDetectorStateType(Enum):
-    """
-    Type of BOSDetectorState.
-    """
-
-    ACTIVE = auto()
-    INACTIVE = auto()
-
-
-class BOSDetectorConfigKey(Enum):
-    """
-    Key for BOSDetectorConfig.
-    """
-
-    PARAM1 = auto()
-    PARAM2 = auto()
