@@ -67,3 +67,13 @@ class FairValueGapType(Enum):
 
     BULLISH = auto()
     BEARISH = auto()
+
+
+class DetectorStatus(Enum):
+    """
+    Status of a market structure detector.
+    """
+
+    WAITING = auto()
+    RUNNING = auto()
+    BREAK_CONFIRMED = auto()

@@ -1,3 +1,4 @@
+
 """
 Unit tests for the Swing Detection Engine.
 """
@@ -8,7 +9,10 @@ from datetime import UTC, datetime
 
 from core.data.market_data import MarketBar
 from core.market_structure.config import SwingDetectorConfig
-from core.market_structure.enums import SwingType
+from core.market_structure.enums import (
+    DetectorStatus,
+    SwingType,
+)
 from core.market_structure.state import SwingDetectorState
 from core.market_structure.swing_detector import SwingDetector
 
@@ -40,12 +44,12 @@ def test_reset_clears_runtime_state() -> None:
     detector = SwingDetector()
 
     detector.state.processed_bar_count = 10
-    detector.state.detector_status = "RUNNING"
+    detector.state.detector_status = DetectorStatus.RUNNING
 
     detector.reset()
 
     assert detector.state.processed_bar_count == 0
-    assert detector.state.detector_status == "WAITING"
+    assert detector.state.detector_status == DetectorStatus.WAITING
     assert len(detector.state.recent_bars) == 0
     assert len(detector.state.confirmed_swings) == 0
     assert detector.state.last_swing is None
@@ -245,7 +249,6 @@ def test_detects_confirmed_swing_low() -> None:
     assert result.price == 95.0
     assert detector.get_last_swing() == result
 
-
 def test_duplicate_swing_is_not_reported_twice() -> None:
     """
     Processing the same pivot twice should not create duplicate
@@ -323,6 +326,15 @@ def test_duplicate_swing_is_not_reported_twice() -> None:
     )
 
     assert len(detector.get_swings()) == 1
+
+
+
+
+
+
+
+
+
 
 
 def test_detector_enforces_alternating_swing_sequence() -> None:
@@ -409,6 +421,7 @@ def test_minimum_swing_distance_is_enforced() -> None:
     # Detector should reject the second swing.
     assert len(detector.get_swings()) == 1
 
+
 def test_atr_validation_rejects_small_swings() -> None:
     """
     ATR validation should reject swings that do not satisfy
@@ -442,6 +455,13 @@ def test_atr_validation_rejects_small_swings() -> None:
             detections.append(swing)
 
     assert len(detections) == 0
+
+
+
+
+
+
+
 
 def test_equal_high_tolerance_allows_equal_highs() -> None:
     """

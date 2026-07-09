@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from core.data.market_data import MarketBar
 from core.market_structure.config import SwingDetectorConfig
-from core.market_structure.enums import SwingType
+from core.market_structure.enums import DetectorStatus, SwingType
 from core.market_structure.models import SwingPoint
 from core.market_structure.state import SwingDetectorState
 

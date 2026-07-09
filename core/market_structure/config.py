@@ -40,3 +40,27 @@ class SwingDetectorConfig:
 
 
 MarketStructureConfig = SwingDetectorConfig
+
+@dataclass(slots=True, frozen=True)
+class BOSDetectorConfig:
+    """
+    Immutable configuration for the Break of Structure (BOS) Detector.
+
+    These parameters control how confirmed structural breaks
+    are identified from previously confirmed SwingPoint objects.
+    """
+
+    # Require the candle to CLOSE beyond the swing level.
+    require_close_break: bool = True
+
+    # Allow wick-only breaks to count as BOS.
+    allow_wick_break: bool = False
+
+    # Minimum price distance beyond the swing level.
+    minimum_break_distance: float = 0.0
+
+    # Tolerance for equal highs/lows when evaluating breaks.
+    break_tolerance: float = 0.0
+
+    # Diagnostics
+    debug_logging: bool = False
