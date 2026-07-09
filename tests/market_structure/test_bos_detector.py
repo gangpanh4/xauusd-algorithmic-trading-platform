@@ -231,3 +231,117 @@ def test_get_previous_same_type_swing() -> None:
     )
 
     assert detector._get_previous_same_type(high2) == high1
+
+def test_get_previous_same_type_returns_none() -> None:
+    """
+    None should be returned when no previous swing of the same type exists.
+    """
+
+    detector = BOSDetector()
+
+    high = make_swing(
+        index=1,
+        price=100.0,
+        swing_type=SwingType.HIGH,
+    )
+
+    detector.state.confirmed_swings.append(high)
+
+    assert detector._get_previous_same_type(high) is None
+
+def test_detects_bullish_bos() -> None:
+    """
+    A higher confirmed swing high should produce a bullish BOS.
+    """
+
+    detector = BOSDetector()
+
+    high1 = make_swing(
+        index=1,
+        price=100.0,
+        swing_type=SwingType.HIGH,
+    )
+
+    low = make_swing(
+        index=2,
+        price=95.0,
+        swing_type=SwingType.LOW,
+    )
+
+    high2 = make_swing(
+        index=3,
+        price=110.0,
+        swing_type=SwingType.HIGH,
+    )
+
+    detector.process(high1)
+    detector.process(low)
+
+    event = detector.process(high2)
+
+    assert event is not None
+    assert event.break_type is BreakType.BOS
+    assert event.swing_point == high2
+
+def test_detects_bearish_bos() -> None:
+    """
+    A lower confirmed swing low should produce a bearish BOS.
+    """
+
+    detector = BOSDetector()
+
+    low1 = make_swing(
+        index=1,
+        price=100.0,
+        swing_type=SwingType.LOW,
+    )
+
+    high = make_swing(
+        index=2,
+        price=110.0,
+        swing_type=SwingType.HIGH,
+    )
+
+    low2 = make_swing(
+        index=3,
+        price=90.0,
+        swing_type=SwingType.LOW,
+    )
+
+    detector.process(low1)
+    detector.process(high)
+
+    event = detector.process(low2)
+
+    assert event is not None
+    assert event.break_type is BreakType.BOS
+    assert event.swing_point == low2
+
+def test_get_breaks_returns_copy() -> None:
+    """
+    get_breaks should return a copy rather than the internal list.
+    """
+
+    detector = BOSDetector()
+
+    swing = make_swing(
+        index=1,
+        price=100.0,
+        swing_type=SwingType.HIGH,
+    )
+
+    event = BOSEvent(
+        timestamp=swing.timestamp,
+        break_type=BreakType.BOS,
+        swing_point=swing,
+        confirmation_index=swing.confirmation_index,
+    )
+
+    detector.state.confirmed_breaks.append(event)
+
+    breaks = detector.get_breaks()
+
+    breaks.clear()
+
+    assert len(detector.state.confirmed_breaks) == 1
+
