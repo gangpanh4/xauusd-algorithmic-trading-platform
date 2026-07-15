@@ -8,7 +8,9 @@ from core.market_structure.config import BOSDetectorConfig
 from core.market_structure.enums import (
     BreakType,
     DetectorStatus,
+    MarketTrend,
     SwingType,
+    TrendDirection,
 )
 from core.market_structure.models import BOSEvent, SwingPoint
 from core.market_structure.state import BOSDetectorState
@@ -111,6 +113,23 @@ class BOSDetector:
 
         return None
 
+    def _calculate_break_distance(
+        self,
+        current: SwingPoint,
+        previous: SwingPoint,
+    ) -> float:
+        """
+        Calculate the absolute distance between two
+        corresponding swing points.
+
+        Version 2 uses this metric as the foundation
+        for future BOS quality scoring.
+        """
+
+        return abs(
+            current.price - previous.price
+        )
+
     def _detect_bullish_bos(
         self,
         swing: SwingPoint,
@@ -135,8 +154,23 @@ class BOSDetector:
         if swing.price <= required_break:
             return None
 
+        #
+        # Version 2 preparation.
+        # This value will later contribute to
+        # BOS quality evaluation.
+        #
+        break_distance = (
+            self._calculate_break_distance(
+                current=swing,
+                previous=previous_high,
+            )
+        )
+
+        _ = break_distance
+
         return self._create_bos_event(
             swing=swing,
+            break_distance=break_distance,
         )
 
     def _detect_bearish_bos(
@@ -163,23 +197,48 @@ class BOSDetector:
         if swing.price >= required_break:
             return None
 
+        #
+        # Version 2 preparation.
+        # This value will later contribute to
+        # BOS quality evaluation.
+        #
+        break_distance = (
+            self._calculate_break_distance(
+                current=swing,
+                previous=previous_low,
+            )
+        )
+
+        _ = break_distance
+
         return self._create_bos_event(
             swing=swing,
+            break_distance=break_distance,
         )
 
     def _create_bos_event(
         self,
+        *,
         swing: SwingPoint,
+        break_distance: float,
     ) -> BOSEvent | None:
         """
         Create and store a confirmed Break of Structure event.
         """
 
+        if swing.swing_type is SwingType.HIGH:
+            direction = TrendDirection.BULLISH
+        else:
+            direction = TrendDirection.BEARISH
+
         event = BOSEvent(
             timestamp=swing.timestamp,
             break_type=BreakType.BOS,
+            direction=direction,
+            break_price=swing.price,
             swing_point=swing,
             confirmation_index=swing.confirmation_index,
+            break_distance=break_distance,
         )
 
         if not self._validate_break(event):
@@ -187,9 +246,60 @@ class BOSDetector:
 
         self.state.confirmed_breaks.append(event)
         self.state.last_break = event
+
+        self._update_market_structure_state(event)
+
         self.state.detector_status = DetectorStatus.BREAK_CONFIRMED
 
         return event
+
+    def _update_market_structure_state(
+        self,
+        event: BOSEvent,
+    ) -> None:
+        """
+        Update canonical market structure state after
+        confirming a Break of Structure.
+        """
+
+        swing = event.swing_point
+
+        if event.break_type is BreakType.BOS:
+
+            if swing.swing_type is SwingType.HIGH:
+                self.state.current_trend = MarketTrend.BULLISH
+
+                self.state.protected_swing = (
+                    self._find_last_swing(
+                        SwingType.LOW
+                    )
+                )
+
+            elif swing.swing_type is SwingType.LOW:
+                self.state.current_trend = MarketTrend.BEARISH
+
+                self.state.protected_swing = (
+                    self._find_last_swing(
+                        SwingType.HIGH
+                    )
+                )
+
+    def _find_last_swing(
+        self,
+        swing_type: SwingType,
+    ) -> SwingPoint | None:
+        """
+        Find the most recent confirmed swing of the
+        requested type.
+        """
+
+        for swing in reversed(
+            self.state.confirmed_swings[:-1]
+        ):
+            if swing.swing_type is swing_type:
+                return swing
+
+        return None
 
     def _validate_break(
         self,

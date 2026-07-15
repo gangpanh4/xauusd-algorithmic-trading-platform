@@ -4,7 +4,7 @@ Configuration for the Live Trading Engine.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core.mt5_execution.config import (
     MT5ExecutionConfig,
@@ -21,8 +21,8 @@ class LiveTradingConfig:
     Configuration for live trading.
     """
 
-    pipeline: TradingPipelineConfig = (
-        TradingPipelineConfig()
+    pipeline: TradingPipelineConfig = field(
+        default_factory=TradingPipelineConfig,
     )
 
     execution: MT5ExecutionConfig = (

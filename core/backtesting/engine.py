@@ -154,6 +154,16 @@ class BacktestingEngine:
             future_bars=future_bars,
         )
 
+        trade.metadata.update(
+            {
+                "probability": result.trade_plan.probability,
+                "confidence": result.trade_plan.confidence,
+                "feature_count": result.trade_plan.feature_count,
+                "evidence_count": result.trade_plan.evidence_count,
+                "regime": result.trade_plan.regime,
+            }
+        )
+
         # Keep track of the currently open trade
         self.state.active_trade = trade
 
@@ -229,6 +239,46 @@ class BacktestingEngine:
             for trade in self.state.trades
         )
 
+        # ------------------------------------------
+        # Research 005 Observability
+        # ------------------------------------------
+
+        probabilities = [
+            trade.metadata.get("probability")
+            for trade in self.state.trades
+            if trade.metadata.get("probability") is not None
+        ]
+
+        confidences = [
+            trade.metadata.get("confidence")
+            for trade in self.state.trades
+            if trade.metadata.get("confidence") is not None
+        ]
+
+        feature_counts = [
+            trade.metadata.get("feature_count")
+            for trade in self.state.trades
+            if trade.metadata.get("feature_count") is not None
+        ]
+
+        average_probability = (
+            sum(probabilities) / len(probabilities)
+            if probabilities
+            else 0.0
+        )
+
+        average_confidence = (
+            sum(confidences) / len(confidences)
+            if confidences
+            else 0.0
+        )
+
+        average_feature_count = (
+            sum(feature_counts) / len(feature_counts)
+            if feature_counts
+            else 0.0
+        )
+
         gross_profit = sum(
             max(trade.net_profit, 0.0)
             for trade in self.state.trades
@@ -247,6 +297,28 @@ class BacktestingEngine:
             else 0.0
         )
 
+        # ------------------------------------------
+        # Research 005 Summary
+        # ------------------------------------------
+
+        print("\n" + "=" * 70)
+        print("RESEARCH SUMMARY")
+        print("=" * 70)
+
+        print(
+            f"Average Probability : {average_probability:.3f}"
+        )
+
+        print(
+            f"Average Confidence  : {average_confidence:.3f}"
+        )
+
+        print(
+            f"Average Features    : {average_feature_count:.2f}"
+        )
+
+        print("=" * 70)
+
         return BacktestResult(
             total_trades=len(self.state.trades),
             winning_trades=wins,
@@ -263,4 +335,7 @@ class BacktestingEngine:
             ),
             max_drawdown=self.state.max_drawdown,
             trades=self.state.trades.copy(),
+            average_probability=average_probability,
+            average_confidence=average_confidence,
+            average_feature_count=average_feature_count,
         )

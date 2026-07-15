@@ -4,6 +4,10 @@ Trading Pipeline orchestrator.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+from core.multi_timeframe.enums import Timeframe
+
 from core.regime_detector.detector import (
     MarketRegimeDetector,
 )
@@ -22,6 +26,38 @@ from core.intelligence.edge.opportunity_ranker import (
 
 from core.risk_manager.manager import (
     RiskManager,
+)
+
+from core.multi_timeframe.coordinator import (
+    MultiTimeframeCoordinator,
+)
+
+from core.market_structure.engine import (
+    MarketStructureEngine,
+)
+
+from core.confluence_engine.engine import (
+    ConfluenceEngine,
+)
+
+from core.decision_engine.engine import (
+    DecisionEngine,
+)
+
+from core.feature_engineering.engine import (
+    FeatureEngineeringEngine,
+)
+
+from core.probability_engine.engine import (
+    ProbabilityEngine,
+)
+
+from core.feature_engineering.evidence import (
+    FeatureEvidence,
+)
+
+from core.confluence_engine.models import (
+    ConfluenceResult,
 )
 
 from .config import TradingPipelineConfig
@@ -64,10 +100,102 @@ class TradingPipeline:
             config.risk_manager,
         )
 
+        #
+        # Phase 2 Architecture
+        #
+
+        self.multi_timeframe = MultiTimeframeCoordinator()
+
+        self.market_structure = MarketStructureEngine()
+
+        self.confluence_engine = ConfluenceEngine()
+
+        self.feature_engineering = FeatureEngineeringEngine()
+
+        self.probability_engine = ProbabilityEngine()
+
+        self.decision_engine = DecisionEngine()
+
+    def process(
+        self,
+        *,
+        bars_by_timeframe: Mapping[
+            Timeframe,
+            list[MarketBar],
+        ],
+        account_balance: float,
+        stop_loss_distance: float,
+        pip_value: float,
+    ) -> PipelineResult:
+        """
+        Version 2 processing entry point.
+
+        Currently delegates to the existing V1 pipeline while the
+        remaining subsystems are being integrated.
+
+        Future versions will execute:
+
+            MultiTimeframe
+                ↓
+            Confluence
+                ↓
+            Regime
+                ↓
+            Signal
+                ↓
+            Risk
+        """
+
+        #
+        # Version 2 Analysis
+        #
+
+        mtf_result = self.multi_timeframe.process(
+            bars_by_timeframe,
+        )
+
+        #
+        # Execute Version 2 confluence analysis.
+        #
+        # The result is intentionally not yet used to influence
+        # trading decisions. This commit verifies subsystem
+        # integration while preserving Version 1 behaviour.
+        #
+
+        confluence = (
+            self.confluence_engine.evaluate_multi_timeframe(
+                mtf_result,
+            )
+        )
+
+        #
+        # Temporary compatibility bridge.
+        #
+
+        current_bars = bars_by_timeframe[
+            Timeframe.M5
+        ]
+
+        #
+        # Keep the variable alive until Pipeline V2 begins
+        # consuming the confluence result.
+        #
+
+        _ = confluence
+
+        return self.process_bar(
+            current_bars[-1],
+            confluence=confluence,
+            account_balance=account_balance,
+            stop_loss_distance=stop_loss_distance,
+            pip_value=pip_value,
+        )
+
     def process_bar(
         self,
         bar: MarketBar,
         *,
+        confluence: ConfluenceResult | None = None,
         account_balance: float,
         stop_loss_distance: float,
         pip_value: float,
@@ -80,26 +208,45 @@ class TradingPipeline:
             bar,
         )
 
-        # Temporary debug instrumentation
-        count = self.regime_detector.state.processed_bar_count
+        market_structure = self.market_structure.process(
+            bar,
+        )
 
-        if count % 5000 == 0:
-            print("\n========== REGIME DEBUG ==========")
-            print(f"Processed Bars : {count}")
-            print(f"Primary Regime : {regime.primary_regime}")
-            print(f"Confidence     : {regime.confidence}")
-            print("==================================")
+        
+
+        feature_evidence = self.feature_engineering.create_evidence(
+            market_structure=market_structure,
+            regime=regime,
+        )
+
+        
+
+        feature_vector = self.feature_engineering.process(
+            feature_evidence,
+        )
+
+        
+
+        probability = self.probability_engine.process(
+            feature_vector,
+        )
+
+        
+
+        
+
+        decision = self.decision_engine.evaluate(
+            regime=regime,
+            confluence=confluence,
+            probability=probability,
+        )
 
         signal = self.signal_generator.generate_signal(
             regime,
+            confluence=confluence,
         )
 
-        if regime.confidence >= 0.90:
-            print("\n========== SIGNAL DEBUG ==========")
-            print(f"Regime      : {regime.primary_regime}")
-            print(f"Confidence  : {regime.confidence}")
-            print(f"Signal      : {signal.signal}")
-            print("==================================")
+        
 
         trade_plan = self.risk_manager.evaluate_signal(
             signal=signal,
@@ -107,15 +254,25 @@ class TradingPipeline:
             account_balance=account_balance,
             stop_loss_distance=stop_loss_distance,
             pip_value=pip_value,
+
+            # ----------------------------------
+            # Research 005 Observability
+            # ----------------------------------
+
+            probability=probability.probability,
+            confidence=probability.confidence,
+            feature_count=feature_vector.size,
+            evidence_count=len(probability.evidence),
+            regime=str(regime.primary_regime),
         )
 
-        if regime.confidence >= 0.90:
-            print(f"Risk Decision : {trade_plan.decision}")
-            print(f"Reason        : {trade_plan.reason}")
-            print("==================================")
+        
 
         return PipelineResult(
             regime=regime,
+            features=feature_vector,
+            probability=probability,
+            decision=decision,
             signal=signal,
             trade_plan=trade_plan,
         )

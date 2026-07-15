@@ -41,6 +41,9 @@ class TradingSignal:
 
     confidence: float = 0.0
 
+    # Version 2
+    decision_score: float = 0.0
+
     # Old API
     reasons: list[str] = field(default_factory=list)
 

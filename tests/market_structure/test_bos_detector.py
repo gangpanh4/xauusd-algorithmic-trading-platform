@@ -11,7 +11,9 @@ from core.market_structure.config import BOSDetectorConfig
 from core.market_structure.enums import (
     BreakType,
     DetectorStatus,
+    MarketTrend,
     SwingType,
+    TrendDirection,
 )
 from core.market_structure.models import (
     BOSEvent,
@@ -132,9 +134,16 @@ def test_duplicate_bos_is_rejected() -> None:
     event = BOSEvent(
         timestamp=swing.timestamp,
         break_type=BreakType.BOS,
+        direction=(
+            TrendDirection.BULLISH
+            if swing.swing_type is SwingType.HIGH
+            else TrendDirection.BEARISH
+        ),
+        break_price=swing.price,
         swing_point=swing,
         confirmation_index=swing.confirmation_index,
     )
+
 
     detector.state.confirmed_breaks.append(event)
 
@@ -154,9 +163,16 @@ def test_get_last_break() -> None:
         swing_type=SwingType.HIGH,
     )
 
+
     event = BOSEvent(
         timestamp=swing.timestamp,
         break_type=BreakType.BOS,
+        direction=(
+            TrendDirection.BULLISH
+            if swing.swing_type is SwingType.HIGH
+            else TrendDirection.BEARISH
+        ),
+        break_price=swing.price,
         swing_point=swing,
         confirmation_index=swing.confirmation_index,
     )
@@ -182,6 +198,12 @@ def test_get_breaks() -> None:
     event = BOSEvent(
         timestamp=swing.timestamp,
         break_type=BreakType.BOS,
+        direction=(
+            TrendDirection.BULLISH
+            if swing.swing_type is SwingType.HIGH
+            else TrendDirection.BEARISH
+        ),
+        break_price=swing.price,
         swing_point=swing,
         confirmation_index=swing.confirmation_index,
     )
@@ -333,6 +355,12 @@ def test_get_breaks_returns_copy() -> None:
     event = BOSEvent(
         timestamp=swing.timestamp,
         break_type=BreakType.BOS,
+        direction=(
+            TrendDirection.BULLISH
+            if swing.swing_type is SwingType.HIGH
+            else TrendDirection.BEARISH
+        ),
+        break_price=swing.price,
         swing_point=swing,
         confirmation_index=swing.confirmation_index,
     )
@@ -344,4 +372,36 @@ def test_get_breaks_returns_copy() -> None:
     breaks.clear()
 
     assert len(detector.state.confirmed_breaks) == 1
+
+def test_bos_initializes_market_structure_state() -> None:
+    """
+    BOS detector should initialize market structure state.
+    """
+
+    detector = BOSDetector()
+
+    assert detector.state.current_trend is MarketTrend.UNKNOWN
+    assert detector.state.protected_swing is None
+
+
+def test_bos_reset_clears_market_structure_state() -> None:
+    """
+    Reset should clear trend and protected swing.
+    """
+
+    detector = BOSDetector()
+
+    swing = make_swing(
+        index=5,
+        price=100.0,
+        swing_type=SwingType.LOW,
+    )
+
+    detector.state.current_trend = MarketTrend.BULLISH
+    detector.state.protected_swing = swing
+
+    detector.reset()
+
+    assert detector.state.current_trend is MarketTrend.UNKNOWN
+    assert detector.state.protected_swing is None
 

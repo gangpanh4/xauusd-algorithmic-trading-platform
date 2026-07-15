@@ -85,12 +85,6 @@ class TradeSimulator:
 
         return bar.low <= entry_price - risk
 
-
-
-
-
-
-
     def simulate(
         self,
         trade_plan: TradePlan,
@@ -241,8 +235,6 @@ class TradeSimulator:
             else TradeOutcome.BREAKEVEN
         )
 
-
-
         # Always calculate R using the ORIGINAL stop loss,
         # not the dynamically managed stop.
         original_risk = abs(
@@ -260,7 +252,7 @@ class TradeSimulator:
             if original_risk > 0
             else 0.0
         )
-        
+
         return BacktestTrade(
             entry_time=entry_time,
             exit_time=exit_time,
@@ -285,9 +277,12 @@ class TradeSimulator:
             trailing_stop_triggered=False,
             partial_exit_taken=False,
             lifecycle_events=tuple(state.lifecycle_events),
+            metadata={
+                **trade_plan.metadata,
+                "probability": trade_plan.probability,
+                "confidence": trade_plan.confidence,
+                "feature_count": trade_plan.feature_count,
+                "evidence_count": trade_plan.evidence_count,
+                "regime": trade_plan.regime,
+            },
         )
-    
-
-
-
-

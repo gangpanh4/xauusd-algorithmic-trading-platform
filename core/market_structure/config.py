@@ -38,8 +38,28 @@ class SwingDetectorConfig:
     # Diagnostics
     debug_logging: bool = False
 
+    # Structure confidence scoring
+    swing_confidence_weight: float = 0.20
+    bos_confidence_weight: float = 0.35
+    choch_confidence_weight: float = 0.20
+    liquidity_confidence_weight: float = 0.25
+
+    @property
+    def maximum_confidence_score(self) -> float:
+        """
+        Maximum achievable structure confidence.
+        """
+
+        return (
+            self.swing_confidence_weight
+            + self.bos_confidence_weight
+            + self.choch_confidence_weight
+            + self.liquidity_confidence_weight
+        )
+
 
 MarketStructureConfig = SwingDetectorConfig
+
 
 @dataclass(slots=True, frozen=True)
 class BOSDetectorConfig:
@@ -64,3 +84,38 @@ class BOSDetectorConfig:
 
     # Diagnostics
     debug_logging: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class CHOCHDetectorConfig:
+    """
+    Immutable configuration for the Change of Character (CHoCH) Detector.
+    """
+
+    # Minimum price movement required to confirm a CHoCH.
+    minimum_break_distance: float = 0.0
+
+    # Maximum number of confirmed swings retained.
+    maximum_history: int = 5000
+
+    # Enable diagnostic logging.
+    debug_logging: bool = False
+
+
+MarketStructureCHOCHConfig = CHOCHDetectorConfig
+
+
+@dataclass(slots=True)
+class LiquidityDetectorConfig:
+    """
+    Configuration for the Liquidity Sweep Detector.
+
+    Controls minimum distance and validation rules
+    for liquidity sweeps.
+    """
+
+    # Minimum price distance required to consider a sweep valid.
+    minimum_sweep_distance: float = 0.0
+
+    # Allow equal highs/lows to form liquidity pools.
+    allow_equal_levels: bool = True

@@ -11,6 +11,14 @@ from core.regime_detector.models import (
     RegimeLabel,
 )
 
+from core.confluence_engine.models import (
+    ConfluenceResult,
+)
+
+from core.decision_engine.models import (
+    DecisionResult,
+)
+
 from .config import SignalGeneratorConfig
 from .models import (
     SignalStrength,
@@ -47,6 +55,8 @@ class SignalGenerator:
     def generate_signal(
         self,
         regime: MarketRegime,
+        confluence: ConfluenceResult | None = None,
+        decision: DecisionResult | None = None,
     ) -> TradingSignal:
         """
         Generate a signal from the detected market regime.
@@ -103,11 +113,19 @@ class SignalGenerator:
         else:
             strength = SignalStrength.WEAK
 
-        result = TradingSignal(
-            timestamp=datetime.now(UTC),
+        result = self._build_signal(
             signal=signal,
             strength=strength,
             confidence=confidence,
+            decision_score=(
+                decision.decision_score
+                if decision is not None
+                else (
+                    confluence.score
+                    if confluence is not None
+                    else 0.0
+                )
+            ),
             reason=(
                 f"Regime={regime.primary_regime.value}, "
                 f"confidence={confidence:.3f}"
@@ -119,6 +137,34 @@ class SignalGenerator:
         self._update_state(result)
 
         return result
+
+    def _build_signal(
+        self,
+        *,
+        signal: SignalType,
+        strength: SignalStrength,
+        confidence: float,
+        decision_score: float,
+        reason: str,
+    ) -> TradingSignal:
+        """
+        Build the final TradingSignal.
+
+        Version 2 centralizes TradingSignal construction in one
+        location so future decision sources can reuse it.
+        """
+
+        return TradingSignal(
+            timestamp=datetime.now(UTC),
+            signal=signal,
+            strength=strength,
+            confidence=confidence,
+            decision_score=decision_score,
+            reason=reason,
+            metadata={
+                "decision_score": decision_score,
+            },  
+        )
 
     def _update_state(
         self,

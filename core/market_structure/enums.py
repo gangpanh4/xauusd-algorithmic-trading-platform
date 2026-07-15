@@ -60,6 +60,22 @@ class OrderBlockType(Enum):
     BEARISH = auto()
 
 
+class OrderBlockEventType(Enum):
+    """
+    Lifecycle events emitted by the Order Block Detector.
+    """
+
+    CREATED = auto()
+
+    CONFIRMED = auto()
+
+    MITIGATED = auto()
+
+    INVALIDATED = auto()
+
+    EXPIRED = auto()
+
+
 class FairValueGapType(Enum):
     """
     Direction of a Fair Value Gap.
@@ -77,3 +93,13 @@ class DetectorStatus(Enum):
     WAITING = auto()
     RUNNING = auto()
     BREAK_CONFIRMED = auto()
+
+
+class MarketTrend(Enum):
+    """
+    Current confirmed market trend.
+    """
+
+    UNKNOWN = auto()
+    BULLISH = auto()
+    BEARISH = auto()

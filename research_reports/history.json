@@ -1,0 +1,23 @@
+[
+    {
+        "timestamp": "2026-07-12T23:21:04.413434",
+        "question": "Reply with exactly Banana",
+        "providers": 1,
+        "successful": 1,
+        "failed": 0
+    },
+    {
+        "timestamp": "2026-07-12T23:21:34.913031",
+        "question": "Reply with exactly Apple",
+        "providers": 1,
+        "successful": 1,
+        "failed": 0
+    },
+    {
+        "timestamp": "2026-07-12T23:30:29.209608",
+        "question": "Reply with exactly Hello Trading",
+        "providers": 1,
+        "successful": 1,
+        "failed": 0
+    }
+]

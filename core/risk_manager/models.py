@@ -43,6 +43,26 @@ class TradePlan:
 
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    # ==========================
+    # Research 004
+    # Trade quality snapshot
+    # ==========================
+
+    probability: float | None = None
+
+    confidence: float | None = None
+
+    # ==========================
+    # Research 005
+    # Trade observability
+    # ==========================
+
+    feature_count: int | None = None
+
+    evidence_count: int | None = None
+
+    regime: str | None = None
+
     @property
     def stop_loss_price(self) -> float:
         return self.stop_loss

@@ -1,0 +1,292 @@
+You are a senior quantitative researcher, institutional algorithmic trader, market microstructure researcher, and software architect.
+
+Your objective is NOT to write code.
+
+Your objective is to design the highest-quality Multi-Timeframe (MTF) architecture for a professional XAUUSD algorithmic trading platform.
+
+Assume this platform already has the following architecture:
+
+MarketData
+↓
+MarketStructureEngine
+    Swing
+    BOS
+    CHOCH
+    Liquidity
+↓
+PriceActionEngine
+    Order Block
+    Fair Value Gap
+↓
+ConfluenceEngine
+↓
+SignalGenerator
+↓
+RiskManager
+↓
+Execution
+
+The platform is already fully modular and engine-based.
+
+Your job is ONLY to research and design the optimal Multi-Timeframe framework.
+
+Requirements
+
+Do NOT give opinions.
+
+Support every recommendation using one or more of:
+
+• academic research
+• institutional trading principles
+• market microstructure
+• ICT concepts
+• Smart Money Concepts
+• quantitative finance
+• statistical reasoning
+• professional discretionary trading
+• practical implementation concerns
+
+Whenever something cannot be proven, clearly state that it is a hypothesis.
+
+================================================
+
+Answer ALL of the following.
+
+PART 1
+
+What timeframe hierarchy is best for XAUUSD?
+
+Should the platform use:
+
+Monthly
+Weekly
+Daily
+H4
+H1
+M15
+M5
+M1
+
+or only some?
+
+Explain why.
+
+================================================
+
+PART 2
+
+For EACH timeframe explain its responsibility.
+
+Example:
+
+Weekly
+Purpose:
+What decisions should ONLY Weekly make?
+
+Daily
+Purpose:
+
+H4
+Purpose:
+
+H1
+Purpose:
+
+M15
+Purpose:
+
+M5
+Purpose:
+
+Should M1 exist?
+
+================================================
+
+PART 3
+
+How should information flow?
+
+Should information only move downward?
+
+Example
+
+Weekly
+↓
+
+Daily
+↓
+
+H4
+↓
+
+H1
+↓
+
+M15
+↓
+
+M5
+
+or can lower timeframes invalidate higher timeframes?
+
+Explain.
+
+================================================
+
+PART 4
+
+For EACH timeframe determine whether it should detect:
+
+Swing
+
+BOS
+
+CHOCH
+
+Liquidity
+
+Equal High
+
+Equal Low
+
+Displacement
+
+Market Structure Shift
+
+Order Block
+
+Fair Value Gap
+
+Premium Discount
+
+Balanced Price Range
+
+Liquidity Void
+
+Volume Imbalance
+
+Explain why.
+
+================================================
+
+PART 5
+
+Should every timeframe own a complete MarketStructureEngine and PriceActionEngine?
+
+OR
+
+Should lower timeframes reuse higher timeframe information?
+
+Design the architecture.
+
+================================================
+
+PART 6
+
+How should conflicts be resolved?
+
+Example
+
+Daily Bullish
+
+H4 Bullish
+
+H1 Bearish
+
+M15 Bullish
+
+M5 Bullish
+
+Trade?
+
+Reject?
+
+Wait?
+
+Explain.
+
+================================================
+
+PART 7
+
+How should confluence scoring work?
+
+Should higher timeframes receive more weight?
+
+Example
+
+Weekly 40%
+
+Daily 30%
+
+H4 15%
+
+H1 10%
+
+M15 5%
+
+or something else?
+
+================================================
+
+PART 8
+
+How should historical data be stored?
+
+How many candles should each timeframe maintain?
+
+Discuss memory usage and computational efficiency.
+
+================================================
+
+PART 9
+
+Design the complete software architecture.
+
+Include classes.
+
+Include engines.
+
+Include result objects.
+
+Include data flow.
+
+Include UML or diagrams if useful.
+
+================================================
+
+PART 10
+
+Discuss common mistakes made by retail trading bots using Multi-Timeframe analysis.
+
+Explain how to avoid them.
+
+================================================
+
+PART 11
+
+If you were building a hedge-fund-grade XAUUSD trading platform from scratch today, how would your Multi-Timeframe subsystem look?
+
+Be extremely detailed.
+
+================================================
+
+Output Format
+
+Architecture
+
+Reasoning
+
+Evidence
+
+Tradeoffs
+
+Recommended Design
+
+Potential Weaknesses
+
+Future Extensions
+
+Do NOT write any Python code.
+
+Focus only on architecture, quantitative reasoning, and trading research.

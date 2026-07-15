@@ -116,3 +116,14 @@ class BacktestResult:
     consecutive_losses: int = 0
 
     trades: list[BacktestTrade] = field(default_factory=list)
+
+    # =====================================
+    # Research 005
+    # Backtest observability summary
+    # =====================================
+
+    average_probability: float = 0.0
+
+    average_confidence: float = 0.0
+
+    average_feature_count: float = 0.0

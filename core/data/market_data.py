@@ -4,27 +4,14 @@ Live Market Data Service.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import MetaTrader5 as mt5
 
-
-@dataclass(frozen=True)
-class MarketBar:
-    """
-    Normalized market bar used by the live trading engine.
-    """
-
-    timestamp: datetime
-
-    open: float
-    high: float
-    low: float
-    close: float
-
-    tick_volume: int
+from core.data.models import (
+    MarketBar,
+)
 
 
 class MarketDataService:

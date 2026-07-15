@@ -1,5 +1,5 @@
 """
-Runtime state for the Swing Detection Engine.
+Runtime state for the Market Structure Engine.
 """
 
 from __future__ import annotations
@@ -9,9 +9,15 @@ from dataclasses import dataclass, field
 from typing import Deque
 
 from core.data.market_data import MarketBar
-from core.market_structure.enums import DetectorStatus
+from core.market_structure.enums import (
+    DetectorStatus,
+    MarketTrend,
+)
 from core.market_structure.models import (
     BOSEvent,
+    CHOCHEvent,
+    LiquidityLevel,
+    LiquiditySweepEvent,
     SwingPoint,
 )
 
@@ -39,10 +45,6 @@ class SwingDetectorState:
     last_swing: SwingPoint | None = None
 
     # Human-readable detector status.
-    # Allowed values:
-    # WAITING
-    # RUNNING
-    # BREAK_CONFIRMED
     detector_status: DetectorStatus = DetectorStatus.WAITING
 
     # Total number of processed bars.
@@ -80,11 +82,13 @@ class BOSDetectorState:
     # Most recently confirmed BOS.
     last_break: BOSEvent | None = None
 
+    # Current confirmed market trend.
+    current_trend: MarketTrend = MarketTrend.UNKNOWN
+
+    # Swing currently protected by the active trend.
+    protected_swing: SwingPoint | None = None
+
     # Human-readable detector status.
-    # Allowed values:
-    # WAITING
-    # RUNNING
-    # BREAK_CONFIRMED
     detector_status: DetectorStatus = DetectorStatus.WAITING
 
     # Total number of processed swings.
@@ -98,5 +102,83 @@ class BOSDetectorState:
         self.confirmed_swings.clear()
         self.confirmed_breaks.clear()
         self.last_break = None
+        self.current_trend = MarketTrend.UNKNOWN
+        self.protected_swing = None
+        self.detector_status = DetectorStatus.WAITING
+        self.processed_swing_count = 0
+
+
+@dataclass(slots=True)
+class CHOCHDetectorState:
+    """
+    Mutable runtime state owned exclusively by the CHOCHDetector.
+
+    This class stores the confirmed Change of Character (CHOCH)
+    events detected during streaming analysis. It contains no
+    detection logic.
+    """
+
+    # Confirmed swings received by the CHOCH detector.
+    confirmed_swings: list[SwingPoint] = field(default_factory=list)
+
+    # Confirmed CHOCH history.
+    confirmed_changes: list[CHOCHEvent] = field(default_factory=list)
+
+    # Most recently confirmed CHOCH.
+    last_change: CHOCHEvent | None = None
+
+    # Human-readable detector status.
+    detector_status: DetectorStatus = DetectorStatus.WAITING
+
+    # Total number of processed swings.
+    processed_swing_count: int = 0
+
+    def reset(self) -> None:
+        """
+        Reset the detector state.
+        """
+
+        self.confirmed_swings.clear()
+        self.confirmed_changes.clear()
+        self.last_change = None
+        self.detector_status = DetectorStatus.WAITING
+        self.processed_swing_count = 0
+
+@dataclass(slots=True)
+class LiquidityDetectorState:
+    """
+    Mutable runtime state owned exclusively by the LiquidityDetector.
+
+    This class stores tracked liquidity levels and confirmed
+    liquidity sweep events. It contains no detection logic.
+    """
+
+    # Known liquidity pools.
+    liquidity_levels: list[LiquidityLevel] = field(
+        default_factory=list
+    )
+
+    # Confirmed liquidity sweeps.
+    confirmed_sweeps: list[LiquiditySweepEvent] = field(
+        default_factory=list
+    )
+
+    # Most recently confirmed sweep.
+    last_sweep: LiquiditySweepEvent | None = None
+
+    # Human-readable detector status.
+    detector_status: DetectorStatus = DetectorStatus.WAITING
+
+    # Total number of processed swings.
+    processed_swing_count: int = 0
+
+    def reset(self) -> None:
+        """
+        Reset the detector state.
+        """
+
+        self.liquidity_levels.clear()
+        self.confirmed_sweeps.clear()
+        self.last_sweep = None
         self.detector_status = DetectorStatus.WAITING
         self.processed_swing_count = 0

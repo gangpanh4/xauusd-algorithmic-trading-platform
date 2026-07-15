@@ -54,15 +54,29 @@ class SwingDetector:
         if not self._has_enough_history():
             return None
 
-        pivot = self._get_pivot_candidate()
+        window = self._get_confirmation_window()
 
-        if self._is_swing_high(pivot):
+        pivot = self._get_window_pivot(window)
+
+        is_high = self._is_swing_high(
+            window,
+            pivot,
+        )
+
+        is_low = self._is_swing_low(
+            window,
+            pivot,
+        )
+
+        # classification proceeds without verbose logging
+
+        if is_high:
             swing = self._create_swing_point(
                 pivot,
                 SwingType.HIGH,
             )
 
-        elif self._is_swing_low(pivot):
+        elif is_low:
             swing = self._create_swing_point(
                 pivot,
                 SwingType.LOW,
@@ -71,6 +85,27 @@ class SwingDetector:
         else:
             return None
 
+        #
+        # Bootstrap the very first confirmed structural swing.
+        #
+        # ATR validation requires a previously confirmed swing
+        # to measure swing-to-swing significance. Therefore the
+        # first structurally confirmed swing establishes the
+        # initial anchor before ATR validation becomes active.
+        #
+        if self.state.last_swing is None:
+
+            self.state.confirmed_swings.append(
+                swing
+            )
+
+            self.state.last_swing = swing
+
+            return swing
+
+        #
+        # Validate all subsequent swings.
+        #
         if not self._validate_swing(
             swing
         ):
@@ -129,9 +164,57 @@ class SwingDetector:
 
         return bars[-(self.config.pivot_right + 1)]
 
+    def _get_confirmation_window(
+        self,
+    ) -> list[MarketBar]:
+        """
+        Return the local confirmation window surrounding the
+        current pivot candidate.
+
+        This window is intentionally independent of the full
+        rolling history so future pivot classification can
+        operate only on the required neighboring candles.
+        """
+
+        bars = list(self.state.recent_bars)
+
+        pivot_index = (
+            len(bars)
+            - self.config.pivot_right
+            - 1
+        )
+
+        start = (
+            pivot_index
+            - self.config.pivot_left
+        )
+
+        end = (
+            pivot_index
+            + self.config.pivot_right
+            + 1
+        )
+
+        return bars[start:end]
+
+    def _get_window_pivot(
+        self,
+        window: list[MarketBar],
+    ) -> MarketBar:
+        """
+        Return the pivot candle from a confirmation window.
+
+        The pivot is always positioned at the center of the
+        confirmation window.
+        """
+
+        return window[
+            self.config.pivot_left
+        ]
 
     def _is_swing_high(
         self,
+        window: list[MarketBar],
         pivot: MarketBar,
     ) -> bool:
         """
@@ -139,7 +222,7 @@ class SwingDetector:
         swing high.
         """
 
-        bars = list(self.state.recent_bars)
+        bars = window
 
         center_index = self.config.pivot_left
 
@@ -159,6 +242,7 @@ class SwingDetector:
 
     def _is_swing_low(
         self,
+        window: list[MarketBar],
         pivot: MarketBar,
     ) -> bool:
         """
@@ -166,7 +250,7 @@ class SwingDetector:
         swing low.
         """
 
-        bars = list(self.state.recent_bars)
+        bars = window
 
         center_index = self.config.pivot_left
 
@@ -183,7 +267,6 @@ class SwingDetector:
                 return False
 
         return True
-
 
     def _create_swing_point(
         self,
@@ -285,6 +368,13 @@ class SwingDetector:
             )
         )
 
+        print(
+            "SWING CANDIDATE:",
+            swing.swing_type,
+            f"price={swing.price}",
+            f"distance={distance:.5f}",
+        )
+
         if not passes_distance:
             return False
 
@@ -298,10 +388,7 @@ class SwingDetector:
             if atr is None:
                 return False
 
-            if (
-                distance
-                < atr * self.config.atr_multiplier
-            ):
+            if distance < atr * self.config.atr_multiplier:
                 return False
 
         return True

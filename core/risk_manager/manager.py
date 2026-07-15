@@ -42,6 +42,11 @@ class RiskManager:
         account_balance: float,
         stop_loss_distance: float,
         pip_value: float,
+        probability: float | None = None,
+        confidence: float | None = None,
+        feature_count: int | None = None,
+        evidence_count: int | None = None,
+        regime: str | None = None,
     ) -> TradePlan:
         """
         Convert a trading signal into a complete TradePlan.
@@ -72,6 +77,11 @@ class RiskManager:
                 reward_percent=0.0,
                 risk_reward_ratio=0.0,
                 reason="No trading opportunity.",
+                probability=probability,
+                confidence=confidence,
+                feature_count=feature_count,
+                evidence_count=evidence_count,
+                regime=regime,
             )
 
             self._update_state(trade_plan)
@@ -148,6 +158,11 @@ class RiskManager:
             reward_percent=self.config.risk_percent * risk_reward_ratio,
             risk_reward_ratio=risk_reward_ratio,
             reason=reason,
+            probability=probability,
+            confidence=confidence,
+            feature_count=feature_count,
+            evidence_count=evidence_count,
+            regime=regime,
         )
 
         self._update_state(trade_plan)
