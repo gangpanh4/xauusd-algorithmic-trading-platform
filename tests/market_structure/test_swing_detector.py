@@ -1,4 +1,3 @@
-
 """
 Unit tests for the Swing Detection Engine.
 """
@@ -250,6 +249,7 @@ def test_detects_confirmed_swing_low() -> None:
     assert result.price == 95.0
     assert detector.get_last_swing() == result
 
+
 def test_duplicate_swing_is_not_reported_twice() -> None:
     """
     Processing the same pivot twice should not create duplicate
@@ -327,7 +327,6 @@ def test_duplicate_swing_is_not_reported_twice() -> None:
     )
 
     assert len(detector.get_swings()) == 1
-
 
 
 @pytest.mark.skip(
@@ -465,8 +464,11 @@ def test_minimum_swing_distance_is_enforced() -> None:
 
 def test_atr_validation_rejects_small_swings() -> None:
     """
-    ATR validation should reject swings that do not satisfy
-    the configured ATR threshold.
+    ATR validation should reject subsequent swings that do not
+    satisfy the configured ATR threshold.
+
+    The first confirmed swing establishes the structural anchor
+    and is intentionally accepted without ATR validation.
     """
 
     config = SwingDetectorConfig(
@@ -481,10 +483,15 @@ def test_atr_validation_rejects_small_swings() -> None:
     detector = SwingDetector(config)
 
     bars = [
+        # First swing HIGH (bootstrap)
         MarketBar(datetime.now(UTC), 100, 101, 99, 100, 100),
         MarketBar(datetime.now(UTC), 100, 105, 99, 104, 100),
         MarketBar(datetime.now(UTC), 100, 101, 99, 100, 100),
-        MarketBar(datetime.now(UTC), 100, 101, 99, 100, 100),
+
+        # Second swing LOW (small move, should fail ATR validation)
+        MarketBar(datetime.now(UTC), 100, 101, 98.8, 100, 100),
+        MarketBar(datetime.now(UTC), 100, 101, 98.5, 100, 100),
+        MarketBar(datetime.now(UTC), 100, 101, 98.9, 100, 100),
     ]
 
     detections = []
@@ -495,13 +502,10 @@ def test_atr_validation_rejects_small_swings() -> None:
         if swing is not None:
             detections.append(swing)
 
-    assert len(detections) == 0
-
-
-
-
-
-
+    # First swing is accepted as the structural anchor.
+    # Second swing should be rejected by ATR validation.
+    assert len(detections) == 1
+    assert detections[0].swing_type == SwingType.HIGH
 
 
 def test_equal_high_tolerance_allows_equal_highs() -> None:
