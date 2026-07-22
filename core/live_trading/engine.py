@@ -10,6 +10,7 @@ from core.data.models import MarketBar
 from core.execution_adapter.adapter import ExecutionAdapter
 from core.execution_adapter.config import ExecutionAdapterConfig
 from core.mt5_execution.executor import MT5Executor
+from core.mt5_execution.models import OrderStatus
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
 from core.trading_pipeline.models import PipelineResult
@@ -220,7 +221,22 @@ class LiveTradingEngine:
             execution_request.order_request,
         )
 
+        if execution_result.status is not OrderStatus.FILLED:
+            self.state.skipped_trades += 1
+            self.state.last_error = execution_result.message
+            logger.error(
+                "MT5 rejected the order: %s",
+                execution_result.message,
+            )
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=execution_result,
+                trade_executed=False,
+            )
+
         self.state.executed_trades += 1
+        self.state.last_ticket = execution_result.ticket
+        self.state.last_error = ""
 
         return LiveTradingResult(
             pipeline_result=pipeline_result,
