@@ -67,10 +67,17 @@ class LiquidityDetector:
         if swing is not None:
             self._add_level(swing)
 
+        # The completed-bar path can inspect many historical liquidity levels.
+        # Synchronize the compatibility index once per bar instead of once per
+        # candidate level, then reuse the resolved distance for both sides.
+        self._synchronize_sweep_index()
+        required_distance = self._required_sweep_distance(atr)
+
         buy_side = self._detect_completed_buy_side_sweep(
             bar=bar,
             bar_index=bar_index,
             atr=atr,
+            required_distance=required_distance,
         )
         if buy_side is not None:
             return buy_side
@@ -79,6 +86,7 @@ class LiquidityDetector:
             bar=bar,
             bar_index=bar_index,
             atr=atr,
+            required_distance=required_distance,
         )
 
     def _add_level(self, swing: SwingPoint) -> None:
@@ -116,16 +124,16 @@ class LiquidityDetector:
         bar: MarketBar,
         bar_index: int,
         atr: float | None,
+        required_distance: float,
     ) -> LiquiditySweepEvent | None:
         for level in reversed(self.state.liquidity_levels):
             if not level.is_buy_side:
                 continue
             if bar_index <= level.swing_point.confirmation_index:
                 continue
-            if self._level_already_swept(level):
+            if self._level_key(level) in self._swept_level_keys:
                 continue
 
-            required_distance = self._required_sweep_distance(atr)
             if bar.high <= level.price + required_distance:
                 continue
             if self.config.require_reclaim_close and bar.close >= level.price:
@@ -147,16 +155,16 @@ class LiquidityDetector:
         bar: MarketBar,
         bar_index: int,
         atr: float | None,
+        required_distance: float,
     ) -> LiquiditySweepEvent | None:
         for level in reversed(self.state.liquidity_levels):
             if level.is_buy_side:
                 continue
             if bar_index <= level.swing_point.confirmation_index:
                 continue
-            if self._level_already_swept(level):
+            if self._level_key(level) in self._swept_level_keys:
                 continue
 
-            required_distance = self._required_sweep_distance(atr)
             if bar.low >= level.price - required_distance:
                 continue
             if self.config.require_reclaim_close and bar.close <= level.price:
