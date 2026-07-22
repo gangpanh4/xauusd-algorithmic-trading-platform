@@ -200,6 +200,11 @@ class TradingPlatform:
                         time.sleep(config.poll_interval_seconds)
                         continue
 
+                    # Reconcile broker exposure before every new M5 decision.
+                    # This detects positions that were closed outside this
+                    # process and prevents stale risk-state position counts.
+                    engine.synchronize_open_positions()
+
                     engine.process_multi_timeframe(
                         snapshot,
                         account_balance=account.balance,
