@@ -352,6 +352,57 @@ class RiskManagerState:
         self.last_balance_update_time = resolved_time
         self._update_drawdown()
 
+    def register_realized_pnl(
+        self,
+        pnl: float,
+        *,
+        timestamp: datetime | None = None,
+        balance_after: float | None = None,
+    ) -> None:
+        """Apply deal-level P&L without counting a completed strategy trade."""
+
+        normalized_pnl = self._require_finite(pnl, "pnl")
+        resolved_time = self._resolve_timestamp(timestamp)
+
+        if not self.initialized:
+            if balance_after is None:
+                raise RuntimeError(
+                    "risk state must be initialized before realized P&L"
+                )
+            normalized_balance = self._require_non_negative_finite(
+                balance_after,
+                "balance_after",
+            )
+            implied_start = normalized_balance - normalized_pnl
+            if implied_start <= 0:
+                raise ValueError(
+                    "cannot infer a positive starting balance from realized P&L"
+                )
+            self.initialize_account(implied_start, timestamp=resolved_time)
+
+        self.ensure_daily_session(timestamp=resolved_time)
+
+        updated_balance = (
+            self.virtual_balance + normalized_pnl
+            if balance_after is None
+            else self._require_non_negative_finite(
+                balance_after,
+                "balance_after",
+            )
+        )
+
+        if normalized_pnl > 0:
+            self.total_profit += normalized_pnl
+            self.daily_profit += normalized_pnl
+        elif normalized_pnl < 0:
+            loss = abs(normalized_pnl)
+            self.total_loss += loss
+            self.daily_loss += loss
+
+        self.virtual_balance = updated_balance
+        self.last_balance_update_time = resolved_time
+        self._update_drawdown()
+
     def set_open_position_count(self, count: int) -> None:
         """Synchronize the number of currently open positions."""
 

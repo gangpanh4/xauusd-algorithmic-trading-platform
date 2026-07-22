@@ -4,7 +4,7 @@ State management for the Live Trading Engine.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -28,6 +28,10 @@ class LiveTradingState:
 
     last_processed_timestamp: datetime | None = None
 
+    last_deal_reconciliation_time: datetime | None = None
+
+    processed_deal_tickets: set[int] = field(default_factory=set)
+
     def reset(self) -> None:
         """
         Reset runtime statistics.
@@ -46,3 +50,7 @@ class LiveTradingState:
         self.last_error = ""
 
         self.last_processed_timestamp = None
+
+        self.last_deal_reconciliation_time = None
+
+        self.processed_deal_tickets.clear()

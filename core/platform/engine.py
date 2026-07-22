@@ -122,6 +122,12 @@ class TradingPlatform:
             if account is None:
                 raise RuntimeError("Unable to retrieve account information.")
 
+            engine.reconcile_realized_deals(
+                account_balance=account.balance,
+                initialize_only=True,
+            )
+            engine.pipeline.synchronize_account_balance(account.balance)
+
             symbol_spec = get_live_symbol_specification(config.symbol)
             logger.info(
                 "Loaded %s risk specification: tick_size=%s "
@@ -200,9 +206,12 @@ class TradingPlatform:
                         time.sleep(config.poll_interval_seconds)
                         continue
 
-                    # Reconcile broker exposure before every new M5 decision.
-                    # This detects positions that were closed outside this
-                    # process and prevents stale risk-state position counts.
+                    # Reconcile realized P&L and exposure before every new
+                    # M5 decision so daily-loss controls use broker state.
+                    engine.reconcile_realized_deals(
+                        account_balance=account.balance,
+                        as_of=boundary,
+                    )
                     engine.synchronize_open_positions()
 
                     engine.process_multi_timeframe(

@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 import logging
 
 from core.data.models import MarketBar
 from core.execution_adapter.adapter import ExecutionAdapter
 from core.execution_adapter.config import ExecutionAdapterConfig
+from core.mt5_execution.deal_history import get_realized_deals
 from core.mt5_execution.executor import MT5Executor
 from core.mt5_execution.models import OrderStatus
-from core.mt5_execution.positions import get_open_positions
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
 from core.trading_pipeline.models import PipelineResult
@@ -67,24 +67,49 @@ class LiveTradingEngine:
         if self.executor.is_connected():
             self.executor.shutdown()
 
-    def synchronize_open_positions(self) -> int:
-        """Synchronize risk exposure with broker positions for this symbol.
+    def reconcile_realized_deals(
+        self,
+        *,
+        account_balance: float,
+        as_of: datetime | None = None,
+        initialize_only: bool = False,
+    ) -> int:
+        """Apply new broker closing deals exactly once."""
 
-        The MT5 terminal connection must already be available. This method is
-        intentionally explicit so unit tests and analysis-only engine startup
-        do not access MT5 implicitly.
-        """
+        end = datetime.now(UTC) if as_of is None else as_of.astimezone(UTC)
+        start = self.state.last_deal_reconciliation_time
+        if start is None:
+            start = end - timedelta(days=7)
+        else:
+            start = start - timedelta(minutes=5)
 
-        positions = get_open_positions(self.config.symbol)
-        count = len(positions)
-        self.pipeline.set_open_position_count(count)
-
-        logger.info(
-            "Synchronized %d open %s position(s) with risk state.",
-            count,
-            self.config.symbol,
+        deals = get_realized_deals(
+            date_from=start,
+            date_to=end,
+            symbol=self.config.symbol,
         )
-        return count
+        new_deals = [
+            deal
+            for deal in deals
+            if deal.ticket not in self.state.processed_deal_tickets
+        ]
+
+        for deal in new_deals:
+            self.state.processed_deal_tickets.add(deal.ticket)
+            if not initialize_only:
+                self.pipeline.register_realized_pnl(
+                    deal.net_pnl,
+                    timestamp=deal.timestamp,
+                )
+
+        if not initialize_only:
+            self.pipeline.synchronize_account_balance(
+                account_balance,
+                timestamp=end,
+            )
+
+        self.state.last_deal_reconciliation_time = end
+        return len(new_deals)
 
     def process_bar(
         self,
@@ -254,7 +279,6 @@ class LiveTradingEngine:
                 trade_executed=False,
             )
 
-        self.pipeline.register_position_opened()
         self.state.executed_trades += 1
         self.state.last_ticket = execution_result.ticket
         self.state.last_error = ""

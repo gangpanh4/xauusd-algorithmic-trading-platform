@@ -874,6 +874,21 @@ class TradingPipeline:
 
         self.risk_manager.register_position_closed(count)
 
+    def register_realized_pnl(
+        self,
+        pnl: float,
+        *,
+        timestamp: datetime | None = None,
+        balance_after: float | None = None,
+    ) -> None:
+        """Apply broker deal-level realized P&L to risk state."""
+
+        self.risk_manager.register_realized_pnl(
+            pnl,
+            timestamp=timestamp,
+            balance_after=balance_after,
+        )
+
     def set_open_position_count(self, count: int) -> None:
         """Synchronize externally observed open-position exposure."""
 

@@ -289,6 +289,22 @@ class RiskManager:
         )
         self._refresh_daily_loss_limit()
 
+    def register_realized_pnl(
+        self,
+        pnl: float,
+        *,
+        timestamp: datetime | None = None,
+        balance_after: float | None = None,
+    ) -> None:
+        """Apply deal-level broker P&L without counting a completed trade."""
+
+        self.state.register_realized_pnl(
+            pnl,
+            timestamp=timestamp,
+            balance_after=balance_after,
+        )
+        self._refresh_daily_loss_limit()
+
     def set_open_position_count(self, count: int) -> None:
         """Synchronize current account exposure without assuming execution."""
 
