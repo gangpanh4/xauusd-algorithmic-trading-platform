@@ -282,6 +282,20 @@ def test_executor_delegates_close_when_connected(
     executor.state.connected = True
     expected = SimpleNamespace(status=OrderStatus.FILLED)
 
+    monkeypatch.setattr(
+        executor_module.mt5,
+        "terminal_info",
+        lambda: SimpleNamespace(
+            connected=True,
+            trade_allowed=True,
+        ),
+    )
+    monkeypatch.setattr(
+        executor_module.mt5,
+        "account_info",
+        lambda: SimpleNamespace(login=12345678),
+    )
+
     captured: dict = {}
 
     def fake_close(**kwargs):
