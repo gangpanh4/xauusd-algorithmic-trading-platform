@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from math import isfinite
+from time import perf_counter
 
 from core.data.models import MarketBar as SharedMarketBar
 from core.feature_engineering.models import FeatureVector
@@ -100,6 +102,15 @@ class BacktestingEngine:
         self._active_observation_bar: MarketBar | None = None
         self._position_registered = False
         self._observation_audits: list[PipelineObservationAudit] = []
+        self._last_pipeline_observation_timestamp: datetime | None = None
+        self._progress_started_at: float | None = None
+        self._mtf_cache_context_id: int | None = None
+        self._mtf_close_times: dict[str, tuple[datetime, ...]] = {}
+        self._mtf_shared_bars: dict[str, tuple[SharedMarketBar, ...]] = {}
+        self._daily_bars: tuple[SharedMarketBar, ...] = ()
+        self._weekly_bars: tuple[SharedMarketBar, ...] = ()
+        self._daily_close_times: tuple[datetime, ...] = ()
+        self._weekly_close_times: tuple[datetime, ...] = ()
 
     def reset(self) -> None:
         """Reset all mutable state, including analytical and research engines."""
@@ -114,6 +125,15 @@ class BacktestingEngine:
         self._active_observation_bar = None
         self._position_registered = False
         self._observation_audits = []
+        self._last_pipeline_observation_timestamp = None
+        self._progress_started_at = None
+        self._mtf_cache_context_id = None
+        self._mtf_close_times = {}
+        self._mtf_shared_bars = {}
+        self._daily_bars = ()
+        self._weekly_bars = ()
+        self._daily_close_times = ()
+        self._weekly_close_times = ()
 
     @property
     def observation_audits(self) -> tuple[PipelineObservationAudit, ...]:
@@ -136,6 +156,8 @@ class BacktestingEngine:
         historical_bars = self._prepare_historical_bars(context)
         self._initialize(historical_bars)
         total_bars = len(historical_bars)
+        self._progress_started_at = perf_counter()
+        self._prepare_mtf_runtime_cache(context)
 
         for index, bar in enumerate(historical_bars):
             self.state.processed_bar_count += 1
@@ -154,6 +176,14 @@ class BacktestingEngine:
                 m15_index=index,
                 m15_bar=bar,
             )
+            if result is None:
+                # Historical gaps can leave the same completed M5 bar visible
+                # at multiple consecutive M15 boundaries. The analytical
+                # pipeline is stateful, so processing that identical bar twice
+                # would duplicate evidence and violate audit chronology.
+                self._report_progress(index=index, total_bars=total_bars)
+                continue
+
             self._collect_observation_audit(observation_bar)
 
             if self.config.debug_logging and index < 20:
@@ -200,7 +230,7 @@ class BacktestingEngine:
         context: MarketContext,
         m15_index: int,
         m15_bar: MarketBar,
-    ) -> tuple[PipelineResult, MarketBar]:
+    ) -> tuple[PipelineResult | None, MarketBar]:
         """Process one M15 observation with no-lookahead MTF confluence.
 
         The default production pipeline receives synchronized M5/M15/H1/H4
@@ -212,7 +242,7 @@ class BacktestingEngine:
 
         if not self._supports_multi_timeframe_pipeline():
             return (
-                self.pipeline.process_bar(
+                self._process_pipeline_bar(
                     m15_bar,
                     account_balance=self.state.current_equity,
                     stop_loss_distance=self.stop_loss_distance,
@@ -224,19 +254,17 @@ class BacktestingEngine:
             )
 
         boundary = m15_bar.timestamp.astimezone(UTC) + timedelta(minutes=15)
-        m5 = self._visible_bars(context.m5_bars, boundary, timedelta(minutes=5))
-        m15 = self._visible_bars(
-            context.m15_bars,
-            boundary,
-            timedelta(minutes=15),
-        )
-        h1 = self._visible_bars(context.h1_bars, boundary, timedelta(hours=1))
-        h4 = self._visible_bars(context.h4_bars, boundary, timedelta(hours=4))
+        self._ensure_mtf_runtime_cache(context)
 
-        if not m5 or not h1 or not h4:
+        m5_end = self._visible_end("m5", boundary)
+        m15_end = self._visible_end("m15", boundary)
+        h1_end = self._visible_end("h1", boundary)
+        h4_end = self._visible_end("h4", boundary)
+
+        if m5_end == 0 or h1_end == 0 or h4_end == 0:
             # Warm-up is incomplete. Preserve analytical chronology without
             # fabricating higher-timeframe evidence.
-            result = self.pipeline.process_bar(
+            result = self._process_pipeline_bar(
                 m15_bar,
                 account_balance=self.state.current_equity,
                 stop_loss_distance=self.stop_loss_distance,
@@ -246,20 +274,10 @@ class BacktestingEngine:
             )
             return result, m15_bar
 
-        daily = self._aggregate_completed_bars(
-            h4,
-            boundary=boundary,
-            period=timedelta(days=1),
-            weekly=False,
-        )
-        weekly = self._aggregate_completed_bars(
-            h4,
-            boundary=boundary,
-            period=timedelta(days=7),
-            weekly=True,
-        )
-        if not daily or not weekly:
-            result = self.pipeline.process_bar(
+        daily_end = bisect_right(self._daily_close_times, boundary)
+        weekly_end = bisect_right(self._weekly_close_times, boundary)
+        if daily_end == 0 or weekly_end == 0:
+            result = self._process_pipeline_bar(
                 m15_bar,
                 account_balance=self.state.current_equity,
                 stop_loss_distance=self.stop_loss_distance,
@@ -270,31 +288,23 @@ class BacktestingEngine:
             return result, m15_bar
 
         shared = {
-            Timeframe.WEEKLY: weekly[-self.multi_timeframe_window_bars :],
-            Timeframe.DAILY: daily[-self.multi_timeframe_window_bars :],
-            Timeframe.H4: [
-                self._to_shared_bar(bar)
-                for bar in h4[-self.multi_timeframe_window_bars :]
-            ],
-            Timeframe.H1: [
-                self._to_shared_bar(bar)
-                for bar in h1[-self.multi_timeframe_window_bars :]
-            ],
-            Timeframe.M15: [
-                self._to_shared_bar(bar)
-                for bar in m15[-self.multi_timeframe_window_bars :]
-            ],
-            Timeframe.M5: [
-                self._to_shared_bar(bar)
-                for bar in m5[-self.multi_timeframe_window_bars :]
-            ],
+            Timeframe.WEEKLY: self._aggregate_window(
+                self._weekly_bars, weekly_end
+            ),
+            Timeframe.DAILY: self._aggregate_window(
+                self._daily_bars, daily_end
+            ),
+            Timeframe.H4: self._window("h4", h4_end),
+            Timeframe.H1: self._window("h1", h1_end),
+            Timeframe.M15: self._window("m15", m15_end),
+            Timeframe.M5: self._window("m5", m5_end),
         }
         mtf_result = self.pipeline.multi_timeframe.process(shared)
         confluence = self.pipeline.confluence_engine.evaluate_multi_timeframe(
             mtf_result
         )
-        observation_bar = m5[-1]
-        result = self.pipeline.process_bar(
+        observation_bar = context.m5_bars[m5_end - 1]
+        result = self._process_pipeline_bar(
             observation_bar,
             confluence=confluence,
             multi_timeframe_result=mtf_result,
@@ -306,6 +316,36 @@ class BacktestingEngine:
             lot_step=self.lot_step,
         )
         return result, observation_bar
+
+
+    def _process_pipeline_bar(
+        self,
+        bar: MarketBar,
+        **kwargs: object,
+    ) -> PipelineResult | None:
+        """Process one unique, chronologically increasing analytical bar.
+
+        M15 is the outer backtest clock, while the production analytical bar is
+        the latest completed M5 candle. Historical gaps can cause consecutive
+        M15 boundaries to expose the same M5 candle. Replaying that candle would
+        mutate stateful engines twice and create duplicate observation audits,
+        so an equal timestamp is skipped. A decreasing timestamp remains a hard
+        chronology error.
+        """
+
+        timestamp = bar.timestamp.astimezone(UTC)
+        previous = self._last_pipeline_observation_timestamp
+        if previous is not None:
+            if timestamp == previous:
+                return None
+            if timestamp < previous:
+                raise ValueError(
+                    "pipeline observation timestamps must be strictly increasing"
+                )
+
+        result = self.pipeline.process_bar(bar, **kwargs)
+        self._last_pipeline_observation_timestamp = timestamp
+        return result
 
 
     def _collect_observation_audit(self, observation_bar: MarketBar) -> None:
@@ -354,6 +394,88 @@ class BacktestingEngine:
             and hasattr(self.pipeline, "confluence_engine")
             and callable(getattr(self.pipeline, "process_bar", None))
         )
+
+
+    def _prepare_mtf_runtime_cache(self, context: MarketContext) -> None:
+        """Precompute immutable MTF lookup data for one backtest context.
+
+        The prior implementation rescanned every timeframe history, rebuilt
+        D1/W1 candles, and reconverted rolling bars on every M15 observation.
+        This cache preserves the exact completed-bar semantics while replacing
+        those repeated full-history operations with binary-search lookups and
+        tuple slicing.
+        """
+
+        self._mtf_cache_context_id = id(context)
+        durations = {
+            "m5": timedelta(minutes=5),
+            "m15": timedelta(minutes=15),
+            "h1": timedelta(hours=1),
+            "h4": timedelta(hours=4),
+        }
+        source = {
+            "m5": context.m5_bars,
+            "m15": context.m15_bars,
+            "h1": context.h1_bars,
+            "h4": context.h4_bars,
+        }
+
+        self._mtf_close_times = {
+            key: tuple(
+                bar.timestamp.astimezone(UTC) + durations[key]
+                for bar in bars
+            )
+            for key, bars in source.items()
+        }
+        self._mtf_shared_bars = {
+            key: tuple(self._to_shared_bar(bar) for bar in bars)
+            for key, bars in source.items()
+        }
+
+        all_h4 = context.h4_bars
+        self._daily_bars = tuple(
+            self._aggregate_completed_bars(
+                all_h4,
+                boundary=datetime.max.replace(tzinfo=UTC),
+                period=timedelta(days=1),
+                weekly=False,
+            )
+        )
+        self._weekly_bars = tuple(
+            self._aggregate_completed_bars(
+                all_h4,
+                boundary=datetime.max.replace(tzinfo=UTC),
+                period=timedelta(days=7),
+                weekly=True,
+            )
+        )
+        self._daily_close_times = tuple(
+            bar.timestamp.astimezone(UTC) + timedelta(days=1)
+            for bar in self._daily_bars
+        )
+        self._weekly_close_times = tuple(
+            bar.timestamp.astimezone(UTC) + timedelta(days=7)
+            for bar in self._weekly_bars
+        )
+
+    def _ensure_mtf_runtime_cache(self, context: MarketContext) -> None:
+        if self._mtf_cache_context_id != id(context):
+            self._prepare_mtf_runtime_cache(context)
+
+    def _visible_end(self, key: str, boundary: datetime) -> int:
+        return bisect_right(self._mtf_close_times[key], boundary)
+
+    def _window(self, key: str, end: int) -> tuple[SharedMarketBar, ...]:
+        start = max(0, end - self.multi_timeframe_window_bars)
+        return self._mtf_shared_bars[key][start:end]
+
+    def _aggregate_window(
+        self,
+        bars: tuple[SharedMarketBar, ...],
+        end: int,
+    ) -> tuple[SharedMarketBar, ...]:
+        start = max(0, end - self.multi_timeframe_window_bars)
+        return bars[start:end]
 
     @staticmethod
     def _visible_bars(
@@ -1069,14 +1191,30 @@ class BacktestingEngine:
         if not force and processed % interval != 0 and processed != total_bars:
             return
         active = "yes" if self._has_active_position() else "no"
+        elapsed = 0.0
+        if self._progress_started_at is not None:
+            elapsed = max(0.0, perf_counter() - self._progress_started_at)
+        rate = processed / elapsed if elapsed > 0.0 else 0.0
+        remaining = max(0, total_bars - processed)
+        eta_seconds = remaining / rate if rate > 0.0 else 0.0
         print(
             "[Backtest] "
             f"processed {processed:,}/{total_bars:,} bars | "
+            f"rate {rate:,.2f} bars/s | "
+            f"elapsed {self._format_duration(elapsed)} | "
+            f"ETA {self._format_duration(eta_seconds)} | "
             f"trades {len(self.state.trades):,} completed / "
             f"{self.state.executed_trade_count:,} entered | "
             f"equity {self.state.current_equity:,.2f} | "
             f"active {active}"
         )
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total = max(0, int(round(seconds)))
+        hours, remainder = divmod(total, 3_600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
     @staticmethod
     def _validate_mtf_window(value: int) -> int:
