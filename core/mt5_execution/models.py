@@ -116,6 +116,10 @@ class SymbolInfo:
 
     minimum_stop_distance: float = 0.0
 
+    filling_mode_flags: int = 0
+
+    trade_execution_mode: int = -1
+
 
 @dataclass(frozen=True)
 class PositionInfo:

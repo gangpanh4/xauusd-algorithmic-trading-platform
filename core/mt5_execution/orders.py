@@ -124,7 +124,11 @@ def build_mt5_request(
         "magic": magic_number,
         "comment": request.comment,
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_FOK,
+        "type_filling": (
+            _select_filling_mode(symbol)
+            if symbol is not None
+            else mt5.ORDER_FILLING_FOK
+        ),
     }
 
 
@@ -186,12 +190,21 @@ def send_order(
             ),
         )
 
-    mt5_request = build_mt5_request(
-        request,
-        magic_number=config.magic_number,
-        deviation=config.default_slippage,
-        symbol=symbol,
-    )
+    try:
+        mt5_request = build_mt5_request(
+            request,
+            magic_number=config.magic_number,
+            deviation=config.default_slippage,
+            symbol=symbol,
+        )
+    except (TypeError, ValueError) as exc:
+        return OrderResult(
+            timestamp=datetime.now(UTC),
+            status=OrderStatus.REJECTED,
+            ticket=None,
+            executed_price=0.0,
+            message=f"Order request rejected: {exc}",
+        )
 
     live_valid, live_message = _validate_price_relationships(
         side=request.side,
@@ -239,6 +252,43 @@ def send_order(
     )
 
 
+
+
+_SYMBOL_FILLING_FOK = 1
+_SYMBOL_FILLING_IOC = 2
+
+
+def _select_filling_mode(symbol: SymbolInfo) -> int:
+    """Select a broker-supported market-order filling policy.
+
+    ``filling_mode_flags`` is a bit mask. FOK is preferred because it preserves
+    the requested position size. IOC is the fallback when FOK is unavailable.
+    RETURN is used only outside Market Execution, where MT5 permits it.
+    """
+
+    flags = symbol.filling_mode_flags
+    execution_mode = symbol.trade_execution_mode
+
+    if isinstance(flags, bool) or not isinstance(flags, int) or flags < 0:
+        raise ValueError("Symbol filling mode flags are invalid.")
+
+    if flags & _SYMBOL_FILLING_FOK:
+        return mt5.ORDER_FILLING_FOK
+
+    if flags & _SYMBOL_FILLING_IOC:
+        return mt5.ORDER_FILLING_IOC
+
+    market_execution = getattr(
+        mt5,
+        "SYMBOL_TRADE_EXECUTION_MARKET",
+        2,
+    )
+    if execution_mode != market_execution:
+        return mt5.ORDER_FILLING_RETURN
+
+    raise ValueError(
+        "No supported filling mode is available for Market Execution."
+    )
 
 def _aligned_to_step(
     value: float,

@@ -44,4 +44,8 @@ def get_symbol_info(
             float(getattr(info, "trade_stops_level", 0.0))
             * float(getattr(info, "point", 0.0)),
         ),
+        filling_mode_flags=int(getattr(info, "filling_mode", 0)),
+        trade_execution_mode=int(
+            getattr(info, "trade_exemode", -1)
+        ),
     )
