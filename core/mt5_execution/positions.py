@@ -57,7 +57,9 @@ def get_open_positions(
         positions = mt5.positions_get()
 
     if positions is None:
-        return []
+        raise RuntimeError(
+            f"Unable to retrieve open MT5 positions: {mt5.last_error()}"
+        )
 
     return [
         _to_position_info(position)
@@ -75,6 +77,11 @@ def get_position(
     positions = mt5.positions_get(
         ticket=ticket,
     )
+
+    if positions is None:
+        raise RuntimeError(
+            f"Unable to retrieve MT5 position {ticket}: {mt5.last_error()}"
+        )
 
     if not positions:
         return None
