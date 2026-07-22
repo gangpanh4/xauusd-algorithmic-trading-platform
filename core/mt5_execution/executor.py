@@ -56,7 +56,7 @@ class MT5Executor:
         Execute an approved trading order.
         """
 
-        if not self.state.connected:
+        if not self.is_connected():
             raise RuntimeError(
                 "MT5Executor is not connected."
             )
@@ -72,7 +72,7 @@ class MT5Executor:
     ) -> OrderResult:
         """Close an existing position through the connected MT5 executor."""
 
-        if not self.state.connected:
+        if not self.is_connected():
             raise RuntimeError(
                 "MT5Executor is not connected."
             )
@@ -83,11 +83,31 @@ class MT5Executor:
         )
 
     def is_connected(self) -> bool:
-        """
-        Return MT5 connection status.
+        """Return current MT5 terminal and account connection health.
+
+        The cached state flag is only an initial prerequisite. Runtime health
+        is confirmed through MT5 before execution so a stale ``True`` value
+        cannot authorize an order after terminal or IPC failure.
         """
 
-        return self.state.connected
+        if not self.state.connected:
+            return False
+
+        terminal = mt5.terminal_info()
+        account = mt5.account_info()
+        if terminal is None or account is None:
+            self.state.connected = False
+            self.state.error_count += 1
+            return False
+
+        connected = bool(getattr(terminal, "connected", True))
+        trade_allowed = bool(getattr(terminal, "trade_allowed", True))
+        if not connected or not trade_allowed:
+            self.state.connected = False
+            self.state.error_count += 1
+            return False
+
+        return True
 
     def shutdown(self) -> None:
         """
