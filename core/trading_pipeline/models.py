@@ -44,6 +44,7 @@ from core.regime_detector.models import (
 )
 
 from core.risk_manager.models import (
+    RiskDecision,
     TradePlan,
 )
 
@@ -290,11 +291,19 @@ class PipelineResult:
     def approved(
         self,
     ) -> bool:
-        """
-        Final pipeline approval.
-        """
+        """Return whether every required pipeline gate approved the trade."""
 
-        if self.confluence is None:
-            return False
-
-        return self.confluence.approved
+        return (
+            self.regime.confirmed
+            and self.probability is not None
+            and self.probability.accepted
+            and self.trade_quality is not None
+            and self.trade_quality.approved
+            and self.confluence is not None
+            and self.confluence.approved
+            and self.decision is not None
+            and self.decision.approved
+            and self.signal is not None
+            and self.trade_plan is not None
+            and self.trade_plan.decision is RiskDecision.APPROVE
+        )
