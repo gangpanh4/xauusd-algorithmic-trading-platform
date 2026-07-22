@@ -30,7 +30,9 @@ class LiveTradingEngine:
         self.state = LiveTradingState()
         self.pipeline = TradingPipeline(config.pipeline)
         self.executor = MT5Executor(config.execution)
-        self.adapter = ExecutionAdapter(ExecutionAdapterConfig())
+        self.adapter = ExecutionAdapter(
+            ExecutionAdapterConfig(symbol=config.symbol)
+        )
 
     def start(self) -> None:
         """Start in analysis-only or live-execution mode."""

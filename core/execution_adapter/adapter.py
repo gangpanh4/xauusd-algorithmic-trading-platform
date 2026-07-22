@@ -56,7 +56,7 @@ class ExecutionAdapter:
         )
 
         execution_plan = ExecutionPlan(
-            symbol="XAUUSD",
+            symbol=self.config.symbol,
             side=side,
             volume=trade_plan.position_size,
             entry_price=trade_plan.entry_price,

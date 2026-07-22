@@ -13,6 +13,8 @@ class ExecutionAdapterConfig:
     Configuration options.
     """
 
+    symbol: str = "XAUUSD"
+
     default_comment: str = (
         "XAUUSD Platform v3.2"
     )
