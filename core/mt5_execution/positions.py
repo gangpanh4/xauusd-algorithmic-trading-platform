@@ -39,12 +39,22 @@ def _to_position_info(
     )
 
 
-def get_open_positions() -> list[PositionInfo]:
+def get_open_positions(
+    symbol: str | None = None,
+) -> list[PositionInfo]:
     """
-    Retrieve all open MT5 positions.
+    Retrieve open MT5 positions.
+
+    When ``symbol`` is supplied, only positions for that exact broker symbol
+    are returned. The no-argument API remains backward compatible.
     """
 
-    positions = mt5.positions_get()
+    if symbol is not None:
+        if not isinstance(symbol, str) or not symbol.strip():
+            raise ValueError("symbol must be a non-empty string or None")
+        positions = mt5.positions_get(symbol=symbol)
+    else:
+        positions = mt5.positions_get()
 
     if positions is None:
         return []

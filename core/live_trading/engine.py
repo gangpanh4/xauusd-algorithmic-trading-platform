@@ -11,6 +11,7 @@ from core.execution_adapter.adapter import ExecutionAdapter
 from core.execution_adapter.config import ExecutionAdapterConfig
 from core.mt5_execution.executor import MT5Executor
 from core.mt5_execution.models import OrderStatus
+from core.mt5_execution.positions import get_open_positions
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
 from core.trading_pipeline.models import PipelineResult
@@ -65,6 +66,25 @@ class LiveTradingEngine:
 
         if self.executor.is_connected():
             self.executor.shutdown()
+
+    def synchronize_open_positions(self) -> int:
+        """Synchronize risk exposure with broker positions for this symbol.
+
+        The MT5 terminal connection must already be available. This method is
+        intentionally explicit so unit tests and analysis-only engine startup
+        do not access MT5 implicitly.
+        """
+
+        positions = get_open_positions(self.config.symbol)
+        count = len(positions)
+        self.pipeline.set_open_position_count(count)
+
+        logger.info(
+            "Synchronized %d open %s position(s) with risk state.",
+            count,
+            self.config.symbol,
+        )
+        return count
 
     def process_bar(
         self,
@@ -234,6 +254,7 @@ class LiveTradingEngine:
                 trade_executed=False,
             )
 
+        self.pipeline.register_position_opened()
         self.state.executed_trades += 1
         self.state.last_ticket = execution_result.ticket
         self.state.last_error = ""

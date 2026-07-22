@@ -105,6 +105,7 @@ class TradingPlatform:
                 )
             mt5_started = True
             engine.start()
+            engine.synchronize_open_positions()
 
             logger.info("Loading synchronized historical bars...")
             for timeframe, service in services.items():
