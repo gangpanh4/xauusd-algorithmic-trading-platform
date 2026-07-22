@@ -66,7 +66,7 @@ class SignalGenerator:
         Generate a signal from the detected market regime.
         """
 
-        confidence = regime.confidence
+        regime_confidence = regime.confidence
 
         self.state.trend_scores[regime.trend_score] += 1
 
@@ -113,7 +113,7 @@ class SignalGenerator:
         if (
             upstream_approved
             and candidate_signal is not SignalType.HOLD
-            and confidence >= self.config.minimum_signal_confidence
+            and regime_confidence >= self.config.minimum_signal_confidence
             and regime.total_score >= self.config.minimum_total_score
             and (
                 not has_upstream_evidence
@@ -147,22 +147,28 @@ class SignalGenerator:
             and confluence is None
             and decision is None
         ):
-            if confidence >= 0.90:
+            if regime_confidence >= 0.90:
                 strength = SignalStrength.VERY_STRONG
-            elif confidence >= 0.75:
+            elif regime_confidence >= 0.75:
                 strength = SignalStrength.STRONG
-            elif confidence >= 0.60:
+            elif regime_confidence >= 0.60:
                 strength = SignalStrength.MODERATE
             else:
                 strength = SignalStrength.WEAK
         else:
             strength = self.policy.classify_strength(signal_score)
 
+        signal_confidence = (
+            signal_score.normalized
+            if has_upstream_evidence
+            else regime_confidence
+        )
+
         result = self._build_signal(
             timestamp=regime.observation_timestamp,
             signal=signal,
             strength=strength,
-            confidence=confidence,
+            confidence=signal_confidence,
             decision_score=(
                 decision.decision_score
                 if decision is not None
@@ -174,7 +180,15 @@ class SignalGenerator:
             ),
             reason=(
                 f"Regime={regime.primary_regime.value}, "
-                f"confidence={confidence:.3f}"
+                f"regime_confidence={regime_confidence:.3f}, "
+                f"signal_confidence={signal_confidence:.3f}"
+            ),
+            regime_confidence=regime_confidence,
+            signal_score=signal_score.normalized,
+            confidence_semantics=(
+                "composite_signal_score"
+                if has_upstream_evidence
+                else "regime_confidence"
             ),
         )
 
@@ -341,6 +355,9 @@ class SignalGenerator:
         confidence: float,
         decision_score: float,
         reason: str,
+        regime_confidence: float,
+        signal_score: float,
+        confidence_semantics: str,
     ) -> TradingSignal:
         """
         Build the final TradingSignal.
@@ -358,7 +375,10 @@ class SignalGenerator:
             reason=reason,
             metadata={
                 "decision_score": decision_score,
-            },  
+                "regime_confidence": regime_confidence,
+                "signal_score": signal_score,
+                "confidence_semantics": confidence_semantics,
+            },
         )
 
     def _update_state(
