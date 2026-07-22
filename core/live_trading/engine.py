@@ -12,6 +12,7 @@ from core.execution_adapter.config import ExecutionAdapterConfig
 from core.mt5_execution.deal_history import get_realized_deals
 from core.mt5_execution.executor import MT5Executor
 from core.mt5_execution.models import OrderStatus
+from core.mt5_execution.positions import get_open_positions
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
 from core.trading_pipeline.models import PipelineResult
@@ -66,6 +67,19 @@ class LiveTradingEngine:
 
         if self.executor.is_connected():
             self.executor.shutdown()
+
+    def synchronize_open_positions(self) -> int:
+        """Synchronize risk exposure from authoritative broker positions.
+
+        A partially closed position remains present and therefore keeps the
+        open-position count unchanged. A fully closed position disappears from
+        MT5 and reduces the count during the next reconciliation.
+        """
+
+        positions = get_open_positions(self.config.symbol)
+        count = len(positions)
+        self.pipeline.set_open_position_count(count)
+        return count
 
     def reconcile_realized_deals(
         self,
