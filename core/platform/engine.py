@@ -1,20 +1,8 @@
-"""
-Platform Engine
-
-Coordinates the lifecycle of the XAUUSD Algorithmic Trading Platform.
-
-Responsibilities
-----------------
-- Platform initialization
-- Configuration validation
-- Execution mode orchestration
-- Clean shutdown
-
-This module intentionally contains no trading strategy logic.
-"""
+"""Platform Engine."""
 
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 import time
 
@@ -25,17 +13,14 @@ from core.backtesting.runner import BacktestRunner
 from core.data.market_data import MarketDataService
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
+from core.live_trading.multi_timeframe_buffer import LiveMultiTimeframeBuffer
+from core.multi_timeframe.enums import Timeframe
 
 logger = logging.getLogger(__name__)
 
 
 class TradingPlatform:
-    """
-    Top-level platform controller.
-
-    This class coordinates platform execution while delegating
-    all trading responsibilities to specialized modules.
-    """
+    """Top-level platform lifecycle controller."""
 
     def __init__(self) -> None:
         self._initialized = False
@@ -45,34 +30,18 @@ class TradingPlatform:
         return self._initialized
 
     def initialize(self) -> None:
-        """
-        Initialize the trading platform.
-        """
         if self._initialized:
             logger.debug("Platform already initialized.")
             return
-
         logger.info("Initializing XAUUSD Trading Platform...")
-
-        # Future:
-        # - Load configuration
-        # - Validate environment
-        # - Initialize services
-
         self._initialized = True
-
         logger.info("Platform initialized successfully.")
 
     def run_backtest(self) -> None:
-        """
-        Execute the platform backtesting workflow.
-        """
-
         if not self._initialized:
             raise RuntimeError("Platform has not been initialized.")
 
         logger.info("Starting Backtesting Platform...")
-
         if not mt5.initialize():
             raise RuntimeError(
                 f"MT5 initialization failed: {mt5.last_error()}"
@@ -80,139 +49,161 @@ class TradingPlatform:
 
         try:
             config = BacktestConfig()
-
             runner = BacktestRunner(config)
-
             result = runner.run(
                 symbol="XAUUSD",
                 timeframe=mt5.TIMEFRAME_M15,
                 bars=50000,
             )
-
             runner.generate_reports(result)
-
             logger.info("Backtesting completed successfully.")
-
         finally:
             mt5.shutdown()
 
     def run_live(self) -> None:
-        """
-        Execute the live trading workflow.
-        """
+        """Run synchronized M5/M15/H1/H4 live analysis and optional execution."""
 
         if not self._initialized:
-            raise RuntimeError(
-                "Platform has not been initialized."
-            )
+            raise RuntimeError("Platform has not been initialized.")
 
         logger.info("Starting Live Trading Platform...")
-
         config = LiveTradingConfig()
-
         engine = LiveTradingEngine(config)
+        mt5_started = False
+
+        services = {
+            Timeframe.M5: MarketDataService(
+                symbol=config.symbol,
+                timeframe=mt5.TIMEFRAME_M5,
+            ),
+            Timeframe.M15: MarketDataService(
+                symbol=config.symbol,
+                timeframe=mt5.TIMEFRAME_M15,
+            ),
+            Timeframe.H1: MarketDataService(
+                symbol=config.symbol,
+                timeframe=mt5.TIMEFRAME_H1,
+            ),
+            Timeframe.H4: MarketDataService(
+                symbol=config.symbol,
+                timeframe=mt5.TIMEFRAME_H4,
+            ),
+        }
+        buffer = LiveMultiTimeframeBuffer(
+            window_bars=config.history_window_bars,
+        )
 
         try:
+            # Market data requires an MT5 terminal connection even when order
+            # execution is disabled.
+            if not mt5.initialize():
+                raise RuntimeError(
+                    f"MT5 initialization failed: {mt5.last_error()}"
+                )
+            mt5_started = True
             engine.start()
 
-            market_data = MarketDataService(
-                symbol="XAUUSD",
-                timeframe=mt5.TIMEFRAME_M15,
-            )
-
-            logger.info("Loading historical bars...")
-
-            history = market_data.get_historical_bars(500)
-
-            logger.info(
-                "Loaded %d historical bars.",
-                len(history),
-            )
-
-            logger.info("Warming up trading engine...")
+            logger.info("Loading synchronized historical bars...")
+            for timeframe, service in services.items():
+                history = service.get_historical_bars(
+                    config.history_window_bars,
+                )
+                if not history:
+                    raise RuntimeError(
+                        f"No completed {timeframe.value} history available."
+                    )
+                buffer.load(timeframe, history)
 
             account = mt5.account_info()
-
             if account is None:
-                raise RuntimeError(
-                    "Unable to retrieve account information."
-                )
+                raise RuntimeError("Unable to retrieve account information.")
 
-            for bar in history:
+            logger.info("Warming up synchronized analytical state...")
+            for m5_bar in buffer.histories[Timeframe.M5]:
+                boundary = m5_bar.timestamp + timedelta(minutes=5)
+                snapshot = buffer.snapshot(boundary)
+                if snapshot is None:
+                    engine.process_bar(
+                        m5_bar,
+                        account_balance=account.balance,
+                        stop_loss_distance=100.0,
+                        pip_value=1.0,
+                        warmup=True,
+                    )
+                    continue
 
-                engine.process_bar(
-                    bar,
+                engine.process_multi_timeframe(
+                    snapshot,
                     account_balance=account.balance,
                     stop_loss_distance=100.0,
                     pip_value=1.0,
                     warmup=True,
                 )
 
-            logger.info("Warm-up completed.")
-
-            logger.info(
-                "Live Trading Engine started successfully."
-            )
-
-            logger.info(
-                "Platform is ready to process market bars."
-            )
+            logger.info("Warm-up completed. Waiting for completed M5 bars.")
 
             try:
                 while True:
+                    m5_bar = services[Timeframe.M5].get_latest_closed_bar()
+                    if m5_bar is None:
+                        time.sleep(config.poll_interval_seconds)
+                        continue
 
-                    bar = market_data.get_latest_closed_bar()
+                    for timeframe in (
+                        Timeframe.M15,
+                        Timeframe.H1,
+                        Timeframe.H4,
+                    ):
+                        completed = services[timeframe].get_latest_closed_bar()
+                        if completed is not None:
+                            buffer.append(timeframe, completed)
 
-                    if bar is not None:
+                    if not buffer.append(Timeframe.M5, m5_bar):
+                        time.sleep(config.poll_interval_seconds)
+                        continue
 
-                        account = mt5.account_info()
-
-                        if account is None:
-                            logger.warning(
-                                "Unable to retrieve account information."
-                            )
-                            continue
-
-                        engine.process_bar(
-                            bar,
-                            account_balance=account.balance,
-                            stop_loss_distance=100.0,
-                            pip_value=1.0,
+                    boundary = m5_bar.timestamp + timedelta(minutes=5)
+                    snapshot = buffer.snapshot(boundary)
+                    if snapshot is None:
+                        logger.warning(
+                            "Skipping %s because synchronized MTF warm-up is "
+                            "incomplete.",
+                            m5_bar.timestamp,
                         )
+                        time.sleep(config.poll_interval_seconds)
+                        continue
 
-                    time.sleep(
-                        config.poll_interval_seconds,
+                    account = mt5.account_info()
+                    if account is None:
+                        logger.warning(
+                            "Unable to retrieve account information."
+                        )
+                        time.sleep(config.poll_interval_seconds)
+                        continue
+
+                    engine.process_multi_timeframe(
+                        snapshot,
+                        account_balance=account.balance,
+                        stop_loss_distance=100.0,
+                        pip_value=1.0,
                     )
+                    time.sleep(config.poll_interval_seconds)
 
             except KeyboardInterrupt:
-
-                logger.info(
-                    "Stopping live trading..."
-                )
+                logger.info("Stopping live trading...")
 
         finally:
-
             engine.stop()
-
-            logger.info(
-                "Live Trading Engine stopped."
-            )
+            if mt5_started:
+                mt5.shutdown()
+            logger.info("Live Trading Engine stopped.")
 
     def run_research(self) -> None:
-        """
-        Execute the research workflow.
-        """
         logger.info("Running Research Mode...")
 
     def shutdown(self) -> None:
-        """
-        Shutdown the trading platform.
-        """
         if not self._initialized:
             return
-
         logger.info("Shutting down platform...")
-
         self._initialized = False
-
         logger.info("Platform shutdown complete.")

@@ -5,6 +5,7 @@ State management for the Live Trading Engine.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass
@@ -25,6 +26,8 @@ class LiveTradingState:
 
     last_error: str = ""
 
+    last_processed_timestamp: datetime | None = None
+
     def reset(self) -> None:
         """
         Reset runtime statistics.
@@ -41,3 +44,5 @@ class LiveTradingState:
         self.last_ticket = None
 
         self.last_error = ""
+
+        self.last_processed_timestamp = None

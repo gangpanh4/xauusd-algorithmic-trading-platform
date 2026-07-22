@@ -35,4 +35,6 @@ class LiveTradingConfig:
 
     poll_interval_seconds: int = 5
 
+    history_window_bars: int = 500
+
     live_execution_enabled: bool = False

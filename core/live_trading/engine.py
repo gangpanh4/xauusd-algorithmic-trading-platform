@@ -1,15 +1,18 @@
-"""
-Live Trading Engine.
-"""
+"""Live Trading Engine."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from datetime import UTC
 import logging
 
+from core.data.models import MarketBar
 from core.execution_adapter.adapter import ExecutionAdapter
 from core.execution_adapter.config import ExecutionAdapterConfig
 from core.mt5_execution.executor import MT5Executor
+from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
+from core.trading_pipeline.models import PipelineResult
 from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
@@ -20,17 +23,9 @@ logger = logging.getLogger(__name__)
 
 
 class LiveTradingEngine:
-    """
-    Coordinate the live trading workflow.
+    """Coordinate live analysis and optional MT5 order execution."""
 
-    Market analysis may run while live execution is disabled. In that mode the
-    engine must never initialize MetaTrader 5 or submit an order.
-    """
-
-    def __init__(
-        self,
-        config: LiveTradingConfig,
-    ) -> None:
+    def __init__(self, config: LiveTradingConfig) -> None:
         self.config = config
         self.state = LiveTradingState()
         self.pipeline = TradingPipeline(config.pipeline)
@@ -38,20 +33,15 @@ class LiveTradingEngine:
         self.adapter = ExecutionAdapter(ExecutionAdapterConfig())
 
     def start(self) -> None:
-        """
-        Start the engine in analysis-only or live-execution mode.
-
-        Raises:
-            RuntimeError: If live execution is enabled but MT5 initialization
-                fails.
-        """
+        """Start in analysis-only or live-execution mode."""
 
         self.state.reset()
 
         if not self.config.live_execution_enabled:
             self.state.running = True
             logger.warning(
-                "Live execution is disabled; MT5 will not be initialized."
+                "Live execution is disabled; the execution adapter will not "
+                "initialize MT5."
             )
             return
 
@@ -63,9 +53,7 @@ class LiveTradingEngine:
         self.state.running = True
 
     def stop(self) -> None:
-        """
-        Stop the engine without touching MT5 in analysis-only mode.
-        """
+        """Stop without touching MT5 in analysis-only mode."""
 
         self.state.running = False
 
@@ -77,26 +65,14 @@ class LiveTradingEngine:
 
     def process_bar(
         self,
-        bar,
+        bar: MarketBar,
         *,
         account_balance: float,
         stop_loss_distance: float,
         pip_value: float,
         warmup: bool = False,
     ) -> LiveTradingResult:
-        """
-        Process one completed market bar.
-
-        An approved trade plan is intentionally returned without execution when
-        ``live_execution_enabled`` is false.
-        """
-
-        self.state.processed_bars += 1
-
-        logger.info(
-            "Processing new bar: %s",
-            bar.timestamp,
-        )
+        """Process one completed bar through the legacy single-timeframe path."""
 
         pipeline_result = self.pipeline.process_bar(
             bar,
@@ -104,6 +80,77 @@ class LiveTradingEngine:
             stop_loss_distance=stop_loss_distance,
             pip_value=pip_value,
         )
+        return self._finalize_observation(
+            observation_bar=bar,
+            pipeline_result=pipeline_result,
+            warmup=warmup,
+        )
+
+    def process_multi_timeframe(
+        self,
+        bars_by_timeframe: Mapping[Timeframe, Sequence[MarketBar]],
+        *,
+        account_balance: float,
+        stop_loss_distance: float,
+        pip_value: float,
+        tick_size: float = TradingPipeline.DEFAULT_TICK_SIZE,
+        lot_step: float = TradingPipeline.DEFAULT_LOT_STEP,
+        warmup: bool = False,
+    ) -> LiveTradingResult:
+        """Process the same synchronized MTF evidence used by backtesting."""
+
+        if not isinstance(bars_by_timeframe, Mapping):
+            raise TypeError("bars_by_timeframe must be a mapping")
+
+        m5_bars = bars_by_timeframe.get(Timeframe.M5)
+        if not m5_bars:
+            raise ValueError("Missing completed M5 bars for live processing.")
+
+        mtf_result = self.pipeline.multi_timeframe.process(
+            bars_by_timeframe,
+        )
+        confluence = self.pipeline.confluence_engine.evaluate_multi_timeframe(
+            mtf_result,
+        )
+        observation_bar = m5_bars[-1]
+
+        pipeline_result = self.pipeline.process_bar(
+            observation_bar,
+            confluence=confluence,
+            multi_timeframe_result=mtf_result,
+            market_structure_result=mtf_result.m5.market_structure,
+            account_balance=account_balance,
+            stop_loss_distance=stop_loss_distance,
+            pip_value=pip_value,
+            tick_size=tick_size,
+            lot_step=lot_step,
+        )
+        return self._finalize_observation(
+            observation_bar=observation_bar,
+            pipeline_result=pipeline_result,
+            warmup=warmup,
+        )
+
+    def _finalize_observation(
+        self,
+        *,
+        observation_bar: MarketBar,
+        pipeline_result: PipelineResult,
+        warmup: bool,
+    ) -> LiveTradingResult:
+        """Apply chronology, diagnostics, and optional execution."""
+
+        timestamp = observation_bar.timestamp.astimezone(UTC)
+        previous = self.state.last_processed_timestamp
+        if previous is not None and timestamp <= previous:
+            raise ValueError(
+                "Live observation timestamps must increase strictly."
+            )
+
+        self.state.last_processed_timestamp = timestamp
+        self.state.processed_bars += 1
+
+        logger.info("Processing completed bar: %s", timestamp)
 
         if warmup:
             return LiveTradingResult(
@@ -112,14 +159,25 @@ class LiveTradingEngine:
                 trade_executed=False,
             )
 
-        logger.info(
-            "Signal=%s Decision=%s",
-            pipeline_result.signal.direction,
-            pipeline_result.trade_plan.decision,
-        )
-
+        signal = pipeline_result.signal
         trade_plan = pipeline_result.trade_plan
 
+        if signal is None or trade_plan is None:
+            self.state.skipped_trades += 1
+            logger.warning(
+                "Pipeline returned no executable signal or trade plan."
+            )
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=None,
+                trade_executed=False,
+            )
+
+        logger.info(
+            "Signal=%s Decision=%s",
+            signal.direction,
+            trade_plan.decision,
+        )
         logger.info(
             "Entry=%s SL=%s TP=%s Volume=%s",
             trade_plan.entry_price,
@@ -128,7 +186,7 @@ class LiveTradingEngine:
             trade_plan.position_size,
         )
 
-        if trade_plan.decision != RiskDecision.APPROVE:
+        if trade_plan.decision is not RiskDecision.APPROVE:
             self.state.skipped_trades += 1
             return LiveTradingResult(
                 pipeline_result=pipeline_result,
@@ -156,16 +214,8 @@ class LiveTradingEngine:
             raise RuntimeError(self.state.last_error)
 
         execution_request = self.adapter.adapt(pipeline_result)
-
-        logger.info("Sending order to MT5...")
-
         execution_result = self.executor.execute_order(
             execution_request.order_request,
-        )
-
-        logger.info(
-            "Execution result: %s",
-            execution_result,
         )
 
         self.state.executed_trades += 1
