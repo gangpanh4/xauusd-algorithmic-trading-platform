@@ -43,17 +43,34 @@ class ExecutionAdapter:
         Convert a PipelineResult into an OrderRequest.
         """
 
+        if pipeline_result is None:
+            raise ValueError("pipeline_result cannot be None")
+
         trade_plan = pipeline_result.trade_plan
         signal = pipeline_result.signal
+
+        if trade_plan is None:
+            raise ValueError(
+                "pipeline_result.trade_plan is required for execution"
+            )
+        if signal is None:
+            raise ValueError(
+                "pipeline_result.signal is required for execution"
+            )
+
         direction = getattr(signal, "direction", None)
         if direction is None:
             direction = getattr(signal, "signal", None)
 
-        side = (
-            OrderSide.BUY
-            if direction.name == "BUY"
-            else OrderSide.SELL
-        )
+        direction_name = getattr(direction, "name", None)
+        if direction_name == "BUY":
+            side = OrderSide.BUY
+        elif direction_name == "SELL":
+            side = OrderSide.SELL
+        else:
+            raise ValueError(
+                "Execution requires an explicit BUY or SELL signal"
+            )
 
         execution_plan = ExecutionPlan(
             symbol=self.config.symbol,
