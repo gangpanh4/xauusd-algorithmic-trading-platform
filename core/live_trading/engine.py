@@ -95,12 +95,15 @@ class LiveTradingEngine:
         ]
 
         for deal in new_deals:
-            self.state.processed_deal_tickets.add(deal.ticket)
             if not initialize_only:
                 self.pipeline.register_realized_pnl(
                     deal.net_pnl,
                     timestamp=deal.timestamp,
                 )
+
+            # Mark the deal processed only after every required state update
+            # succeeds. A failure therefore remains retryable.
+            self.state.processed_deal_tickets.add(deal.ticket)
 
         if not initialize_only:
             self.pipeline.synchronize_account_balance(
@@ -279,6 +282,7 @@ class LiveTradingEngine:
                 trade_executed=False,
             )
 
+        self.pipeline.register_position_opened()
         self.state.executed_trades += 1
         self.state.last_ticket = execution_result.ticket
         self.state.last_error = ""
