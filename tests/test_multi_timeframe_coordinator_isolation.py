@@ -95,7 +95,7 @@ def test_coordinator_owns_one_distinct_analyzer_per_timeframe() -> None:
         assert [call[0] for call in analyzer.analyze_calls] == [timeframe]
 
 
-def test_repeated_full_snapshot_replay_resets_each_timeframe_analyzer() -> None:
+def test_repeated_identical_snapshot_reuses_cached_timeframe_states() -> None:
     coordinator = MultiTimeframeCoordinator(
         analyzer_factory=RecordingAnalyzer,
     )
@@ -108,9 +108,8 @@ def test_repeated_full_snapshot_replay_resets_each_timeframe_analyzer() -> None:
     assert second.overall_bias is MarketBias.BULLISH
 
     for analyzer in coordinator.analyzers.values():
-        assert analyzer.reset_calls == 2
-        assert len(analyzer.analyze_calls) == 2
-
+        assert analyzer.reset_calls == 1
+        assert len(analyzer.analyze_calls) == 1
 
 def test_process_is_transactional_when_one_timeframe_analysis_fails() -> None:
     RecordingAnalyzer.fail_on = Timeframe.H1

@@ -33,9 +33,10 @@ class MultiTimeframeCoordinator:
     5. Return one MultiTimeframeResult.
 
     ``TimeframeAnalyzer.analyze()`` consumes the complete supplied bar history.
-    Each analyzer is therefore reset before a new snapshot is replayed. This
-    prevents duplicate-bar accumulation across repeated coordinator calls while
-    preserving isolation between W1, D1, H4, H1, M15, and M5.
+    Changed snapshots are reset and replayed, while byte-for-byte equivalent
+    immutable bar snapshots reuse their previously calculated state. This avoids
+    repeated higher-timeframe work while preserving isolation between W1, D1,
+    H4, H1, M15, and M5.
     """
 
     def __init__(
@@ -74,6 +75,14 @@ class MultiTimeframeCoordinator:
         self.manager = MultiTimeframeManager(self.config)
         self.engine = MultiTimeframeEngine(self.config)
 
+        # Cache the exact immutable input snapshot and resulting state for each
+        # timeframe. Higher-timeframe windows often remain unchanged across
+        # many lower-timeframe observations; replaying those windows would be
+        # deterministic but unnecessarily expensive.
+        self._snapshot_cache: dict[
+            Timeframe, tuple[tuple[MarketBar, ...], TimeframeState]
+        ] = {}
+
     @property
     def analyzers(self) -> Mapping[Timeframe, TimeframeAnalyzer]:
         """Return a read-only mapping of isolated timeframe analyzers."""
@@ -100,6 +109,7 @@ class MultiTimeframeCoordinator:
             analyzer.reset()
 
         self.manager.reset()
+        self._snapshot_cache.clear()
 
     def process(
         self,
@@ -116,6 +126,9 @@ class MultiTimeframeCoordinator:
             raise TypeError("bars_by_timeframe must be a mapping")
 
         pending_states: dict[Timeframe, TimeframeState] = {}
+        pending_cache: dict[
+            Timeframe, tuple[tuple[MarketBar, ...], TimeframeState]
+        ] = {}
 
         for timeframe in self.config.active_timeframes:
             bars = bars_by_timeframe.get(timeframe)
@@ -123,25 +136,33 @@ class MultiTimeframeCoordinator:
             if not bars:
                 raise ValueError(f"Missing bars for {timeframe.value}.")
 
-            analyzer = self._analyzers[timeframe]
+            immutable_bars = tuple(bars)
+            cached = self._snapshot_cache.get(timeframe)
 
-            # ``analyze`` replays the full supplied sequence. Resetting avoids
-            # duplicate state accumulation when the coordinator is called again
-            # with an overlapping or growing historical window.
-            analyzer.reset()
+            if cached is not None and cached[0] == immutable_bars:
+                state = cached[1]
+            else:
+                analyzer = self._analyzers[timeframe]
 
-            state = analyzer.analyze(
-                timeframe=timeframe,
-                bars=bars,
-            )
+                # ``analyze`` replays the full supplied sequence. Resetting
+                # avoids duplicate state accumulation whenever the snapshot
+                # changes. Unchanged snapshots reuse their prior deterministic
+                # state and skip the replay entirely.
+                analyzer.reset()
 
-            if state.timeframe is not timeframe:
-                raise ValueError(
-                    "TimeframeAnalyzer returned a state for "
-                    f"{state.timeframe.value}; expected {timeframe.value}."
+                state = analyzer.analyze(
+                    timeframe=timeframe,
+                    bars=immutable_bars,
                 )
 
+                if state.timeframe is not timeframe:
+                    raise ValueError(
+                        "TimeframeAnalyzer returned a state for "
+                        f"{state.timeframe.value}; expected {timeframe.value}."
+                    )
+
             pending_states[timeframe] = state
+            pending_cache[timeframe] = (immutable_bars, state)
 
         for timeframe in self.config.active_timeframes:
             self.manager.update(
@@ -149,7 +170,12 @@ class MultiTimeframeCoordinator:
                 pending_states[timeframe],
             )
 
-        return self.engine.process(self.manager)
+        result = self.engine.process(self.manager)
+
+        # Publish the cache only after every analysis, manager update, and
+        # aggregate calculation has completed successfully.
+        self._snapshot_cache = pending_cache
+        return result
 
     def _validate_configured_timeframes(self) -> None:
         """Validate the timeframe ownership contract used by the coordinator."""
