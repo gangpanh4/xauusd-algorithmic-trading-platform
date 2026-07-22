@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import MetaTrader5 as mt5
 
+from .close_position import close_position
 from .config import MT5ExecutionConfig
 from .models import OrderRequest, OrderResult
 from .orders import send_order
@@ -62,6 +63,22 @@ class MT5Executor:
 
         return send_order(
             request=request,
+            config=self.config,
+        )
+
+    def close_position(
+        self,
+        ticket: int,
+    ) -> OrderResult:
+        """Close an existing position through the connected MT5 executor."""
+
+        if not self.state.connected:
+            raise RuntimeError(
+                "MT5Executor is not connected."
+            )
+
+        return close_position(
+            ticket=ticket,
             config=self.config,
         )
 
