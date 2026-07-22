@@ -1,0 +1,119 @@
+Section 7: Confidence Calculation
+How should confidence be defined?
+Which factors contribute to confidence?
+How should indicator agreement influence confidence?
+Should confidence increase with regime persistence?
+How should uncertainty be represented?
+Should confidence be normalized to a range of 0–1?
+
+
+Section 7: Confidence Calculation
+
+7.1 Defining Confidence
+Confidence must be defined precisely and operationally — an informal notion of "how sure the system is" is insufficient for a production module whose output is consumed by risk engines, position sizers, and allocation models that require a calibrated, interpretable score.
+Formal definition: Confidence is the module's estimate of the posterior probability that the current regime label is correct, conditioned on all available evidence at the time of labeling. It is not a measure of signal strength, trend intensity, or volatility magnitude — those are raw signal values. Confidence specifically quantifies label reliability: a high-confidence ranging label means the system assigns high probability that the market is genuinely ranging, not that the range is wide or stable.
+This distinction has practical consequences. A very strong ADX reading produces a high-confidence trending label. But a moderate ADX reading that is corroborated by volume, momentum, and macro context may produce an equally high or higher confidence label than a strong but uncorroborated ADX alone. Confidence aggregates evidence quality, not signal intensity.
+Two distinct confidence quantities must be maintained:
+
+Instantaneous confidence — the confidence assigned to the current regime label at the current observation, based on current signal values. This is what most downstream consumers use for position sizing and risk scaling.
+Regime confidence — the confidence that the current regime epoch (the uninterrupted run of the current label) is correctly classified, updated as a running estimate since the last confirmed regime entry. This grows with persistence (see 7.4) and resets on each transition.
+
+Both quantities must be computed and exposed separately. Conflating them produces a confidence estimate that is neither a reliable instantaneous signal nor a reliable persistence-adjusted one.
+Calibration requirement: Confidence scores must be empirically calibrated against historical labeling accuracy. A score of 0.80 should correspond to approximately 80% historical accuracy on similarly-scored observations. Uncalibrated scores — raw probability estimates from a model that has never been checked against realized accuracy — are not production-ready. Calibration curves should be generated and stored as part of the module's initialization artifacts, and rechecked during each adaptive recalibration cycle.
+
+7.2 Contributing Factors
+Confidence is a composite score assembled from multiple independent evidence dimensions. Each dimension contributes a sub-score; the composite is computed as a weighted combination. The weights are configurable and should be recalibrated periodically against historical accuracy.
+Factor 1 — Primary signal margin. How far the primary signal is from the nearest threshold boundary, expressed as a normalized distance. A signal deep inside a regime's territory contributes high confidence; a signal near the boundary contributes low confidence regardless of which side it is on. Computed as the ratio of (signal value − nearest threshold) to (threshold range width). Capped at 1.0 to prevent extreme signal values from dominating the composite.
+Factor 2 — Indicator agreement rate. The fraction of independent indicators that agree with the current regime label, weighted by each indicator's historical precision on this regime class. Described in detail in 7.3.
+Factor 3 — Regime persistence. Time elapsed in the current regime relative to its historical median duration. Described in detail in 7.4.
+Factor 4 — Historical base rate alignment. Whether the current regime is consistent with the expected base rate distribution. A regime that is rare in historical data (e.g., sustained strong trending in a normally mean-reverting instrument) should carry a confidence penalty reflecting its low prior probability. This is a Bayesian prior term: the likelihood-based evidence from Factors 1–2 must overcome a low prior to produce high composite confidence.
+Factor 5 — Signal stability. The variance of the primary signal over the confirmation window. A signal that crossed the threshold cleanly and has remained stable since contributes higher confidence than one that crossed erratically and has been oscillating near the threshold. Measured as 1 − (normalized rolling standard deviation of the signal over the dwell window).
+Factor 6 — Macro context alignment. A binary or graded agreement term reflecting whether the macro overlay state is consistent with the current micro regime label. Full consistency contributes a positive adjustment; contradiction applies a penalty; absence of macro data applies no adjustment (neutral). This factor should have a lower default weight than Factors 1–3, as macro overlays may not be available in all deployment contexts.
+Factor 7 — Recency of calibration. A time-decay term reflecting how recently the adaptive thresholds were last recalibrated. Confidence in threshold-based decisions degrades as the calibration ages, because structural drift may have moved the true regime boundaries away from the current thresholds. This factor decays linearly from 1.0 at recalibration to a configurable floor (default: 0.85) at the maximum allowable recalibration age.
+Composite assembly:
+confidence = w1·F1 + w2·F2 + w3·F3 + w4·F4 + w5·F5 + w6·F6 + w7·F7
+where weights sum to 1.0. Default weights must be documented in configuration. Any factor for which input data is unavailable is excluded from the sum and the remaining weights are renormalized rather than treated as zero — zero-imputation would penalize deployments with fewer indicators, producing artificially low confidence scores that are not comparable across configurations.
+
+7.3 Indicator Agreement and Confidence
+Indicator agreement is the most operationally tractable confidence component and deserves its own design specification.
+Agreement is not a simple vote count. Three indicators agreeing out of four is not automatically better than two out of two. What matters is the weighted precision of agreeing indicators on this specific regime class, and the independence of those indicators from one another.
+Independence-adjusted agreement score:
+Before computing the agreement score, cluster all indicators by their underlying data source. Price-derived indicators (ADX, MA slope, momentum) form one cluster; volume-derived indicators form another; volatility-derived indicators a third; macro/cross-asset indicators a fourth. Within each cluster, agreement is aggregated to a single cluster vote weighted by the precision of the best indicator in that cluster. Cross-cluster agreement is then computed as the fraction of clusters voting for the current regime, weighted by each cluster's historical reliability.
+This prevents a situation where five price-derived indicators agreeing — all correlated with each other by construction — produces spuriously high confidence simply because many indicators were defined.
+Precision weighting: Each indicator maintains a per-regime precision score from the calibration dataset: the fraction of times this indicator voted for this regime class and the label was subsequently confirmed correct. These precision scores are stored in the module's calibration artifact and updated during recalibration cycles. An indicator with 0.90 precision on trending regimes but 0.55 precision on ranging regimes contributes its vote with weight 0.90 when evaluating a trending label, and 0.55 when evaluating a ranging label.
+Dissent penalty structure: The agreement factor is not merely the weighted sum of agreeing indicators. Dissenting indicators apply a multiplicative penalty to the agreement score, scaled by their historical precision on the proposed regime class. A high-precision dissenter (an indicator that is usually right about this regime) applies a larger penalty than a low-precision dissenter. This asymmetry is intentional: if your most reliable trend indicator dissents from a trending label, confidence should drop substantially even if four lower-quality indicators agree.
+Agreement factor formula:
+agreement_score = (Σ precision_i for agreeing indicators) 
+                  × (1 − Σ α·precision_j for dissenting indicators)
+normalized to [0, 1]
+where α is a configurable dissent amplification factor (default: 0.6). The dissent term is additive across dissenters, capped at 0.5 to prevent a single dissenter from collapsing the agreement score to zero regardless of how many high-quality indicators agree.
+
+7.4 Confidence and Regime Persistence
+Confidence should increase with regime persistence, but the relationship must be carefully specified to avoid two failure modes: overconfident stale labels and under-responsive crisis detection.
+The empirical basis: Regime persistence is informative because regimes are autocorrelated. A trending regime that has been correctly labeled for 15 consecutive days is more likely to remain trending tomorrow than a trending regime that was just entered. This is not circular reasoning — it reflects genuine autocorrelation in the underlying market structure, and it is the correct Bayesian update to make.
+Persistence contribution design:
+Define a persistence factor P(t) as a function of the time elapsed since confirmed regime entry:
+P(t) = P_max · (1 − exp(−t / τ))
+where t is periods elapsed since regime entry, τ is a regime-specific time constant (the number of periods at which persistence has contributed half its maximum value), and P_max is the maximum persistence contribution to confidence (a configurable ceiling, default: 0.20, meaning persistence can contribute at most 20 percentage points to the composite confidence score).
+Regime-specific time constants:
+Regimeτ (periods)P_maxStrongly Trending100.20Weakly Trending70.15Ranging120.20High Volatility50.15Crisis30.10Low Volatility150.20
+The shorter time constants for crisis and high-volatility regimes reflect that these regimes can terminate quickly — persistence should accrue more cautiously. The lower P_max for crisis reflects deliberate conservatism: the module should not become highly confident a crisis is ongoing to the point that it suppresses detection of recovery signals.
+Hard cap on persistence contribution: Persistence can never be the sole driver of high confidence. If the instantaneous confidence from Factors 1–2 (primary signal margin and indicator agreement) falls below a minimum floor (default: 0.40), the persistence bonus is zeroed out regardless of how long the regime has been running. A stale, weakly-supported regime label should not achieve high confidence simply because nothing has explicitly contradicted it for a long time.
+Persistence reset: On regime transition, the persistence factor resets to zero immediately. During the confirmation window (before a transition is committed), persistence is not applied to the candidate new regime — it continues to apply to the outgoing regime until the transition is committed.
+
+7.5 Representing Uncertainty
+Confidence is a point estimate; it does not fully represent the epistemic state of the module. A confidence score of 0.65 could reflect a clear second-best regime at 0.30 (a bimodal near-split) or a diffuse uncertainty across four regimes. These situations have very different implications for downstream consumers and must be distinguished.
+Full regime probability distribution: The module must output a probability vector over all defined regime classes at every observation, not just a scalar confidence for the winning label. The winning label's probability is the instantaneous confidence; the full vector contains the information about how probability mass is distributed across alternatives. Downstream consumers who apply their own decision logic (e.g., blend strategy weights proportional to regime probabilities rather than hard-switching) require the full distribution.
+Uncertainty decomposition: Distinguish between two types of uncertainty in the output metadata:
+
+Aleatoric uncertainty — irreducible uncertainty arising from the market genuinely being near a regime boundary or in transition. Indicated when the top two regime probabilities are within a configurable tolerance of each other (default: 0.15). This is real ambiguity; no amount of additional data would resolve it cleanly.
+Epistemic uncertainty — uncertainty arising from insufficient data, stale calibration, or conflicting signals of known provenance. Indicated by active flags: OSCILLATION_WARNING, CALIBRATION_STALE, STRUCTURAL_BREAK_DETECTED, DATA_QUALITY_WARNING. This uncertainty is reducible — it would decrease with better data or fresher calibration.
+
+Both types must be explicitly flagged in output metadata. Downstream consumers have different appropriate responses: aleatoric uncertainty warrants conservative position sizing; epistemic uncertainty may warrant delaying a decision until the source is resolved.
+Confidence interval output: For the instantaneous confidence score, output a 90% empirical confidence interval derived from the calibration dataset's bootstrap distribution at similar signal configurations. This interval communicates the historical reliability of confidence estimates at this level — a confidence score of 0.72 with interval [0.68, 0.76] is more trustworthy than one with interval [0.55, 0.88], even though the point estimate is the same.
+Entropy as a summary uncertainty metric: Compute the Shannon entropy of the full regime probability distribution at each observation. High entropy indicates diffuse uncertainty across regimes; low entropy indicates confident concentration on one label. Expose this as a scalar regime_entropy output field. It provides a single-number uncertainty summary for consumers who do not process the full probability vector.
+
+7.6 Normalization to [0, 1]
+Yes — the final confidence score must be normalized to a closed [0, 1] interval, but the normalization requires deliberate design. Naive normalization produces a score whose endpoints are never reached in practice, which compresses the useful range and makes the score harder to act on.
+Hard boundary semantics: The endpoints must carry explicit meaning:
+
+0.0 — the module has no basis to assert the current label. This should only be reachable under specific defined conditions: active structural break with all signals conflicting, data quality failure causing total signal loss, or system initialization before minimum history has accumulated. It is not simply a "very low confidence" value — it is a sentinel indicating the label should not be consumed.
+1.0 — this value should be unreachable in live operation. Perfect confidence is not epistemically justified. The composite score formula should be designed so that the maximum achievable score under ideal conditions is approximately 0.95, leaving a structural gap at the top that communicates humility about model completeness.
+
+Calibration-based normalization: The composite weighted sum from 7.2 will not naturally produce uniform coverage of [0, 1]. After computing the raw composite, apply a calibration mapping — a monotone transformation fit during calibration that maps the empirical distribution of raw composite scores to the [0, 1] range such that the resulting scores are probability-calibrated (i.e., a score of 0.70 corresponds to 70% historical accuracy). Use isotonic regression on the calibration dataset's (raw score, label correctness) pairs to fit this mapping. Store the fitted isotonic regression as part of the module's calibration artifact and refit it during each recalibration cycle.
+Operational thresholds on the normalized score:
+Define named tiers on the normalized scale and expose them as a categorical confidence_tier field alongside the scalar score. These tiers provide a human-readable and rule-based-friendly version of the score:
+TierScore RangeInterpretationRecommended Downstream BehaviorVERY_LOW[0.0, 0.40)Label unreliable; near boundary or conflicting signalsDo not act; treat as regime unknownLOW[0.40, 0.55)Weak evidence; transition may be in progressReduce exposure; monitor closelyMODERATE[0.55, 0.70)Reasonable evidence; some uncertainty remainsNormal operation with reduced sizingHIGH[0.70, 0.85)Strong multi-factor agreementFull strategy allocation appropriateVERY_HIGH[0.85, 1.0)Deep in regime, strong corroboration, stableMaximum conviction allocation
+These tier boundaries are configurable. They are deliberately asymmetric — the HIGH and VERY_HIGH tiers together cover only 30% of the scale, reflecting that high-confidence regime labels should be relatively rare. If backtesting reveals that more than 60% of observations are classified as HIGH or VERY_HIGH, the tier boundaries or the composite weighting should be reviewed for overconfidence.
+Score continuity requirement: The normalized confidence score must be a continuous value within each tier, not discretized to tier midpoints. Downstream consumers who use the scalar score for continuous position sizing must receive a smooth signal. The tier label is a categorical convenience; the scalar is the ground truth output.
+
+
+
+## ChatGPT Review Notes
+
+### Adopt
+- Normalize confidence to the range [0,1].
+- Include confidence tiers (VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH).
+- Increase confidence when multiple independent indicators agree.
+- Reduce confidence near decision thresholds.
+- Reduce confidence when indicators conflict.
+- Return UNKNOWN when confidence falls below a configurable minimum.
+
+### Simplify for v2.3
+- Output a single confidence score instead of separate instantaneous and regime confidence.
+- Base confidence on:
+  - Indicator agreement
+  - Threshold distance
+  - Regime persistence
+  - Data quality
+  - Transition status
+- Use simple additive scoring instead of Bayesian probability models.
+
+### Defer to Future Versions
+- Posterior probability vectors
+- Shannon entropy
+- Isotonic regression calibration
+- Bootstrap confidence intervals
+- Aleatoric vs. epistemic uncertainty
+- Precision-weighted indicator voting
+- Calibration aging adjustments

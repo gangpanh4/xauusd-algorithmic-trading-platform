@@ -1,0 +1,75 @@
+# ==========================================================
+# Default Strategy Configuration
+# ==========================================================
+
+strategy:
+
+  name: "Baseline"
+
+  version: "2.0.0"
+
+# ==========================================================
+# Risk Management
+# ==========================================================
+
+risk:
+
+  fixed_lot_size: 0.01
+
+  risk_percent: 1.0
+
+  risk_reward_ratio: 2.0
+
+  maximum_open_positions: 1
+
+  maximum_daily_loss: 5.0
+
+  allow_multiple_positions: false
+
+# ==========================================================
+# Signal Generator
+# ==========================================================
+
+signal:
+
+  minimum_signal_confidence: 0.70
+
+  minimum_total_score: 6.0
+
+  signal_cooldown_bars: 3
+
+  trend_confirmation_bars: 1
+
+# ==========================================================
+# Trade Management
+# ==========================================================
+
+trade_management:
+
+  breakeven_enabled: false
+
+  breakeven_trigger_r: 1.0
+
+  trailing_stop_enabled: false
+
+  trailing_stop_trigger_r: 2.0
+
+  trailing_stop_distance_r: 1.0
+
+  time_exit_enabled: false
+
+  maximum_holding_bars: 50
+
+# ==========================================================
+# Backtesting
+# ==========================================================
+
+backtest:
+
+  spread: 0.0
+
+  slippage: 0.0
+
+  commission: 0.0
+
+  initial_balance: 10000

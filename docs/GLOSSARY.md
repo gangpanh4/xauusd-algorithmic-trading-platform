@@ -1,0 +1,361 @@
+# Glossary
+
+> This glossary defines the terminology used throughout the XAUUSD Algorithmic Trading Platform. It provides a common vocabulary for developers, researchers, and contributors.
+
+---
+
+# Purpose
+
+This document serves as a reference for technical, trading, and architectural terms used within the project.
+
+Definitions should remain consistent across documentation, code, and research.
+
+---
+
+# Trading Concepts
+
+## ATR (Average True Range)
+
+A volatility indicator that measures the average price movement over a specified number of periods.
+
+Used for:
+
+- Stop-loss sizing
+- Take-profit sizing
+- Volatility analysis
+- Liquidity measurements
+
+---
+
+## BOS (Break of Structure)
+
+A market structure event where price breaks a previously confirmed swing high or swing low, indicating continuation of the current trend.
+
+Within this project, BOS is detected by the Market Structure Engine and contributes to structure confidence.
+
+---
+
+## CHOCH (Change of Character)
+
+A market structure event indicating a potential trend reversal.
+
+CHOCH occurs when price breaks structure against the prevailing trend.
+
+---
+
+## Fair Value Gap (FVG)
+
+A price imbalance created by rapid market movement where little or no trading occurred.
+
+FVGs may act as areas of future price interest.
+
+---
+
+## Liquidity
+
+Areas where stop-loss orders or pending orders are concentrated.
+
+Examples include:
+
+- Previous highs
+- Previous lows
+- Equal highs
+- Equal lows
+
+Liquidity is used to evaluate market intent and potential price movement.
+
+---
+
+## Liquidity Sweep
+
+A movement where price briefly trades beyond a liquidity level before reversing.
+
+Sweeps are commonly used as confirmation within Smart Money Concepts (SMC).
+
+---
+
+## Market Structure
+
+The arrangement of swing highs, swing lows, trends, and structural events that describe the current state of the market.
+
+The Market Structure Engine is responsible for identifying these components.
+
+---
+
+## Order Block
+
+A price zone associated with significant institutional buying or selling activity.
+
+Order Blocks are often used as potential support or resistance areas.
+
+---
+
+## Swing High
+
+A confirmed local maximum surrounded by lower highs on both sides.
+
+Swing highs form the foundation of market structure analysis.
+
+---
+
+## Swing Low
+
+A confirmed local minimum surrounded by higher lows on both sides.
+
+Swing lows are used alongside swing highs to determine market structure.
+
+---
+
+## Trend
+
+The prevailing market direction.
+
+Possible values include:
+
+- Bullish
+- Bearish
+- Neutral
+
+---
+
+# Project Concepts
+
+## Backtesting
+
+The process of evaluating a trading strategy using historical market data.
+
+Backtesting estimates how a strategy would have performed under past market conditions.
+
+---
+
+## Confidence
+
+A normalized score representing how strongly a subsystem supports its conclusion.
+
+Examples include:
+
+- Structure confidence
+- Probability confidence
+
+Confidence values typically range from 0.0 to 1.0.
+
+---
+
+## Configuration
+
+A collection of adjustable parameters that control system behavior without modifying business logic.
+
+Examples:
+
+- Lookback periods
+- Thresholds
+- Risk settings
+
+---
+
+## Detector
+
+A component responsible for identifying specific market events.
+
+Examples:
+
+- Swing Detector
+- BOS Detector
+- CHOCH Detector
+- Liquidity Detector
+
+---
+
+## Engine
+
+A high-level component that coordinates one or more detectors, analyzers, or processors.
+
+Examples:
+
+- Market Structure Engine
+- Probability Engine
+- Feature Engineering Engine
+
+---
+
+## Feature
+
+A numerical representation of market information used by downstream components.
+
+Examples include:
+
+- Structure confidence
+- Liquidity quality
+- BOS strength
+- ATR multiple
+
+---
+
+## Feature Engineering
+
+The process of transforming raw market data into structured numerical features for analysis and decision-making.
+
+---
+
+## MarketBar
+
+The project's standardized OHLCV data model representing a single price bar.
+
+Typical fields include:
+
+- Timestamp
+- Open
+- High
+- Low
+- Close
+- Volume
+
+---
+
+## Measurement
+
+A normalized value describing the quality or strength of a market event.
+
+Examples:
+
+- BOS strength
+- CHOCH strength
+- Liquidity quality
+
+Measurements are typically continuous rather than binary.
+
+---
+
+## Probability
+
+The estimated likelihood that a trading opportunity will succeed based on the available feature set.
+
+Probability values are calculated by the Probability Engine.
+
+---
+
+## Probability Engine
+
+The subsystem responsible for estimating trade probability using engineered market features.
+
+---
+
+## Research Analytics
+
+The subsystem used to evaluate historical trading performance, feature effectiveness, and strategy quality.
+
+Research Analytics helps guide future improvements through measurable evidence.
+
+---
+
+## Signal
+
+A trading decision generated by the Signal Generator.
+
+Signals may include:
+
+- Buy
+- Sell
+- Hold
+- No Trade
+
+---
+
+## Signal Generator
+
+The subsystem responsible for converting probabilities and market analysis into actionable trading signals.
+
+---
+
+## Trade Plan
+
+A complete trading instruction produced by the Risk Manager.
+
+A Trade Plan may include:
+
+- Entry price
+- Stop-loss
+- Take-profit
+- Position size
+- Risk metrics
+
+---
+
+## Trading Pipeline
+
+The orchestrator that connects all major subsystems.
+
+Typical workflow:
+
+```
+Market Data
+      ↓
+Market Structure
+      ↓
+Feature Engineering
+      ↓
+Probability Engine
+      ↓
+Signal Generator
+      ↓
+Risk Manager
+      ↓
+Trade Plan
+      ↓
+Execution Adapter
+```
+
+---
+
+# Software Engineering Concepts
+
+## Deterministic Processing
+
+Given identical inputs and configuration, the system produces identical outputs.
+
+Deterministic behavior improves testing, debugging, and research reliability.
+
+---
+
+## Domain-Driven Design (DDD)
+
+An architectural approach that organizes software around business domains rather than technical layers.
+
+Examples of domains in this project include:
+
+- Market Structure
+- Probability Engine
+- Risk Management
+- Research Analytics
+
+---
+
+## Modular Architecture
+
+A design approach where independent components have clearly defined responsibilities and interfaces.
+
+Modules can evolve independently while remaining part of the overall system.
+
+---
+
+## Separation of Concerns
+
+A design principle stating that each component should focus on one specific responsibility.
+
+This improves readability, maintainability, and testability.
+
+---
+
+## Single Responsibility Principle (SRP)
+
+A class or module should have only one reason to change.
+
+This principle reduces complexity and encourages clean design.
+
+---
+
+# Summary
+
+This glossary provides a shared vocabulary for everyone working on the XAUUSD Algorithmic Trading Platform.
+
+As the platform evolves, new terms should be added here to keep documentation, implementation, and communication consistent.

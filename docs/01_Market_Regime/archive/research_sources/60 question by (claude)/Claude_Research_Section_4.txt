@@ -1,0 +1,113 @@
+Section 4: Feature Engineering
+
+Which technical indicators should be used?
+Why was each indicator selected?
+Which indicators measure trend?
+Which indicators measure volatility?
+Which indicators measure market efficiency or choppiness?
+Which indicators should be normalized?
+Should percentile-based features be preferred over absolute values?
+Should features be adaptive across different assets?
+
+
+Q1 & Q2 — Which technical indicators should be used, and why was each selected?
+The indicator set should be chosen on three criteria: each indicator must measure something structurally distinct from the others, it must be computable from the input data stack defined in Section 3, and it must have a theoretically grounded relationship to regime state rather than being a heuristic retrofit.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetThe selection rationale for each family:
+Trend indicators are chosen because they each measure a different aspect of directional persistence. EMA slope gives direction and speed. ADX gives strength without direction — a rising ADX with falling price is as informative as one with rising price. The EMA crossover ratio gives a normalized view of how far apart fast and slow trends have diverged. TSMOM captures the 12-month-minus-1-month momentum that is the backbone of the academic cross-sectional and time-series literature. Linear regression slope with R² gives both the rate of directional change and how cleanly prices fit that direction. Breadth thrust confirms trend at the index level via participation — a rally with 80% of stocks above their 200d MA is structurally different from one with 40%.
+Volatility indicators span the realized/implied and point/path dimensions. Multi-window realized vol (5d, 21d, 63d) captures the term structure of realized volatility — a short-window spike that is not yet visible in 63d vol is an early warning. Parkinson's estimator uses the high-low range, which captures intraday extremes that close-to-close returns miss. Vol-of-vol (the standard deviation of realized volatility) distinguishes a persistently high-vol environment from an episodic spike. BB width is a compressed, intuitive version of realized vol. VIX term structure slope is the market's forward-looking risk signal and distinguishes normal backwardation (fear) from contango (calm). The IV minus RV spread (variance risk premium) signals whether the market is over- or under-pricing future volatility.
+Efficiency and choppiness indicators form the most theoretically grounded family for distinguishing trending from mean-reverting regimes. The Hurst exponent directly tests the long-memory property of the price series. The Choppiness Index is a normalized ratio of the sum of N individual ATRs to the ATR of the full N-period range — bounded between 0 and 100, with high values (>61.8) indicating choppiness and low values (<38.2) indicating trend. Return autocorrelation at lag 1 directly tests whether today's return predicts tomorrow's. Kaufman's Efficiency Ratio measures how much of the total path traveled during a period was used in net directional movement — a ratio near 1 means nearly pure trend, near 0 means random walk or mean-reversion.
+Cross-asset and macro indicators are the features that no single-instrument price series can provide. Change in the cross-asset correlation matrix is the most reliable early signal of risk-off — correlations spike toward 1 before prices fully adjust. Credit spread OAS percentile is the credit market's view on systemic risk. The yield curve slope carries cycle regime information at a multi-month horizon. Put/call ratio captures hedging demand and positioning extremes.
+
+Q3 — Which indicators measure trend?
+IndicatorWhat it measuresTrending signalMean-reverting signalEMA slope (z-scored)Rate of price change per unit timeStrongly positive or negative z-scoreNear-zero z-scoreADX (14-period)Trend strength regardless of directionADX > 25, risingADX < 20, fallingEMA crossover ratioFast-slow MA divergenceLarge positive or negative spreadSpread near zero, oscillatingTSMOM (12-1)Long-horizon return continuationTop or bottom quartile of rolling distributionMiddle two quartilesLR slope with R²Linear fit quality over N barsHigh R², non-zero slopeLow R², slope near zeroBreadth thrustParticipation across index membersHigh breadth (>70%) in direction of trendLow breadth, divergent
+The critical design point: ADX is directionally agnostic. It tells you how much of a trend exists without telling you which way it is going. The directional signal must come from EMA slope, TSMOM, or the crossover ratio. This separation matters — a system that uses only ADX will misclassify a violent bear trend as equivalent to a calm bull trend in terms of trend strength, even though their strategy implications are opposite.
+
+Q4 — Which indicators measure volatility?
+IndicatorWindowWhat it capturesRealized vol (close-to-close)5d, 21d, 63dPoint-in-time volatility at multiple horizonsParkinson estimator21dIntraday range volatility; more efficient than close-to-closeVol-of-vol21d of daily realized volStability of the volatility regime itselfBollinger Band width20d, 2σCompressed band = compression regime; wide band = expansionVIX level (percentile)Spot vs. 252d historyForward-looking fear; absolute level percentileVIX term slope (M1 minus M3)SpotBackwardation = acute stress; contango = complacencyIV minus RV spreadRollingVariance risk premium; high = options expensive relative to realized
+The multi-window realized vol is especially important. Rather than using a single window, the module should compute the ratio of short-window to long-window realized vol — a ratio significantly above 1 (e.g., 5d vol / 63d vol > 1.5) is a reliable early-warning signal of a volatility regime change that has not yet been reflected in the slow-moving estimate.
+
+Q5 — Which indicators measure market efficiency or choppiness?
+These are the most important and most underused family in commercial implementations. They directly address whether prices are trending (auto-correlated, persistent) or mean-reverting (anti-correlated, antipersistent), which is the foundational question of regime detection.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetThe Hurst exponent H is the theoretical anchor. It measures the long-memory property of the time series — H > 0.5 means past returns positively predict future returns (persistence, trending); H < 0.5 means past returns negatively predict future returns (antipersistence, mean-reversion); H = 0.5 is the random walk null hypothesis. It is estimated via rescaled range (R/S) analysis or via a detrended fluctuation analysis (DFA), with DFA preferred in practice for its better finite-sample behavior.
+The Choppiness Index is a more practically robust and computationally cheap proxy. It is bounded between 0 and 100 by construction, making it directly interpretable without distributional assumptions. Thresholds at the Fibonacci levels 38.2 and 61.8 are conventional but should be calibrated per asset class.
+Lag-1 autocorrelation is the simplest and most direct test. Its weakness is sensitivity to the rolling window length — a 21-day rolling ρ₁ is noisy; 63 days is more stable. Combining multiple window estimates is preferable.
+Kaufman's Efficiency Ratio is defined as |net_change_over_N_bars| / sum(|individual_bar_changes|). It is directionally agnostic and naturally bounded between 0 (maximal choppiness) and 1 (perfect directional efficiency). An ER consistently above 0.65–0.70 is a strong trending signal.
+These four indicators are partially redundant by design — that redundancy is a feature, not a bug. When all four agree on trending, the signal is far more reliable than any single one.
+
+Q6 — Which indicators should be normalized?
+Every indicator used as a model feature should be normalized. The question is how, because different indicators have different distributional properties that call for different normalization strategies.
+Z-score normalization is appropriate for indicators with approximately Gaussian distributions and where the absolute level is informative only relative to recent history: EMA slope, realized volatility, TSMOM, yield curve slope, credit spread OAS, and the IV-RV spread. Z-score each over a rolling window of 252 bars.
+Percentile ranking is appropriate for indicators that are heavy-tailed, skewed, or where the cross-time distribution is non-stationary: VIX level, BB width, ADX, vol-of-vol, and drawdown depth. A 252-bar rolling percentile rank maps the indicator to [0, 1] and is robust to distributional shifts.
+No normalization needed for indicators that are already naturally bounded and interpretable: the Hurst exponent (0–1), Choppiness Index (0–100), Efficiency Ratio (0–1), and lag-1 autocorrelation (−1 to +1). These should still be fed into the model as-is but may benefit from mild clipping to remove extreme outliers.
+Min-max scaling is generally not recommended for production because the min and max will shift over time, creating inconsistent scaling across the training and inference periods.
+
+Q7 — Should percentile-based features be preferred over absolute values?
+Yes, and the reasoning is both statistical and practical.
+Statistically, absolute feature values conflate the level of an indicator with its regime-informativeness. A realized volatility of 20% is a high-stress regime for a low-vol asset and a calm regime for a historically high-vol one. Percentile rank removes this ambiguity — the 85th percentile of realized volatility means the same thing ("unusually elevated") regardless of the asset's baseline vol level.
+Practically, percentile-based features are far more robust to structural breaks in the time series. If a regime shift permanently elevates the baseline level of some indicator (e.g., persistently higher credit spreads post-2008), absolute features trained in one period will be miscalibrated in another. Percentile features adapt because they are always measured relative to the most recent rolling history.
+The implementation requires choosing a percentile lookback window. A 252-bar (one-year) rolling window balances responsiveness and stability adequately for most features. For very slow-moving macro features (yield curve, credit cycle), a longer window of 504–756 bars (2–3 years) is appropriate. The window length should be a named configuration parameter, not a hardcoded constant.
+One important nuance: percentile features compress the extremes. An indicator at the 97th percentile and one at the 99th percentile will appear close together, even though the latter may be a historically unprecedented reading. For features where extreme tail readings carry outsized information (e.g., VIX above its 99th percentile, credit spreads at 30-year highs), retain the raw absolute value as a separate feature alongside the percentile rank.
+
+Q8 — Should features be adaptive across different assets?
+Yes, and this is one of the most consequential design decisions in the module. The same indicator with the same threshold will mean structurally different things across asset classes, and even across individual securities within the same asset class.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetThree forms of adaptation are required:
+Threshold adaptation. A 20% annualized realized volatility threshold for "high vol" is appropriate for large-cap equities but would classify almost every day in energy commodities as high-vol and almost no day in government bonds. Each asset class needs its own threshold table, calibrated from the asset's own historical distribution. The production implementation should store per-asset-class threshold configurations as named parameter sets, versioned and auditable.
+Lookback adaptation. Mean-reversion dynamics operate on different timescales across asset classes. Currency pairs and index futures tend to have shorter-lived regimes than credit or macro factors. The Hurst estimation window, autocorrelation lookback, and percentile ranking window should all be configured per asset class. A rough guide: faster-moving, higher-liquidity markets warrant shorter lookbacks; slower-moving, institutionally-dominated markets warrant longer ones.
+Feature relevance adaptation. Not all features are equally relevant across all asset classes. Open interest and term structure slope are critical for futures; meaningless for spot equities. The put/call ratio is deeply informative for single-name equities with active options markets; unavailable for most fixed income instruments. The module should support a per-asset-class feature mask that activates or deactivates specific features and reweights the ensemble accordingly, rather than forcing every asset through the same feature vector.
+The implementation architecture that supports all three forms of adaptation is a FeatureConfig object that travels with each symbol's computation context, is loaded from a configuration store at initialization, and is periodically re-calibrated (e.g., quarterly) as the asset's return distribution evolves. This config is distinct from the model weights and can be updated without retraining.
+
+
+## ChatGPT Review Notes
+
+### Adopt for v2.3
+
+Trend Features
+- EMA Slope
+- ADX
+
+Volatility Features
+- ATR
+- Bollinger Band Width
+
+Market Efficiency
+- Choppiness Index
+
+Design Principles
+- Separate Trend Strength (ADX) from Trend Direction (EMA Slope)
+- Keep feature groups modular
+- Design for future extensibility
+
+### Simplify
+
+- Use raw indicator values initially
+- Use fixed thresholds
+- Single-symbol (XAUUSD) optimization
+
+### Defer to Future Versions
+
+- Hurst Exponent
+- TSMOM
+- Linear Regression R²
+- VIX and IV-RV Spread
+- Cross-Asset Correlation
+- Breadth Indicators
+- Percentile-based normalization
+- Adaptive feature configuration

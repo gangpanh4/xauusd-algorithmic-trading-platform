@@ -1,0 +1,80 @@
+Section 3: Input Data
+
+What market data is required?
+What minimum historical lookback is needed?
+Which timeframes should be supported?
+How should missing or incomplete market data be handled?
+Should the detector support multiple symbols simultaneously?
+
+Q1 — What market data is required?
+The input data stack has four distinct layers, each serving a different aspect of regime characterization.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetLayer 1 — Raw price and volume is the non-negotiable foundation. OHLCV data is the minimum; adjusted close prices (split and dividend adjusted) are required for any computation involving historical comparison. Bid/ask spread and order book depth are required at the microstructure layer for execution-sensitive consumers. Open interest in futures and options markets provides a sentiment and positioning proxy.
+Layer 2 — Derived statistical features are computed on the fly from Layer 1. These are the features that most directly signal regime: realized volatility (rolling standard deviation of log-returns at multiple windows), the Hurst exponent (distinguishing trending H > 0.5 from mean-reverting H < 0.5), lag-1 return autocorrelation, trend strength proxies (ADX, EMA slope z-scored against its own distribution), volume regime (current volume relative to its rolling average), and rolling drawdown depth.
+Layer 3 — Cross-asset signals lift the module beyond single-instrument myopia. A risk-off regime cannot be reliably detected from one equity series alone — you need equity-bond correlation rising, credit spreads widening, and safe-haven demand confirming simultaneously. This layer requires: cross-asset rolling correlation matrices (equity, fixed income, credit, FX), IG and HY option-adjusted spreads, and the implied volatility surface — particularly VIX level and the slope of the VIX term structure (contango = calm, backwardation = fear).
+Layer 4 — Macro and microstructure provides the slowest-moving but most persistent signals. Macro indicators (PMI, yield curve slope, credit conditions surveys) update monthly or weekly but carry strong regime-persistence information. Market breadth (advance-decline line, percentage of stocks above their 200-day MA, new highs vs. new lows) provides a distributional view that single-instrument price data cannot. Microstructure data (bid-ask spread levels, price impact coefficients, portfolio turnover rates) signals liquidity stress early — often before price dislocations are visible.
+
+Q2 — What minimum historical lookback is needed?
+Lookback requirements vary by feature family and should be specified explicitly for each. The architecture must maintain a ring buffer deep enough to satisfy the longest lookback without recomputation.
+FeatureMinimum lookbackRationaleRealized volatility (short)21 daysOne trading month — fast vol signalRealized volatility (slow)63 daysOne quarter — regime-level vol baselineHurst exponent100–252 barsRequires sufficient observations for reliable R/S analysisLag-1 autocorrelation63 barsShort window is noisy; needs ~60+ observationsEMA slope z-score252 barsNeed a year to z-score the slope meaningfullyADX14–28 barsStandard ADX period; can extend to 50 for smoother signalCross-asset correlation63 barsRolling 3-month correlation matrixCredit spread regime252 barsSpreads are slow-moving; need a year for percentile contextVIX term structure30 daysShort lookback; VIX structure changes rapidlyMacro indicators12–24 monthsEconomic cycles require multi-year contextDrawdown depth252 barsNeed full-year high-water mark for drawdown percentile
+The practical implication is that the module requires a minimum of 252 trading days (~1 year) of clean history before any regime output can be trusted. For robust percentile-based features, 3–5 years is preferable, with a regime-conditional recalibration that excludes the most structurally different historical periods. On initial deployment, the module should output unknown until the warm-up lookback is satisfied.
+
+Q3 — Which timeframes should be supported?
+The module should support three timeframe tiers, each with a different purpose and update cadence.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetThe daily tier is the primary regime. It is the timeframe at which most features are most reliable and at which strategy logic should consume the regime label. The intraday tier informs the execution layer and intraday risk management, not the primary regime. The weekly/monthly tier provides a slow-moving structural bias that conditions the daily tier — think of it as a prior over which daily regime is plausible. A system in a monthly bear structural regime should require stronger evidence to classify a daily regime as bull.
+The multi-tier architecture avoids two common failure modes: a module that fires on intraday noise and causes excessive strategy churn; and one that updates so slowly it misses the first days of a stress event.
+
+Q4 — How should missing or incomplete market data be handled?
+Missing data is not a rare edge case in production — it is a daily operational reality. The module must have an explicit, documented policy for every failure mode.
+Stale prices (last-value carry-forward) are the most common form of missing data: a tick does not arrive for N bars. The module should carry the last known price forward for a configurable maximum number of bars (e.g., 3 bars intraday, 2 days on the daily tier) before marking the feature as stale. Any feature computed from a stale input must be flagged with a staleness indicator and given reduced weight in the ensemble. Beyond the maximum staleness threshold, the instrument is moved to the unknown regime with a data_stale annotation.
+Sparse or irregular data (e.g., thinly traded instruments, pre-market bars, early close days) should be detected by comparing the number of valid observations within a rolling window to a minimum observation count. If fewer than M% of expected observations are present in the lookback window, the feature is marked unreliable.
+Feature computation failure (e.g., Hurst exponent fails to converge, correlation matrix is singular) must be caught at the feature layer, not propagated as NaN into the model. Each feature should have a fallback value or a not_computed sentinel. The ensemble should degrade gracefully when a subset of features is unavailable, re-weighting the remaining features rather than crashing.
+Cross-asset data gaps (e.g., credit spread data has a weekend or holiday gap) require an asset-class-specific staleness tolerance. Credit spreads can be safely carried 3–5 business days. VIX data should not be carried more than 1 day without flagging. Macro data gaps of up to 30 days are acceptable given the feature's slow update cadence.
+Data anomalies and outliers — prices that are statistically implausible (e.g., a log-return more than 8–10 standard deviations from the rolling mean) should be flagged as suspect rather than used. The module should have a configurable spike filter that replaces outlier observations with the previous value and logs the event for human review.
+The overriding principle: the module must never silently produce a confident regime label when the input data is materially compromised. Uncertainty in inputs must propagate forward as uncertainty in the output.
+
+Q5 — Should the detector support multiple symbols simultaneously?
+Yes, and this is architecturally non-negotiable for a production system serving a multi-instrument book. But "support" means three distinct capabilities that must each be designed explicitly:
+Per-symbol regime tracking. Each instrument or asset should have its own regime state, computed from its own price history and features. This is a straightforward parallelization of the single-symbol case. The output is a symbol-keyed dictionary of regime probability vectors.
+Cross-symbol aggregate regime. For a multi-asset portfolio, a single aggregate regime label is useful for top-level risk decisions (cut all book-level leverage, shift execution style globally). This aggregate regime is not computed by averaging per-symbol regime labels — that loses structural information. It is computed from a separate feature set that explicitly represents cross-asset relationships: the pairwise correlation matrix across symbols, dispersion of per-symbol returns, aggregate breadth. The aggregate regime often diverges from individual symbol regimes, and both are needed.
+Symbol-to-symbol influence. Some instruments are leading indicators for others. The VIX leads realized equity volatility. The HY spread is a leading indicator for equity risk-off. The 2s10s yield curve slope leads recession regimes with a long lag. The multi-symbol architecture should support a configurable influence graph where a designated set of "sentinel" instruments can trigger regime flags for dependent instruments even before those instruments' own price series reflect the change.
+The implementation implication is that the module's core compute unit is a symbol registry with a shared feature computation graph, not N independent single-symbol instances. Shared features (cross-asset correlations, breadth indices) are computed once at the graph level and referenced by all symbol-level computations. This avoids redundant computation and ensures consistency — the cross-asset correlation seen by the equity regime module is identical to the one seen by the fixed income module.
+
+
+## ChatGPT Review Notes
+
+### Adopt
+- Use OHLCV as the primary market data source.
+- Compute regime from derived technical indicators rather than raw prices.
+- Require a warm-up period before emitting regime classifications.
+- Support multiple timeframes (H4 → H1 → M15).
+- Detect stale or incomplete market data.
+- Return UNKNOWN when data quality is insufficient.
+- Design the detector to accept a symbol parameter for future extensibility.
+
+### Simplify for v2.3
+- Single symbol (XAUUSD) only.
+- Ignore cross-asset relationships.
+- Ignore macroeconomic inputs.
+- Ignore order book and open interest.
+- Use a fixed 300-candle history requirement.
+
+### Defer to Future Versions
+- Cross-asset correlation.
+- Hurst exponent.
+- Autocorrelation analysis.
+- Market breadth.
+- Macroeconomic regime inputs.
+- Portfolio-wide regime detection.
+- Multi-symbol optimization.

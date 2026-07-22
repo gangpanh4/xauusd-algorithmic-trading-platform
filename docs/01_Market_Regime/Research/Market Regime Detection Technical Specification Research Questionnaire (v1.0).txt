@@ -1,0 +1,135 @@
+# Market Regime Detection Technical Specification Research Questionnaire (v1.0)
+
+## Section 1: Objectives
+
+1. What is the primary purpose of the Market Regime Detection module?
+2. What trading decisions should depend on the detected market regime?
+3. Should the module prioritize stability or responsiveness? Why?
+4. What design principles should guide a production-grade market regime detector?
+
+---
+
+## Section 2: Regime Definitions
+
+5. What market regimes should be supported?
+6. How should each regime be formally defined?
+7. Should trend direction and volatility be represented as separate dimensions or combined into a single state?
+8. Are the regimes mutually exclusive?
+9. Can multiple regimes exist simultaneously?
+10. How should unknown or ambiguous market conditions be represented?
+
+---
+
+## Section 3: Input Data
+
+11. What market data is required?
+12. What minimum historical lookback is needed?
+13. Which timeframes should be supported?
+14. How should missing or incomplete market data be handled?
+15. Should the detector support multiple symbols simultaneously?
+
+---
+
+## Section 4: Feature Engineering
+
+16. Which technical indicators should be used?
+17. Why was each indicator selected?
+18. Which indicators measure trend?
+19. Which indicators measure volatility?
+20. Which indicators measure market efficiency or choppiness?
+21. Which indicators should be normalized?
+22. Should percentile-based features be preferred over absolute values?
+23. Should features be adaptive across different assets?
+
+---
+
+## Section 5: Threshold Selection
+
+24. Should thresholds be fixed or adaptive?
+25. How should trend thresholds be determined?
+26. How should volatility thresholds be determined?
+27. Should thresholds be based on historical percentiles?
+28. Which thresholds should be configurable?
+29. What default threshold values are recommended?
+
+---
+
+## Section 6: State Transition Logic
+
+30. Under what conditions should a regime change occur?
+31. Should hysteresis be implemented? If so, how?
+32. How many consecutive confirmations are required before switching regimes?
+33. Should a minimum regime duration be enforced?
+34. How should rapid oscillation between regimes be prevented?
+35. How should conflicting indicator signals affect transitions?
+
+---
+
+## Section 7: Confidence Calculation
+
+36. How should confidence be defined?
+37. Which factors contribute to confidence?
+38. How should indicator agreement influence confidence?
+39. Should confidence increase with regime persistence?
+40. How should uncertainty be represented?
+41. Should confidence be normalized to a range of 0–1?
+
+---
+
+## Section 8: Output Specification
+
+42. What fields should the MarketRegime object contain?
+43. Which fields are mandatory?
+44. Should the module include diagnostic information explaining the detected regime?
+45. Should raw feature values be included in the output?
+
+---
+
+## Section 9: Logging and Observability
+
+46. What events should be logged?
+47. What information should every regime transition log contain?
+48. Should logs use structured JSON?
+49. Which metrics should be exposed for monitoring?
+50. What information is useful for debugging incorrect classifications?
+
+---
+
+## Section 10: Module Architecture
+
+51. What should the public interface of market_regime.py look like?
+52. Should the detector be stateless or stateful?
+53. Which configuration parameters should be externally configurable?
+54. Should the module depend on any external services?
+55. How should the detector integrate with the rest of the trading system?
+
+---
+
+## Section 11: Testing Strategy
+
+56. What unit tests are required?
+57. Which edge cases should be tested?
+58. How should historical data be used for validation?
+59. What acceptance criteria define a correct implementation?
+60. What measurable performance, reliability, and maintainability requirements should the implementation satisfy before it is considered production-ready?
+
+---
+
+## Final Instruction
+
+Using the answers to all of the above questions, produce a complete technical specification for a production-grade Market Regime Detection module.
+
+The specification should:
+
+* Define every market regime precisely.
+* Justify all indicator choices.
+* Recommend threshold values and explain how they should be calibrated.
+* Define confidence scoring mathematically where appropriate.
+* Specify state transition logic, hysteresis, and persistence rules.
+* Describe the module's public API and configuration options.
+* Define structured logging and diagnostic output.
+* Provide a comprehensive testing and validation strategy.
+* Include rationale for every major design decision.
+* Avoid implementation code unless it is necessary to clarify the specification.
+
+The final deliverable should be detailed enough that a software engineer can implement `market_regime.py` directly from the specification with minimal ambiguity.
