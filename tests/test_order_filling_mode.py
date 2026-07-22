@@ -138,6 +138,11 @@ def test_selected_filling_mode_reaches_order_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     symbol = _symbol(flags=2, execution_mode=2)
+    monkeypatch.setattr(
+        orders.mt5,
+        "order_check",
+        lambda request: SimpleNamespace(retcode=0, comment="Done"),
+    )
     monkeypatch.setattr(orders, "get_symbol_info", lambda name: symbol)
 
     captured: dict = {}
