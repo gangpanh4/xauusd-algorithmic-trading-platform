@@ -14,6 +14,9 @@ from core.data.market_data import MarketDataService
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.live_trading.multi_timeframe_buffer import LiveMultiTimeframeBuffer
+from core.mt5_execution.symbol_specification import (
+    get_live_symbol_specification,
+)
 from core.multi_timeframe.enums import Timeframe
 
 logger = logging.getLogger(__name__)
@@ -118,6 +121,17 @@ class TradingPlatform:
             if account is None:
                 raise RuntimeError("Unable to retrieve account information.")
 
+            symbol_spec = get_live_symbol_specification(config.symbol)
+            logger.info(
+                "Loaded %s risk specification: tick_size=%s "
+                "tick_value_per_lot=%s lot_step=%s minimum_stop=%s",
+                symbol_spec.symbol,
+                symbol_spec.tick_size,
+                symbol_spec.tick_value_per_lot,
+                symbol_spec.lot_step,
+                symbol_spec.minimum_stop_distance,
+            )
+
             logger.info("Warming up synchronized analytical state...")
             for m5_bar in buffer.histories[Timeframe.M5]:
                 boundary = m5_bar.timestamp + timedelta(minutes=5)
@@ -126,8 +140,10 @@ class TradingPlatform:
                     engine.process_bar(
                         m5_bar,
                         account_balance=account.balance,
-                        stop_loss_distance=100.0,
-                        pip_value=1.0,
+                        stop_loss_distance=(
+                            symbol_spec.minimum_stop_distance
+                        ),
+                        pip_value=symbol_spec.tick_value_per_lot,
                         warmup=True,
                     )
                     continue
@@ -135,8 +151,10 @@ class TradingPlatform:
                 engine.process_multi_timeframe(
                     snapshot,
                     account_balance=account.balance,
-                    stop_loss_distance=100.0,
-                    pip_value=1.0,
+                    stop_loss_distance=symbol_spec.minimum_stop_distance,
+                    pip_value=symbol_spec.tick_value_per_lot,
+                    tick_size=symbol_spec.tick_size,
+                    lot_step=symbol_spec.lot_step,
                     warmup=True,
                 )
 
@@ -184,8 +202,12 @@ class TradingPlatform:
                     engine.process_multi_timeframe(
                         snapshot,
                         account_balance=account.balance,
-                        stop_loss_distance=100.0,
-                        pip_value=1.0,
+                        stop_loss_distance=(
+                            symbol_spec.minimum_stop_distance
+                        ),
+                        pip_value=symbol_spec.tick_value_per_lot,
+                        tick_size=symbol_spec.tick_size,
+                        lot_step=symbol_spec.lot_step,
                     )
                     time.sleep(config.poll_interval_seconds)
 
