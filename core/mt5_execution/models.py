@@ -27,6 +27,7 @@ class OrderStatus(Enum):
     FILLED = "FILLED"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,10 @@ class OrderResult:
     executed_price: float
 
     message: str
+
+    retcode: int | None = None
+
+    executed_volume: float = 0.0
 
 
 @dataclass(frozen=True)

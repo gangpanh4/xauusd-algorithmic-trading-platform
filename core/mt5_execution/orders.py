@@ -222,9 +222,34 @@ def send_order(
             message=live_message,
         )
 
-    result = mt5.order_send(
-        mt5_request,
+    check_result = mt5.order_check(mt5_request)
+    if check_result is None:
+        return OrderResult(
+            timestamp=datetime.now(UTC),
+            status=OrderStatus.REJECTED,
+            ticket=None,
+            executed_price=0.0,
+            message=f"Order preflight unavailable: {mt5.last_error()}",
+        )
+
+    check_retcode = int(getattr(check_result, "retcode", -1))
+    check_comment = str(
+        getattr(check_result, "comment", "No preflight comment.")
     )
+    if check_retcode != 0:
+        return OrderResult(
+            timestamp=datetime.now(UTC),
+            status=OrderStatus.REJECTED,
+            ticket=None,
+            executed_price=0.0,
+            message=(
+                f"Order preflight rejected [{check_retcode}]: "
+                f"{check_comment}"
+            ),
+            retcode=check_retcode,
+        )
+
+    result = mt5.order_send(mt5_request)
 
     if result is None:
         return OrderResult(
@@ -232,26 +257,79 @@ def send_order(
             status=OrderStatus.REJECTED,
             ticket=None,
             executed_price=0.0,
-            message=str(
-                mt5.last_error(),
-            ),
+            message=f"Order submission unavailable: {mt5.last_error()}",
         )
 
-    status = (
-        OrderStatus.FILLED
-        if result.retcode == mt5.TRADE_RETCODE_DONE
-        else OrderStatus.REJECTED
-    )
+    retcode = int(getattr(result, "retcode", -1))
+    status = _map_trade_retcode(retcode)
+    ticket = getattr(result, "order", None)
+    price = float(getattr(result, "price", 0.0))
+    volume = float(getattr(result, "volume", 0.0))
+    comment = str(getattr(result, "comment", "No broker comment."))
 
     return OrderResult(
         timestamp=datetime.now(UTC),
         status=status,
-        ticket=result.order,
-        executed_price=result.price,
-        message=f"{result.retcode}: {result.comment}",
+        ticket=ticket,
+        executed_price=price,
+        message=f"{_retcode_name(retcode)} [{retcode}]: {comment}",
+        retcode=retcode,
+        executed_volume=volume,
     )
 
 
+
+
+def _map_trade_retcode(retcode: int) -> OrderStatus:
+    """Map MT5 trade-server outcomes to platform execution status."""
+
+    if retcode == mt5.TRADE_RETCODE_DONE:
+        return OrderStatus.FILLED
+
+    if retcode == getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010):
+        return OrderStatus.PARTIALLY_FILLED
+
+    if retcode == getattr(mt5, "TRADE_RETCODE_PLACED", 10008):
+        return OrderStatus.PENDING
+
+    if retcode == getattr(mt5, "TRADE_RETCODE_CANCEL", 10007):
+        return OrderStatus.CANCELLED
+
+    return OrderStatus.REJECTED
+
+
+def _retcode_name(retcode: int) -> str:
+    """Return a stable diagnostic name for a known MT5 retcode."""
+
+    names = {
+        getattr(mt5, "TRADE_RETCODE_REQUOTE", 10004): "REQUOTE",
+        getattr(mt5, "TRADE_RETCODE_REJECT", 10006): "REJECT",
+        getattr(mt5, "TRADE_RETCODE_CANCEL", 10007): "CANCELLED",
+        getattr(mt5, "TRADE_RETCODE_PLACED", 10008): "PLACED",
+        getattr(mt5, "TRADE_RETCODE_DONE", 10009): "DONE",
+        getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010): "DONE_PARTIAL",
+        getattr(mt5, "TRADE_RETCODE_ERROR", 10011): "ERROR",
+        getattr(mt5, "TRADE_RETCODE_TIMEOUT", 10012): "TIMEOUT",
+        getattr(mt5, "TRADE_RETCODE_INVALID", 10013): "INVALID",
+        getattr(mt5, "TRADE_RETCODE_INVALID_VOLUME", 10014): "INVALID_VOLUME",
+        getattr(mt5, "TRADE_RETCODE_INVALID_PRICE", 10015): "INVALID_PRICE",
+        getattr(mt5, "TRADE_RETCODE_INVALID_STOPS", 10016): "INVALID_STOPS",
+        getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017): "TRADE_DISABLED",
+        getattr(mt5, "TRADE_RETCODE_MARKET_CLOSED", 10018): "MARKET_CLOSED",
+        getattr(mt5, "TRADE_RETCODE_NO_MONEY", 10019): "NO_MONEY",
+        getattr(mt5, "TRADE_RETCODE_PRICE_CHANGED", 10020): "PRICE_CHANGED",
+        getattr(mt5, "TRADE_RETCODE_PRICE_OFF", 10021): "PRICE_OFF",
+        getattr(mt5, "TRADE_RETCODE_TOO_MANY_REQUESTS", 10024): (
+            "TOO_MANY_REQUESTS"
+        ),
+        getattr(mt5, "TRADE_RETCODE_INVALID_FILL", 10030): "INVALID_FILL",
+        getattr(mt5, "TRADE_RETCODE_CONNECTION", 10031): "CONNECTION",
+        getattr(mt5, "TRADE_RETCODE_LIMIT_VOLUME", 10034): "LIMIT_VOLUME",
+        getattr(mt5, "TRADE_RETCODE_LIMIT_POSITIONS", 10040): (
+            "LIMIT_POSITIONS"
+        ),
+    }
+    return names.get(retcode, "UNKNOWN_RETCODE")
 
 
 _SYMBOL_FILLING_FOK = 1

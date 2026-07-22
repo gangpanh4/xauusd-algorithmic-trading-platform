@@ -269,11 +269,15 @@ class LiveTradingEngine:
             execution_request.order_request,
         )
 
-        if execution_result.status is not OrderStatus.FILLED:
+        executed_statuses = {
+            OrderStatus.FILLED,
+            OrderStatus.PARTIALLY_FILLED,
+        }
+        if execution_result.status not in executed_statuses:
             self.state.skipped_trades += 1
             self.state.last_error = execution_result.message
             logger.error(
-                "MT5 rejected the order: %s",
+                "MT5 did not execute the order: %s",
                 execution_result.message,
             )
             return LiveTradingResult(

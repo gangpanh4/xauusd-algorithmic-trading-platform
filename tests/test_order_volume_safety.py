@@ -43,6 +43,11 @@ def test_default_safety_lock_rejects_larger_volume_before_order_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
+        orders.mt5,
+        "order_check",
+        lambda request: SimpleNamespace(retcode=0, comment="Done"),
+    )
+    monkeypatch.setattr(
         orders,
         "get_symbol_info",
         lambda symbol: _tradable_symbol(),
@@ -72,6 +77,11 @@ def test_default_safety_lock_allows_exact_configured_volume(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
+        orders.mt5,
+        "order_check",
+        lambda request: SimpleNamespace(retcode=0, comment="Done"),
+    )
+    monkeypatch.setattr(
         orders,
         "get_symbol_info",
         lambda symbol: _tradable_symbol(),
@@ -100,6 +110,11 @@ def test_default_safety_lock_allows_exact_configured_volume(
 def test_custom_safety_lock_value_is_enforced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        orders.mt5,
+        "order_check",
+        lambda request: SimpleNamespace(retcode=0, comment="Done"),
+    )
     monkeypatch.setattr(
         orders,
         "get_symbol_info",
@@ -133,6 +148,11 @@ def test_invalid_safety_lock_configuration_fails_closed(
     invalid_value: float,
 ) -> None:
     monkeypatch.setattr(
+        orders.mt5,
+        "order_check",
+        lambda request: SimpleNamespace(retcode=0, comment="Done"),
+    )
+    monkeypatch.setattr(
         orders,
         "get_symbol_info",
         lambda symbol: _tradable_symbol(),
@@ -157,6 +177,11 @@ def test_invalid_safety_lock_configuration_fails_closed(
 def test_binary_float_noise_does_not_trigger_false_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        orders.mt5,
+        "order_check",
+        lambda request: SimpleNamespace(retcode=0, comment="Done"),
+    )
     monkeypatch.setattr(
         orders,
         "get_symbol_info",
