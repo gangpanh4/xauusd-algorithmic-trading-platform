@@ -5,6 +5,7 @@ MT5 Order validation.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from math import isclose, isfinite
 
 import MetaTrader5 as mt5
 
@@ -119,13 +120,36 @@ def send_order(
             message=message,
         )
 
-    if request.volume != 0.01:
+    allowed_volume = config.allowed_order_volume
+    if (
+        isinstance(allowed_volume, bool)
+        or not isinstance(allowed_volume, (int, float))
+        or not isfinite(float(allowed_volume))
+        or float(allowed_volume) <= 0.0
+    ):
         return OrderResult(
             timestamp=datetime.now(UTC),
             status=OrderStatus.REJECTED,
             ticket=None,
             executed_price=0.0,
-            message="Safety lock: only 0.01 lots allowed.",
+            message="Safety lock configuration is invalid.",
+        )
+
+    if not isclose(
+        float(request.volume),
+        float(allowed_volume),
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        return OrderResult(
+            timestamp=datetime.now(UTC),
+            status=OrderStatus.REJECTED,
+            ticket=None,
+            executed_price=0.0,
+            message=(
+                "Safety lock: only "
+                f"{float(allowed_volume):g} lots allowed."
+            ),
         )
 
     mt5_request = build_mt5_request(

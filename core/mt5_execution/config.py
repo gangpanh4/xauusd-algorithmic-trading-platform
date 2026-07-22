@@ -17,6 +17,8 @@ class MT5ExecutionConfig:
 
     default_slippage: int = 10
 
+    allowed_order_volume: float = 0.01
+
     max_retry_attempts: int = 3
 
     connection_timeout_seconds: int = 10
