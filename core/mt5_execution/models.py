@@ -112,6 +112,10 @@ class SymbolInfo:
 
     trade_allowed: bool
 
+    tick_size: float = 0.0
+
+    minimum_stop_distance: float = 0.0
+
 
 @dataclass(frozen=True)
 class PositionInfo:

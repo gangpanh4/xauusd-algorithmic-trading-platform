@@ -32,4 +32,16 @@ def get_symbol_info(
         volume_max=info.volume_max,
         volume_step=info.volume_step,
         trade_allowed=info.trade_mode != 0,
+        tick_size=float(
+            getattr(info, "trade_tick_size", 0.0)
+            or getattr(info, "point", 0.0)
+        ),
+        minimum_stop_distance=max(
+            float(
+                getattr(info, "trade_tick_size", 0.0)
+                or getattr(info, "point", 0.0)
+            ),
+            float(getattr(info, "trade_stops_level", 0.0))
+            * float(getattr(info, "point", 0.0)),
+        ),
     )
