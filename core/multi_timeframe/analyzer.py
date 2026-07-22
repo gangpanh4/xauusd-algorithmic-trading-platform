@@ -70,8 +70,20 @@ class TimeframeAnalyzer:
         self.alignment_threshold = float(alignment_threshold)
         self.minimum_aligned_sources = minimum_aligned_sources
 
+        self._timeframe: Timeframe | None = None
+        self._last_bars: tuple[MarketBar, ...] = ()
+        self._last_state: TimeframeState | None = None
+
     def reset(self) -> None:
-        """Reset all underlying engines."""
+        """Reset all underlying engines and incremental snapshot state."""
+
+        self._reset_engines()
+        self._timeframe = None
+        self._last_bars = ()
+        self._last_state = None
+
+    def _reset_engines(self) -> None:
+        """Reset owned analytical engines without publishing cache state."""
 
         self.market_structure.reset()
         self.price_action.reset()
@@ -82,16 +94,41 @@ class TimeframeAnalyzer:
         timeframe: Timeframe,
         bars: Sequence[MarketBar],
     ) -> TimeframeState:
-        """Analyze one chronological sequence of completed timeframe bars."""
+        """Analyze completed bars while reusing valid streaming state.
+
+        The first snapshot is replayed in full. Later snapshots process only bars
+        newer than the last successfully analyzed timestamp when overlapping
+        history is unchanged. If prior history is revised or chronology moves
+        backward, the owned engines are rebuilt from the supplied snapshot.
+        """
 
         if not isinstance(timeframe, Timeframe):
             raise TypeError("timeframe must be a Timeframe")
 
         validated_bars = self._validate_bars(bars)
+        immutable_bars = tuple(validated_bars)
+
+        if self._timeframe is not None and timeframe is not self._timeframe:
+            raise ValueError(
+                "A TimeframeAnalyzer instance may analyze only one timeframe; "
+                f"expected {self._timeframe.value}, received {timeframe.value}."
+            )
+
+        if self._last_bars == immutable_bars and self._last_state is not None:
+            return self._last_state
+
+        analysis_mode, bars_to_process = self._resolve_update(immutable_bars)
+        if analysis_mode == "rebuild":
+            self._reset_engines()
 
         structure_result: MarketStructureResult | None = None
-        for bar in validated_bars:
+        for bar in bars_to_process:
             structure_result = self.market_structure.process(bar)
+
+        if structure_result is None:
+            if self._last_state is None:
+                raise RuntimeError("MarketStructureEngine produced no result")
+            structure_result = self._last_state.market_structure
 
         if structure_result is None:
             raise RuntimeError("MarketStructureEngine produced no result")
@@ -103,6 +140,59 @@ class TimeframeAnalyzer:
             liquidity_event=structure_result.last_liquidity,
         )
 
+        state = self._build_state(
+            timeframe=timeframe,
+            bars=validated_bars,
+            structure_result=structure_result,
+            price_action_result=price_action_result,
+            break_event=break_event,
+            analysis_mode=analysis_mode,
+            processed_bar_count=len(bars_to_process),
+        )
+
+        self._timeframe = timeframe
+        self._last_bars = immutable_bars
+        self._last_state = state
+        return state
+
+    def _resolve_update(
+        self,
+        bars: tuple[MarketBar, ...],
+    ) -> tuple[str, tuple[MarketBar, ...]]:
+        """Return the required update mode and bars that must be processed."""
+
+        if not self._last_bars:
+            return "initial_replay", bars
+
+        previous_latest = self._last_bars[-1].timestamp
+        current_latest = bars[-1].timestamp
+
+        if current_latest <= previous_latest:
+            return "rebuild", bars
+
+        previous_by_timestamp = {bar.timestamp: bar for bar in self._last_bars}
+        for bar in bars:
+            previous = previous_by_timestamp.get(bar.timestamp)
+            if previous is not None and previous != bar:
+                return "rebuild", bars
+
+        appended = tuple(bar for bar in bars if bar.timestamp > previous_latest)
+        if not appended:
+            return "rebuild", bars
+
+        return "incremental_append", appended
+
+    def _build_state(
+        self,
+        *,
+        timeframe: Timeframe,
+        bars: list[MarketBar],
+        structure_result: MarketStructureResult,
+        price_action_result: PriceActionResult,
+        break_event: BOSEvent | CHOCHEvent | None,
+        analysis_mode: str,
+        processed_bar_count: int,
+    ) -> TimeframeState:
         directional_evidence = self._directional_evidence(
             structure_result=structure_result,
             price_action_result=price_action_result,
@@ -136,7 +226,7 @@ class TimeframeAnalyzer:
 
         return TimeframeState(
             timeframe=timeframe,
-            timestamp=validated_bars[-1].timestamp,
+            timestamp=bars[-1].timestamp,
             bias=bias,
             alignment=alignment,
             confidence=confidence,
@@ -159,6 +249,8 @@ class TimeframeAnalyzer:
                 "latest_break_timestamp": (
                     break_event.timestamp if break_event is not None else None
                 ),
+                "analysis_mode": analysis_mode,
+                "processed_bar_count": processed_bar_count,
             },
         )
 

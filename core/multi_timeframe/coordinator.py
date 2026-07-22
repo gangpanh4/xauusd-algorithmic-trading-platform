@@ -32,11 +32,10 @@ class MultiTimeframeCoordinator:
     4. Execute the MultiTimeframeEngine.
     5. Return one MultiTimeframeResult.
 
-    ``TimeframeAnalyzer.analyze()`` consumes the complete supplied bar history.
-    Changed snapshots are reset and replayed, while byte-for-byte equivalent
-    immutable bar snapshots reuse their previously calculated state. This avoids
-    repeated higher-timeframe work while preserving isolation between W1, D1,
-    H4, H1, M15, and M5.
+    ``TimeframeAnalyzer.analyze()`` receives the complete supplied snapshot but
+    owns incremental state for its timeframe. Unchanged snapshots reuse cached
+    states; compatible forward snapshots process only newly completed bars; and
+    incompatible historical revisions trigger a controlled analyzer rebuild.
     """
 
     def __init__(
@@ -144,12 +143,12 @@ class MultiTimeframeCoordinator:
             else:
                 analyzer = self._analyzers[timeframe]
 
-                # ``analyze`` replays the full supplied sequence. Resetting
-                # avoids duplicate state accumulation whenever the snapshot
-                # changes. Unchanged snapshots reuse their prior deterministic
-                # state and skip the replay entirely.
-                analyzer.reset()
+                if cached is None:
+                    analyzer.reset()
 
+                # The analyzer owns incremental streaming state for its
+                # timeframe. It decides whether the supplied snapshot can be
+                # appended safely or requires a controlled rebuild.
                 state = analyzer.analyze(
                     timeframe=timeframe,
                     bars=immutable_bars,
