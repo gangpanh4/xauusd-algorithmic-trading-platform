@@ -23,7 +23,7 @@ class MT5ExecutionConfig:
 
     connection_timeout_seconds: int = 10
 
-    enable_auto_reconnect: bool = True
+    enable_auto_reconnect: bool = False
 
     debug_logging: bool = False
 

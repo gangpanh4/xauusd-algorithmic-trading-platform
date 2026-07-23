@@ -49,7 +49,13 @@ class MarketDataService:
             1,
         )
 
-        if rates is None or len(rates) == 0:
+        if rates is None:
+            raise RuntimeError(
+                f"Unable to retrieve latest closed bar for "
+                f"{self.symbol}: {mt5.last_error()}"
+            )
+
+        if len(rates) == 0:
             return None
 
         rate: Any = rates[0]
@@ -89,7 +95,10 @@ class MarketDataService:
         )
 
         if rates is None:
-            return []
+            raise RuntimeError(
+                f"Unable to retrieve historical bars for "
+                f"{self.symbol}: {mt5.last_error()}"
+            )
 
         bars: list[MarketBar] = []
 
