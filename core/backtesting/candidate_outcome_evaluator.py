@@ -124,6 +124,14 @@ class CandidateOutcomeEvaluator:
             maximum_adverse_excursion=maximum_adverse,
             maximum_favorable_r_multiple=maximum_favorable / risk,
             maximum_adverse_r_multiple=maximum_adverse / risk,
+            strategy_id=candidate.setup.strategy_id,
+            direction=candidate.setup.direction,
+            setup_timeframe=candidate.setup.setup_timeframe,
+            trigger_timeframe=candidate.trigger.timeframe,
+            trigger_reason=candidate.trigger.reason,
+            setup_metadata=candidate.setup.metadata,
+            trigger_metadata=candidate.trigger.metadata,
+            candidate_metadata=candidate.metadata,
         )
 
     @staticmethod
