@@ -1,56 +1,66 @@
-from core.mt5_execution.config import (
-    MT5ExecutionConfig,
-)
-from core.mt5_execution.executor import (
-    MT5Executor,
-)
-from core.mt5_execution.positions import (
-    get_open_positions,
-)
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+import core.mt5_execution.positions as positions
+from core.mt5_execution.models import OrderSide
 
 
-def test_positions():
+def test_get_open_positions_maps_multiple_positions_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_positions = (
+        SimpleNamespace(
+            ticket=1,
+            symbol="XAUUSD",
+            type=positions.mt5.POSITION_TYPE_BUY,
+            volume=0.01,
+            price_open=3300.0,
+            sl=3295.0,
+            tp=3310.0,
+            profit=10.0,
+        ),
+        SimpleNamespace(
+            ticket=2,
+            symbol="XAUUSD",
+            type=positions.mt5.POSITION_TYPE_SELL,
+            volume=0.02,
+            price_open=3310.0,
+            sl=3315.0,
+            tp=3300.0,
+            profit=-5.0,
+        ),
+    )
+    captured: dict[str, object] = {}
 
-    executor = MT5Executor(
-        MT5ExecutionConfig(),
+    def fake_positions_get(**kwargs):
+        captured.update(kwargs)
+        return raw_positions
+
+    monkeypatch.setattr(
+        positions.mt5,
+        "positions_get",
+        fake_positions_get,
     )
 
-    if not executor.initialize():
+    result = positions.get_open_positions("XAUUSD")
 
-        print("Connection failed.")
-
-        return
-
-    positions = get_open_positions()
-
-    print()
-    print("=" * 60)
-    print("OPEN POSITIONS")
-    print("=" * 60)
-
-    if not positions:
-
-        print("No open positions.")
-
-    else:
-
-        for position in positions:
-
-            print()
-
-            print(f"Ticket     : {position.ticket}")
-            print(f"Symbol     : {position.symbol}")
-            print(f"Direction  : {position.side.value}")
-            print(f"Volume     : {position.volume}")
-            print(f"Open Price : {position.open_price}")
-            print(f"Stop Loss  : {position.stop_loss}")
-            print(f"Take Profit: {position.take_profit}")
-            print(f"Profit     : {position.profit:.2f}")
-
-    print("=" * 60)
-
-    executor.shutdown()
+    assert captured == {"symbol": "XAUUSD"}
+    assert len(result) == 2
+    assert result[0].side is OrderSide.BUY
+    assert result[1].side is OrderSide.SELL
+    assert result[1].volume == pytest.approx(0.02)
 
 
-if __name__ == "__main__":
-    test_positions()
+def test_get_open_positions_empty_query_returns_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        positions.mt5,
+        "positions_get",
+        lambda **kwargs: (),
+    )
+
+    assert positions.get_open_positions("XAUUSD") == []

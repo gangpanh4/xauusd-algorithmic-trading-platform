@@ -1,90 +1,79 @@
-from core.mt5_execution.config import (
-    MT5ExecutionConfig,
-)
+from __future__ import annotations
 
-from core.mt5_execution.executor import (
-    MT5Executor,
-)
+from types import SimpleNamespace
 
-from core.mt5_execution.price_levels import (
-    calculate_price_levels,
-)
+import pytest
 
+import core.mt5_execution.orders as orders
+from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.models import (
     OrderRequest,
     OrderSide,
-)
-
-from core.mt5_execution.orders import (
-    get_market_price,
-    send_order,
+    OrderStatus,
+    SymbolInfo,
 )
 
 
-
-def test_order_execution():
-
-    executor = MT5Executor(
-        MT5ExecutionConfig(),
+def _symbol() -> SymbolInfo:
+    return SymbolInfo(
+        name="XAUUSD",
+        digits=2,
+        point=0.01,
+        spread=20,
+        volume_min=0.01,
+        volume_max=100.0,
+        volume_step=0.01,
+        trade_allowed=True,
+        tick_size=0.01,
+        minimum_stop_distance=0.01,
+        filling_mode_flags=1,
+        trade_execution_mode=2,
     )
 
-    if not executor.initialize():
 
-        print("Connection failed.")
-
-        return
-
-    entry_price = get_market_price(
-        "XAUUSD",
-        OrderSide.BUY,
-    )
-
-    levels = calculate_price_levels(
-        entry_price=entry_price,
-        side=OrderSide.BUY,
-        stop_loss_distance=2.0,
-        risk_reward_ratio=2.0,
-    )
-
+def test_order_execution_is_fully_mocked_and_maps_fill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     request = OrderRequest(
         symbol="XAUUSD",
         side=OrderSide.BUY,
         volume=0.01,
-        entry_price=entry_price,
-        stop_loss=levels.stop_loss,
-        take_profit=levels.take_profit,
-        comment="Version 3.1 Execution Test",
+        entry_price=3300.0,
+        stop_loss=3298.0,
+        take_profit=3304.0,
+        comment="Offline Execution Test",
+    )
+    monkeypatch.setattr(
+        orders,
+        "get_symbol_info",
+        lambda name: _symbol(),
+    )
+    monkeypatch.setattr(
+        orders.mt5,
+        "order_check",
+        lambda payload: SimpleNamespace(
+            retcode=0,
+            comment="Done",
+        ),
+    )
+    monkeypatch.setattr(
+        orders.mt5,
+        "order_send",
+        lambda payload: SimpleNamespace(
+            retcode=orders.mt5.TRADE_RETCODE_DONE,
+            order=987654,
+            price=payload["price"],
+            volume=payload["volume"],
+            comment="Executed",
+        ),
     )
 
-    print()
-    print("=" * 60)
-    print("ORDER LEVELS")
-    print("=" * 60)
-    print(f"Entry Price : {entry_price:.2f}")
-    print(f"Stop Loss  : {levels.stop_loss:.2f}")
-    print(f"Take Profit: {levels.take_profit:.2f}")
-    print("=" * 60)
-
-    result = send_order(
+    result = orders.send_order(
         request,
-        executor.config,
+        MT5ExecutionConfig(),
     )
 
-    print()
-
-    print("=" * 60)
-    print("ORDER EXECUTION RESULT")
-    print("=" * 60)
-
-    print(f"Status   : {result.status.value}")
-    print(f"Ticket   : {result.ticket}")
-    print(f"Price    : {result.executed_price}")
-    print(f"Message  : {result.message}")
-
-    print("=" * 60)
-
-    executor.shutdown()
-
-
-if __name__ == "__main__":
-    test_order_execution()
+    assert result.status is OrderStatus.FILLED
+    assert result.ticket == 987654
+    assert result.executed_price == pytest.approx(3300.0)
+    assert result.executed_volume == pytest.approx(0.01)
