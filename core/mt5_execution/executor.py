@@ -29,6 +29,33 @@ class MT5Executor:
 
         self.state = MT5ExecutionState()
 
+    def attach(self) -> bool:
+        """Attach executor state to an MT5 connection owned elsewhere."""
+
+        terminal = mt5.terminal_info()
+        account = mt5.account_info()
+        if terminal is None or account is None:
+            self.state.error_count += 1
+            return False
+
+        connected = bool(getattr(terminal, "connected", True))
+        trade_allowed = bool(getattr(terminal, "trade_allowed", True))
+        if not connected or not trade_allowed:
+            self.state.error_count += 1
+            return False
+
+        self.state.initialized = True
+        self.state.connected = True
+        self.state.last_connection_time = datetime.now(UTC)
+        return True
+
+    def detach(self) -> None:
+        """Clear executor state without shutting down the shared MT5 session."""
+
+        self.state.connected = False
+        self.state.initialized = False
+        self.state.last_disconnection_time = datetime.now(UTC)
+
     def initialize(self) -> bool:
         """
         Initialize the MT5 terminal connection.

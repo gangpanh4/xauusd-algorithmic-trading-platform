@@ -50,8 +50,8 @@ class LiveTradingEngine:
             )
             return
 
-        if not self.executor.initialize():
-            self.state.last_error = "Failed to initialize MT5 execution."
+        if not self.executor.attach():
+            self.state.last_error = "Failed to attach MT5 execution."
             logger.error(self.state.last_error)
             raise RuntimeError(self.state.last_error)
 
@@ -65,10 +65,10 @@ class LiveTradingEngine:
         if not self.config.live_execution_enabled:
             return
 
-        # Always release executor state in live-execution mode. Runtime
-        # connection health may already be lost, so relying on is_connected()
-        # would skip cleanup and leave initialized state stale.
-        self.executor.shutdown()
+        # The platform owns the shared MT5 session used by market data and
+        # execution. Stop only detaches executor state; the platform performs
+        # the single terminal shutdown in its finally block.
+        self.executor.detach()
 
     def synchronize_open_positions(self) -> int:
         """Synchronize risk exposure from authoritative broker positions.

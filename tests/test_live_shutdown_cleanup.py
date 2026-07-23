@@ -6,27 +6,29 @@ from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 
 
-def test_live_stop_shuts_down_executor_after_connection_loss() -> None:
+def test_live_stop_detaches_without_shutting_down_shared_mt5() -> None:
     engine = LiveTradingEngine(
         LiveTradingConfig(live_execution_enabled=True)
     )
     engine.state.running = True
-    engine.executor.state.initialized = True
-    engine.executor.state.connected = False
+    engine.executor.detach = Mock()
     engine.executor.shutdown = Mock()
 
     engine.stop()
 
     assert engine.state.running is False
-    engine.executor.shutdown.assert_called_once_with()
+    engine.executor.detach.assert_called_once_with()
+    engine.executor.shutdown.assert_not_called()
 
 
 def test_analysis_only_stop_does_not_touch_executor() -> None:
     engine = LiveTradingEngine(LiveTradingConfig())
     engine.state.running = True
+    engine.executor.detach = Mock()
     engine.executor.shutdown = Mock()
 
     engine.stop()
 
     assert engine.state.running is False
+    engine.executor.detach.assert_not_called()
     engine.executor.shutdown.assert_not_called()

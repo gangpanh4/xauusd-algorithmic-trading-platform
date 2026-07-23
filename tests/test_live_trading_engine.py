@@ -84,19 +84,19 @@ def test_disabled_engine_stop_does_not_shutdown_mt5() -> None:
     engine.executor.shutdown.assert_not_called()
 
 
-def test_enabled_engine_fails_closed_when_mt5_initialization_fails() -> None:
+def test_enabled_engine_fails_closed_when_mt5_attachment_fails() -> None:
     config = LiveTradingConfig(live_execution_enabled=True)
     engine = LiveTradingEngine(config)
-    engine.executor.initialize = Mock(return_value=False)
+    engine.executor.attach = Mock(return_value=False)
 
     with pytest.raises(
         RuntimeError,
-        match="Failed to initialize MT5 execution",
+        match="Failed to attach MT5 execution",
     ):
         engine.start()
 
     assert engine.state.running is False
-    assert engine.state.last_error == "Failed to initialize MT5 execution."
+    assert engine.state.last_error == "Failed to attach MT5 execution."
 
 
 def test_live_trading_engine_contract() -> None:
