@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -30,14 +30,22 @@ def _deal(
     )
 
 
-def test_startup_baseline_records_tickets_without_applying_pnl(
+def test_startup_reconstructs_same_day_risk_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = LiveTradingEngine(LiveTradingConfig())
     as_of = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
     deals = [
-        _deal(ticket=11, timestamp=as_of, net_pnl=50.0),
-        _deal(ticket=12, timestamp=as_of, net_pnl=-20.0),
+        _deal(
+            ticket=11,
+            timestamp=datetime(2026, 7, 22, 9, 0, tzinfo=UTC),
+            net_pnl=50.0,
+        ),
+        _deal(
+            ticket=12,
+            timestamp=datetime(2026, 7, 22, 10, 0, tzinfo=UTC),
+            net_pnl=-20.0,
+        ),
     ]
 
     monkeypatch.setattr(
@@ -45,8 +53,6 @@ def test_startup_baseline_records_tickets_without_applying_pnl(
         "get_realized_deals",
         lambda **kwargs: deals,
     )
-    engine.pipeline.register_realized_pnl = Mock()
-    engine.pipeline.synchronize_account_balance = Mock()
 
     processed = engine.reconcile_realized_deals(
         account_balance=10_000.0,
@@ -54,11 +60,152 @@ def test_startup_baseline_records_tickets_without_applying_pnl(
         initialize_only=True,
     )
 
+    risk_state = engine.pipeline.risk_manager.state
+
     assert processed == 2
     assert engine.state.processed_deal_tickets == {11, 12}
     assert engine.state.last_deal_reconciliation_time == as_of
-    engine.pipeline.register_realized_pnl.assert_not_called()
-    engine.pipeline.synchronize_account_balance.assert_not_called()
+    assert risk_state.daily_start_balance == pytest.approx(9_970.0)
+    assert risk_state.virtual_balance == pytest.approx(10_000.0)
+    assert risk_state.daily_profit == pytest.approx(50.0)
+    assert risk_state.daily_loss == pytest.approx(20.0)
+    assert risk_state.daily_drawdown == pytest.approx(0.0)
+    assert risk_state.daily_loss_limit_hit is False
+
+
+def test_startup_restores_daily_loss_limit_after_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    as_of = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+    loss = _deal(
+        ticket=13,
+        timestamp=datetime(2026, 7, 22, 10, 0, tzinfo=UTC),
+        net_pnl=-400.0,
+    )
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_realized_deals",
+        lambda **kwargs: [loss],
+    )
+
+    engine.reconcile_realized_deals(
+        account_balance=9_600.0,
+        as_of=as_of,
+        initialize_only=True,
+    )
+
+    risk_state = engine.pipeline.risk_manager.state
+
+    assert risk_state.daily_start_balance == pytest.approx(10_000.0)
+    assert risk_state.virtual_balance == pytest.approx(9_600.0)
+    assert risk_state.daily_loss == pytest.approx(400.0)
+    assert risk_state.daily_drawdown == pytest.approx(400.0)
+    assert risk_state.daily_drawdown_fraction == pytest.approx(0.04)
+    assert risk_state.daily_loss_limit_hit is True
+
+
+def test_startup_excludes_previous_day_deals_from_current_day_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    as_of = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+    previous_day = _deal(
+        ticket=14,
+        timestamp=datetime(2026, 7, 21, 20, 0, tzinfo=UTC),
+        net_pnl=-500.0,
+    )
+    current_day = _deal(
+        ticket=15,
+        timestamp=datetime(2026, 7, 22, 10, 0, tzinfo=UTC),
+        net_pnl=-100.0,
+    )
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_realized_deals",
+        lambda **kwargs: [previous_day, current_day],
+    )
+
+    engine.reconcile_realized_deals(
+        account_balance=9_900.0,
+        as_of=as_of,
+        initialize_only=True,
+    )
+
+    risk_state = engine.pipeline.risk_manager.state
+
+    assert engine.state.processed_deal_tickets == {14, 15}
+    assert risk_state.daily_start_balance == pytest.approx(10_000.0)
+    assert risk_state.daily_loss == pytest.approx(100.0)
+    assert risk_state.daily_drawdown == pytest.approx(100.0)
+
+
+def test_startup_without_same_day_deals_initializes_current_balance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    as_of = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+    previous_day = _deal(
+        ticket=16,
+        timestamp=datetime(2026, 7, 21, 20, 0, tzinfo=UTC),
+        net_pnl=-100.0,
+    )
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_realized_deals",
+        lambda **kwargs: [previous_day],
+    )
+
+    engine.reconcile_realized_deals(
+        account_balance=10_000.0,
+        as_of=as_of,
+        initialize_only=True,
+    )
+
+    risk_state = engine.pipeline.risk_manager.state
+
+    assert engine.state.processed_deal_tickets == {16}
+    assert risk_state.daily_start_balance == pytest.approx(10_000.0)
+    assert risk_state.virtual_balance == pytest.approx(10_000.0)
+    assert risk_state.daily_profit == pytest.approx(0.0)
+    assert risk_state.daily_loss == pytest.approx(0.0)
+
+
+def test_startup_reconstruction_failure_is_atomic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    as_of = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+    deal = _deal(
+        ticket=17,
+        timestamp=datetime(2026, 7, 22, 10, 0, tzinfo=UTC),
+        net_pnl=-100.0,
+    )
+    original_state = engine.pipeline.risk_manager.state
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_realized_deals",
+        lambda **kwargs: [deal],
+    )
+    engine.pipeline.register_realized_pnl = Mock(
+        side_effect=RuntimeError("risk state unavailable")
+    )
+
+    with pytest.raises(RuntimeError, match="risk state unavailable"):
+        engine.reconcile_realized_deals(
+            account_balance=9_900.0,
+            as_of=as_of,
+            initialize_only=True,
+        )
+
+    assert engine.state.processed_deal_tickets == set()
+    assert engine.state.last_deal_reconciliation_time is None
+    assert engine.pipeline.risk_manager.state is not original_state
+    assert engine.pipeline.risk_manager.state.initialized is False
 
 
 def test_new_deal_is_applied_exactly_once(
@@ -167,20 +314,21 @@ def test_partial_close_updates_pnl_without_completed_trade_count(
     assert risk_state.completed_trade_count == 0
 
 
-def test_realized_pnl_failure_does_not_mark_ticket_processed(
+def test_realized_pnl_failure_does_not_mark_failed_ticket_processed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = LiveTradingEngine(LiveTradingConfig())
     as_of = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
-    deal = _deal(ticket=41, timestamp=as_of, net_pnl=-10.0)
+    first = _deal(ticket=41, timestamp=as_of, net_pnl=10.0)
+    second = _deal(ticket=42, timestamp=as_of, net_pnl=-20.0)
 
     monkeypatch.setattr(
         live_engine_module,
         "get_realized_deals",
-        lambda **kwargs: [deal],
+        lambda **kwargs: [first, second],
     )
     engine.pipeline.register_realized_pnl = Mock(
-        side_effect=RuntimeError("risk state unavailable")
+        side_effect=[None, RuntimeError("risk state unavailable")]
     )
 
     with pytest.raises(RuntimeError, match="risk state unavailable"):
@@ -189,6 +337,9 @@ def test_realized_pnl_failure_does_not_mark_ticket_processed(
             as_of=as_of,
         )
 
-    # A failed risk-state update must remain retryable.
-    assert 41 not in engine.state.processed_deal_tickets
+    assert engine.pipeline.register_realized_pnl.call_args_list == [
+        call(10.0, timestamp=as_of),
+        call(-20.0, timestamp=as_of),
+    ]
+    assert engine.state.processed_deal_tickets == {41}
     assert engine.state.last_deal_reconciliation_time is None

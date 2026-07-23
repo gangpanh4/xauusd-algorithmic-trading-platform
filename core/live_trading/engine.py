@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 import logging
 
@@ -98,7 +99,13 @@ class LiveTradingEngine:
         as_of: datetime | None = None,
         initialize_only: bool = False,
     ) -> int:
-        """Apply new broker closing deals exactly once."""
+        """Apply new broker closing deals exactly once.
+
+        Startup reconciliation reconstructs the current UTC trading day before
+        any ticket is committed as processed. The current balance is treated as
+        authoritative, while the day-opening balance is inferred by removing
+        the net P&L of this symbol's same-day realized deals.
+        """
 
         end = datetime.now(UTC) if as_of is None else as_of.astimezone(UTC)
         start = self.state.last_deal_reconciliation_time
@@ -118,18 +125,58 @@ class LiveTradingEngine:
             if deal.ticket not in self.state.processed_deal_tickets
         ]
 
-        for deal in new_deals:
-            if not initialize_only:
+        if initialize_only:
+            risk_state = self.pipeline.risk_manager.state
+            risk_state_snapshot = deepcopy(risk_state)
+            trading_date = end.date()
+            same_day_deals = [
+                deal
+                for deal in new_deals
+                if deal.timestamp.astimezone(UTC).date() == trading_date
+            ]
+            opening_balance = account_balance - sum(
+                deal.net_pnl for deal in same_day_deals
+            )
+            day_start = datetime(
+                trading_date.year,
+                trading_date.month,
+                trading_date.day,
+                tzinfo=UTC,
+            )
+
+            try:
+                self.pipeline.synchronize_account_balance(
+                    opening_balance,
+                    timestamp=day_start,
+                )
+                for deal in same_day_deals:
+                    self.pipeline.register_realized_pnl(
+                        deal.net_pnl,
+                        timestamp=deal.timestamp,
+                    )
+                self.pipeline.synchronize_account_balance(
+                    account_balance,
+                    timestamp=end,
+                )
+            except Exception:
+                self.pipeline.risk_manager.state = risk_state_snapshot
+                raise
+            # Startup tickets are committed only after the complete daily-state
+            # reconstruction succeeds.
+            self.state.processed_deal_tickets.update(
+                deal.ticket for deal in new_deals
+            )
+        else:
+            for deal in new_deals:
                 self.pipeline.register_realized_pnl(
                     deal.net_pnl,
                     timestamp=deal.timestamp,
                 )
+                # Preserve the existing per-deal retry contract: once one deal
+                # has been applied successfully, it must not be applied again if
+                # a later deal or final balance synchronization fails.
+                self.state.processed_deal_tickets.add(deal.ticket)
 
-            # Mark the deal processed only after every required state update
-            # succeeds. A failure therefore remains retryable.
-            self.state.processed_deal_tickets.add(deal.ticket)
-
-        if not initialize_only:
             self.pipeline.synchronize_account_balance(
                 account_balance,
                 timestamp=end,
