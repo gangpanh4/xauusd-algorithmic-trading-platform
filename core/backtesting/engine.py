@@ -34,6 +34,10 @@ from core.trading_pipeline.pipeline import TradingPipeline
 from .config import BacktestConfig
 from .models import BacktestResult, BacktestTrade
 from .simulator import IncrementalTradeSimulation, TradeSimulator
+from .strategy_comparison import (
+    BacktestStrategyComparison,
+    BacktestStrategyComparisonBuilder,
+)
 from .strategy_observer import BacktestStrategyObserver
 from .state import BacktestState
 
@@ -172,6 +176,23 @@ class BacktestingEngine:
         """Return candidate count without affecting executed trades."""
 
         return self.strategy_observer.candidate_count
+
+    def build_strategy_comparison(
+        self,
+        backtest_result: BacktestResult,
+    ) -> BacktestStrategyComparison:
+        """Build a read-only pipeline-versus-strategy comparison report.
+
+        The report consumes completed backtest output and already-recorded audit
+        histories. It does not process bars, create candidates, change risk,
+        or authorize execution.
+        """
+
+        return BacktestStrategyComparisonBuilder.build(
+            backtest_result=backtest_result,
+            pipeline_audits=self.observation_audits,
+            strategy_observations=self.strategy_observations,
+        )
 
     def run(self, context: MarketContext) -> BacktestResult:
         """Execute the backtest over completed, strictly ordered M15 bars."""
