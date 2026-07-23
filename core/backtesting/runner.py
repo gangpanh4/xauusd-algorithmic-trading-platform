@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
+from .candidate_outcome_exporter import CandidateOutcomeExporter
 from .config import BacktestConfig
 from .engine import BacktestingEngine
 from .exporter import BacktestExporter
@@ -42,6 +43,10 @@ class BacktestRunner:
         )
 
         self.exporter = BacktestExporter(
+            config.output_directory,
+        )
+
+        self.candidate_outcome_exporter = CandidateOutcomeExporter(
             config.output_directory,
         )
 
@@ -174,7 +179,7 @@ class BacktestRunner:
         self,
         output: BacktestRunOutput,
     ) -> None:
-        """Generate existing reports plus strategy-comparison artifacts."""
+        """Generate execution, comparison, and candidate research artifacts."""
 
         if not isinstance(output, BacktestRunOutput):
             raise TypeError("output must be BacktestRunOutput")
@@ -186,6 +191,17 @@ class BacktestRunner:
         self.exporter.export_strategy_comparison_events(
             output.strategy_comparison
         )
+        has_candidate_outcome_research = bool(
+            output.candidate_outcome_evaluations
+            or output.candidate_outcome_summary
+        )
+        if has_candidate_outcome_research:
+            self.candidate_outcome_exporter.export_summary(
+                output.candidate_outcome_summary
+            )
+            self.candidate_outcome_exporter.export_evaluations(
+                output.candidate_outcome_evaluations
+            )
 
     def print_trade_log(
         self,
