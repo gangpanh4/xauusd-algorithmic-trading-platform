@@ -80,7 +80,7 @@ def test_run_backtest_uses_composite_research_path(
         {
             "symbol": "XAUUSD",
             "timeframe": 15,
-            "bars": 500,
+            "bars": 5_000,
         },
     )
     assert calls[2] == ("generate_composite_reports", output)

@@ -34,7 +34,7 @@ def main() -> None:
         output = runner.run_with_strategy_comparison(
             symbol="XAUUSD",
             timeframe=mt5.TIMEFRAME_M15,
-            bars=500,
+            bars=5_000,
         )
 
         runner.generate_composite_reports(output)
