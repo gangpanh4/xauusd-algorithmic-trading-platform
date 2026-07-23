@@ -243,6 +243,10 @@ class BacktestingEngine:
         return BacktestRunOutput(
             result=result,
             strategy_comparison=self.build_strategy_comparison(result),
+            candidate_outcome_evaluations=(
+                self.candidate_outcome_evaluations
+            ),
+            candidate_outcome_summary=self.candidate_outcome_summary(),
         )
 
     def run(self, context: MarketContext) -> BacktestResult:
