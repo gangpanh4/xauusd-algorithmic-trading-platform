@@ -263,8 +263,38 @@ def send_order(
     status = _map_trade_retcode(retcode)
     ticket = getattr(result, "order", None)
     price = float(getattr(result, "price", 0.0))
-    volume = float(getattr(result, "volume", 0.0))
     comment = str(getattr(result, "comment", "No broker comment."))
+
+    volume_value = getattr(result, "volume", None)
+    try:
+        volume = float(volume_value)
+    except (TypeError, ValueError):
+        volume = float("nan")
+
+    acknowledgement_valid, acknowledgement_message = (
+        _validate_execution_acknowledgement(
+            status=status,
+            requested_volume=float(request.volume),
+            executed_volume=volume,
+        )
+    )
+    if not acknowledgement_valid:
+        return OrderResult(
+            timestamp=datetime.now(UTC),
+            status=OrderStatus.REJECTED,
+            ticket=ticket,
+            executed_price=price,
+            message=(
+                f"{_retcode_name(retcode)} [{retcode}] invalid execution "
+                f"acknowledgement: {acknowledgement_message}"
+            ),
+            retcode=retcode,
+            executed_volume=(
+                volume
+                if isfinite(volume) and volume > 0.0
+                else 0.0
+            ),
+        )
 
     return OrderResult(
         timestamp=datetime.now(UTC),
@@ -277,6 +307,60 @@ def send_order(
     )
 
 
+
+
+def _validate_execution_acknowledgement(
+    *,
+    status: OrderStatus,
+    requested_volume: float,
+    executed_volume: float,
+) -> tuple[bool, str]:
+    """Validate broker-reported volume for successful execution statuses."""
+
+    if status not in (
+        OrderStatus.FILLED,
+        OrderStatus.PARTIALLY_FILLED,
+    ):
+        return True, "Execution acknowledgement validation not required."
+
+    if not isfinite(executed_volume):
+        return False, "Executed volume must be finite."
+    if executed_volume <= 0.0:
+        return False, "Executed volume must be greater than zero."
+    if executed_volume > requested_volume and not isclose(
+        executed_volume,
+        requested_volume,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        return False, "Executed volume cannot exceed requested volume."
+
+    if status is OrderStatus.FILLED:
+        if not isclose(
+            executed_volume,
+            requested_volume,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            return (
+                False,
+                "FILLED requires executed volume equal to requested volume.",
+            )
+        return True, "Filled execution acknowledgement is valid."
+
+    if isclose(
+        executed_volume,
+        requested_volume,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        return (
+            False,
+            "PARTIALLY_FILLED requires executed volume below requested "
+            "volume.",
+        )
+
+    return True, "Partial execution acknowledgement is valid."
 
 
 def _map_trade_retcode(retcode: int) -> OrderStatus:
