@@ -12,7 +12,10 @@ from time import perf_counter
 
 from core.data.models import MarketBar as SharedMarketBar
 from core.feature_engineering.models import FeatureVector
+from core.market_structure.models import MarketStructureResult
 from core.multi_timeframe.enums import Timeframe
+from core.multi_timeframe.models import MultiTimeframeResult
+from core.strategies import StrategyObservation
 from core.regime_detector.models import MarketBar
 from core.research_analytics.engine import ResearchAnalyticsEngine
 from core.research_analytics.models import TradeAnalytics
@@ -31,6 +34,7 @@ from core.trading_pipeline.pipeline import TradingPipeline
 from .config import BacktestConfig
 from .models import BacktestResult, BacktestTrade
 from .simulator import IncrementalTradeSimulation, TradeSimulator
+from .strategy_observer import BacktestStrategyObserver
 from .state import BacktestState
 
 
@@ -94,6 +98,7 @@ class BacktestingEngine:
             commission_per_lot=self.config.commission_per_lot,
         )
         self.pipeline = self._create_pipeline()
+        self.strategy_observer = BacktestStrategyObserver()
         self.research_storage = ResearchStorage()
         self.research_engine = ResearchAnalyticsEngine(self.research_storage)
         self._pending_analytics: TradeAnalytics | None = None
@@ -117,6 +122,7 @@ class BacktestingEngine:
 
         self.state.reset()
         self.pipeline = self._create_pipeline()
+        self.strategy_observer.reset()
         self.research_storage = ResearchStorage()
         self.research_engine = ResearchAnalyticsEngine(self.research_storage)
         self._pending_analytics = None
@@ -149,6 +155,23 @@ class BacktestingEngine:
             key = audit.reason_code or "APPROVED"
             summary[key] = summary.get(key, 0) + 1
         return dict(sorted(summary.items()))
+
+    @property
+    def strategy_observations(self) -> tuple[StrategyObservation, ...]:
+        """Return immutable observational-strategy history."""
+
+        return self.strategy_observer.observations
+
+    def strategy_observation_summary(self) -> dict[str, int]:
+        """Return observational strategy counts grouped by reason code."""
+
+        return self.strategy_observer.observation_summary()
+
+    @property
+    def strategy_candidate_count(self) -> int:
+        """Return candidate count without affecting executed trades."""
+
+        return self.strategy_observer.candidate_count
 
     def run(self, context: MarketContext) -> BacktestResult:
         """Execute the backtest over completed, strictly ordered M15 bars."""
@@ -315,8 +338,40 @@ class BacktestingEngine:
             tick_size=self.tick_size,
             lot_step=self.lot_step,
         )
+        if result is not None:
+            self._observe_strategy(
+                multi_timeframe=mtf_result,
+                observation_bar=observation_bar,
+            )
         return result, observation_bar
 
+
+    def _observe_strategy(
+        self,
+        *,
+        multi_timeframe: MultiTimeframeResult,
+        observation_bar: MarketBar,
+    ) -> StrategyObservation | None:
+        """Record one synchronized strategy observation without execution.
+
+        The M5 structure engine owns the authoritative confirmation index. The
+        strategy must use that index rather than the outer M15 loop index or an
+        independently calculated absolute index, otherwise trigger confirmation
+        timing could diverge from the market-structure evidence.
+        """
+
+        market_structure = multi_timeframe.m5.market_structure
+        if not isinstance(market_structure, MarketStructureResult):
+            return None
+        structure_state = market_structure.structure_state
+        if structure_state is None:
+            return None
+
+        return self.strategy_observer.observe(
+            multi_timeframe=multi_timeframe,
+            current_bar=self._to_shared_bar(observation_bar),
+            current_bar_index=structure_state.current_bar_index,
+        )
 
     def _process_pipeline_bar(
         self,
