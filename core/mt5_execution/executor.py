@@ -10,7 +10,7 @@ import MetaTrader5 as mt5
 
 from .close_position import close_position
 from .config import MT5ExecutionConfig
-from .models import OrderRequest, OrderResult
+from .models import OrderRequest, OrderResult, OrderStatus
 from .orders import send_order
 from .state import MT5ExecutionState
 
@@ -61,10 +61,17 @@ class MT5Executor:
                 "MT5Executor is not connected."
             )
 
-        return send_order(
-            request=request,
-            config=self.config,
-        )
+        try:
+            result = send_order(
+                request=request,
+                config=self.config,
+            )
+        except Exception:
+            self.state.error_count += 1
+            raise
+
+        self._record_order_result(result)
+        return result
 
     def close_position(
         self,
@@ -77,10 +84,26 @@ class MT5Executor:
                 "MT5Executor is not connected."
             )
 
-        return close_position(
-            ticket=ticket,
-            config=self.config,
-        )
+        try:
+            result = close_position(
+                ticket=ticket,
+                config=self.config,
+            )
+        except Exception:
+            self.state.error_count += 1
+            raise
+
+        self._record_order_result(result)
+        return result
+
+    def _record_order_result(self, result: OrderResult) -> None:
+        """Record one completed execution request in executor state."""
+
+        self.state.last_order = result
+        self.state.total_orders_sent += 1
+
+        if result.status is OrderStatus.REJECTED:
+            self.state.error_count += 1
 
     def is_connected(self) -> bool:
         """Return current MT5 terminal and account connection health.
