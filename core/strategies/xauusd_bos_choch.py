@@ -297,10 +297,10 @@ class XAUUSDBOSCHOCHStrategy:
             if latest is None:
                 return None, "NO_M5_STRUCTURE_EVENT", "No M5 BOS or CHOCH event is available."
             return None, "M5_DIRECTION_MISMATCH", "Latest M5 structural event is not aligned with the setup."
-        if event.confirmation_index != context.current_bar_index:
-            return None, "M5_CONFIRMATION_INDEX_MISMATCH", "Aligned M5 event was not confirmed on the current M5 bar."
         if event.age != 0:
             return None, "M5_EVENT_NOT_FRESH", "Aligned M5 event is not fresh."
+        if event.confirmation_index != context.current_bar_index:
+            return None, "M5_CONFIRMATION_INDEX_MISMATCH", "Fresh M5 event confirmation index does not match the current M5 structure index."
         trigger = EntryTrigger(
             setup_id=setup.setup_id,
             trigger_type=(EntryTriggerType.BOS_CONFIRMATION if isinstance(event, BOSEvent) else EntryTriggerType.CHOCH_CONFIRMATION),
