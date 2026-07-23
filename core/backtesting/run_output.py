@@ -7,6 +7,10 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .candidate_outcome_models import CandidateOutcomeEvaluation
+from .candidate_outcome_statistics import (
+    CandidateOutcomeStatistics,
+    CandidateOutcomeStatisticsCalculator,
+)
 from .models import BacktestResult
 from .strategy_comparison import BacktestStrategyComparison
 
@@ -29,6 +33,7 @@ class BacktestRunOutput:
     candidate_outcome_summary: Mapping[str, int] = field(
         default_factory=dict
     )
+    candidate_outcome_statistics: CandidateOutcomeStatistics | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.result, BacktestResult):
@@ -79,4 +84,21 @@ class BacktestRunOutput:
             self,
             "candidate_outcome_summary",
             MappingProxyType(dict(sorted(normalized_summary.items()))),
+        )
+
+        statistics = self.candidate_outcome_statistics
+        if statistics is None:
+            statistics = CandidateOutcomeStatisticsCalculator.calculate(
+                evaluations
+            )
+        elif not isinstance(statistics, CandidateOutcomeStatistics):
+            raise TypeError(
+                "candidate_outcome_statistics must be "
+                "CandidateOutcomeStatistics or None"
+            )
+
+        object.__setattr__(
+            self,
+            "candidate_outcome_statistics",
+            statistics,
         )

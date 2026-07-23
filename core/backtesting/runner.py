@@ -202,6 +202,9 @@ class BacktestRunner:
             self.candidate_outcome_exporter.export_evaluations(
                 output.candidate_outcome_evaluations
             )
+            self.candidate_outcome_exporter.export_statistics(
+                output.candidate_outcome_statistics
+            )
 
     def print_trade_log(
         self,

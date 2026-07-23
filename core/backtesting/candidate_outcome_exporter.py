@@ -5,13 +5,15 @@ from __future__ import annotations
 import csv
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict
 from pathlib import Path
 
 from .candidate_outcome_models import CandidateOutcomeEvaluation
+from .candidate_outcome_statistics import CandidateOutcomeStatistics
 
 
 class CandidateOutcomeExporter:
-    """Write deterministic candidate-outcome summary and detail files."""
+    """Write deterministic candidate-outcome research files."""
 
     def __init__(
         self,
@@ -48,15 +50,31 @@ class CandidateOutcomeExporter:
             self.output_directory
             / "candidate_outcome_summary.json"
         )
-        with path.open("w", encoding="utf-8") as file:
-            json.dump(
-                dict(sorted(payload.items())),
-                file,
-                indent=4,
-                ensure_ascii=False,
-                sort_keys=True,
-                allow_nan=False,
+        self._write_json(path, dict(sorted(payload.items())))
+        return path
+
+    def export_statistics(
+        self,
+        statistics: CandidateOutcomeStatistics,
+    ) -> Path:
+        """Export ``candidate_outcome_statistics.json``."""
+
+        if not isinstance(statistics, CandidateOutcomeStatistics):
+            raise TypeError(
+                "statistics must be CandidateOutcomeStatistics"
             )
+
+        payload = asdict(statistics)
+        payload["target_index_hit_counts"] = {
+            str(index): count
+            for index, count in statistics.target_index_hit_counts
+        }
+
+        path = (
+            self.output_directory
+            / "candidate_outcome_statistics.json"
+        )
+        self._write_json(path, payload)
         return path
 
     def export_evaluations(
@@ -160,3 +178,15 @@ class CandidateOutcomeExporter:
                 )
 
         return path
+
+    @staticmethod
+    def _write_json(path: Path, payload: object) -> None:
+        with path.open("w", encoding="utf-8") as file:
+            json.dump(
+                payload,
+                file,
+                indent=4,
+                ensure_ascii=False,
+                sort_keys=True,
+                allow_nan=False,
+            )
