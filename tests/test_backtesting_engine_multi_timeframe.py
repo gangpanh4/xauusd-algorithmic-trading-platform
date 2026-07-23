@@ -112,7 +112,11 @@ def test_engine_builds_no_lookahead_six_timeframe_snapshot() -> None:
     )
 
     assert result is pipeline.result
-    mapping = pipeline.multi_timeframe.calls[0]
+
+    # Strategy replay now advances through every newly completed M5 snapshot.
+    # The active M15 pipeline consumes the final snapshot at this boundary.
+    mapping = pipeline.multi_timeframe.calls[-1]
+
     assert set(mapping) == set(Timeframe)
     assert all(len(values) <= 50 for values in mapping.values())
 
@@ -123,6 +127,7 @@ def test_engine_builds_no_lookahead_six_timeframe_snapshot() -> None:
     assert mapping[Timeframe.WEEKLY][-1].timestamp + timedelta(days=7) <= boundary
     assert mapping[Timeframe.DAILY][-1].timestamp + timedelta(days=1) <= boundary
     assert signal_bar.timestamp == mapping[Timeframe.M5][-1].timestamp
+
     kwargs = pipeline.process_calls[0][1]
     assert kwargs["confluence"] is pipeline.confluence_engine.result
     assert kwargs["multi_timeframe_result"] is pipeline.multi_timeframe.result
@@ -144,8 +149,12 @@ def test_unclosed_higher_timeframe_candles_are_not_visible() -> None:
         m15_index=0,
         m15_bar=context.current_bar,
     )
-    mapping = pipeline.multi_timeframe.calls[0]
+
+    # Inspect the final snapshot used at the current M15 boundary, not the
+    # earliest replayed M5 snapshot.
+    mapping = pipeline.multi_timeframe.calls[-1]
     boundary = observation + timedelta(minutes=15)
+
     assert all(
         value.timestamp + timedelta(hours=4) <= boundary
         for value in mapping[Timeframe.H4]

@@ -116,6 +116,7 @@ class BacktestingEngine:
         self._position_registered = False
         self._observation_audits: list[PipelineObservationAudit] = []
         self._last_pipeline_observation_timestamp: datetime | None = None
+        self._last_strategy_m5_end = 0
         self._progress_started_at: float | None = None
         self._mtf_cache_context_id: int | None = None
         self._mtf_close_times: dict[str, tuple[datetime, ...]] = {}
@@ -141,6 +142,7 @@ class BacktestingEngine:
         self._position_registered = False
         self._observation_audits = []
         self._last_pipeline_observation_timestamp = None
+        self._last_strategy_m5_end = 0
         self._progress_started_at = None
         self._mtf_cache_context_id = None
         self._mtf_close_times = {}
@@ -399,7 +401,10 @@ class BacktestingEngine:
             Timeframe.M15: self._window("m15", m15_end),
             Timeframe.M5: self._window("m5", m5_end),
         }
-        mtf_result = self.pipeline.multi_timeframe.process(shared)
+        mtf_result = self._observe_new_strategy_m5_bars(
+            context=context,
+            visible_m5_end=m5_end,
+        )
         confluence = self.pipeline.confluence_engine.evaluate_multi_timeframe(
             mtf_result
         )
@@ -415,13 +420,94 @@ class BacktestingEngine:
             tick_size=self.tick_size,
             lot_step=self.lot_step,
         )
-        if result is not None:
-            self._observe_strategy(
-                multi_timeframe=mtf_result,
-                observation_bar=observation_bar,
-            )
         return result, observation_bar
 
+
+    def _observe_new_strategy_m5_bars(
+        self,
+        *,
+        context: MarketContext,
+        visible_m5_end: int,
+    ) -> MultiTimeframeResult:
+        """Observe every newly completed M5 bar exactly once."""
+
+        if visible_m5_end <= 0:
+            raise ValueError("visible_m5_end must be greater than zero")
+
+        previous_end = getattr(self, "_last_strategy_m5_end", 0)
+        if previous_end < 0:
+            raise ValueError("_last_strategy_m5_end cannot be negative")
+        if previous_end > visible_m5_end:
+            raise ValueError(
+                "visible M5 history moved backwards during strategy replay"
+            )
+
+        final_result: MultiTimeframeResult | None = None
+
+        for m5_end in range(previous_end + 1, visible_m5_end + 1):
+            boundary = self._mtf_close_times["m5"][m5_end - 1]
+            snapshot = self._strategy_mtf_snapshot(
+                boundary=boundary,
+                m5_end=m5_end,
+            )
+
+            if snapshot is None:
+                self._last_strategy_m5_end = m5_end
+                continue
+
+            final_result = self.pipeline.multi_timeframe.process(snapshot)
+            self._observe_strategy(
+                multi_timeframe=final_result,
+                observation_bar=context.m5_bars[m5_end - 1],
+            )
+            self._last_strategy_m5_end = m5_end
+
+        if final_result is not None:
+            return final_result
+
+        boundary = self._mtf_close_times["m5"][visible_m5_end - 1]
+        snapshot = self._strategy_mtf_snapshot(
+            boundary=boundary,
+            m5_end=visible_m5_end,
+        )
+        if snapshot is None:
+            raise RuntimeError(
+                "final visible M5 bar lacks a complete multi-timeframe snapshot"
+            )
+
+        return self.pipeline.multi_timeframe.process(snapshot)
+
+    def _strategy_mtf_snapshot(
+        self,
+        *,
+        boundary: datetime,
+        m5_end: int,
+    ) -> Mapping[Timeframe, tuple[SharedMarketBar, ...]] | None:
+        """Build one no-lookahead snapshot at an exact completed M5 close."""
+
+        m15_end = self._visible_end("m15", boundary)
+        h1_end = self._visible_end("h1", boundary)
+        h4_end = self._visible_end("h4", boundary)
+        daily_end = bisect_right(self._daily_close_times, boundary)
+        weekly_end = bisect_right(self._weekly_close_times, boundary)
+
+        if min(m5_end, m15_end, h1_end, h4_end, daily_end, weekly_end) == 0:
+            return None
+
+        return {
+            Timeframe.WEEKLY: self._aggregate_window(
+                self._weekly_bars,
+                weekly_end,
+            ),
+            Timeframe.DAILY: self._aggregate_window(
+                self._daily_bars,
+                daily_end,
+            ),
+            Timeframe.H4: self._window("h4", h4_end),
+            Timeframe.H1: self._window("h1", h1_end),
+            Timeframe.M15: self._window("m15", m15_end),
+            Timeframe.M5: self._window("m5", m5_end),
+        }
 
     def _observe_strategy(
         self,
