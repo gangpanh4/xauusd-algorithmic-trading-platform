@@ -65,8 +65,10 @@ class LiveTradingEngine:
         if not self.config.live_execution_enabled:
             return
 
-        if self.executor.is_connected():
-            self.executor.shutdown()
+        # Always release executor state in live-execution mode. Runtime
+        # connection health may already be lost, so relying on is_connected()
+        # would skip cleanup and leave initialized state stale.
+        self.executor.shutdown()
 
     def synchronize_open_positions(self) -> int:
         """Synchronize risk exposure from authoritative broker positions.
