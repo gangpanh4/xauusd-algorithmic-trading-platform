@@ -224,6 +224,87 @@ class LiquiditySweepEvent:
 
 
 @dataclass(slots=True, frozen=True)
+class StructureState:
+    """Immutable structural snapshot for strategy consumption.
+
+    The snapshot contains confirmed market facts only. It does not contain
+    probability, trade-quality, decision, signal, risk, or execution state.
+    """
+
+    timestamp: datetime
+    current_bar_index: int
+    trend: MarketTrend
+    confirmed_swings: tuple[SwingPoint, ...] = ()
+    last_swing: SwingPoint | None = None
+    last_high: SwingPoint | None = None
+    last_low: SwingPoint | None = None
+    protected_high: SwingPoint | None = None
+    protected_low: SwingPoint | None = None
+    last_bos: BOSEvent | None = None
+    last_choch: CHOCHEvent | None = None
+    last_liquidity: LiquiditySweepEvent | None = None
+    tracked_liquidity_levels: tuple[LiquidityLevel, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.current_bar_index, bool) or not isinstance(
+            self.current_bar_index,
+            int,
+        ):
+            raise TypeError("current_bar_index must be an integer")
+        if self.current_bar_index < 0:
+            raise ValueError("current_bar_index cannot be negative")
+        if not isinstance(self.trend, MarketTrend):
+            raise TypeError("trend must be a MarketTrend")
+
+        for swing in self.confirmed_swings:
+            if not isinstance(swing, SwingPoint):
+                raise TypeError(
+                    "confirmed_swings must contain SwingPoint instances"
+                )
+
+        for name in (
+            "last_swing",
+            "last_high",
+            "last_low",
+            "protected_high",
+            "protected_low",
+        ):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, SwingPoint):
+                raise TypeError(f"{name} must be a SwingPoint or None")
+
+        if (
+            self.last_high is not None
+            and self.last_high.swing_type is not SwingType.HIGH
+        ):
+            raise ValueError("last_high must reference a HIGH swing")
+        if (
+            self.last_low is not None
+            and self.last_low.swing_type is not SwingType.LOW
+        ):
+            raise ValueError("last_low must reference a LOW swing")
+        if (
+            self.protected_high is not None
+            and self.protected_high.swing_type is not SwingType.HIGH
+        ):
+            raise ValueError("protected_high must reference a HIGH swing")
+        if (
+            self.protected_low is not None
+            and self.protected_low.swing_type is not SwingType.LOW
+        ):
+            raise ValueError("protected_low must reference a LOW swing")
+
+    @property
+    def last_confirmation_index(self) -> int | None:
+        """Return when the latest confirmed swing became knowable."""
+
+        if self.last_swing is None:
+            return None
+        return self.last_swing.confirmation_index
+
+
+
+@dataclass(slots=True, frozen=True)
 class MarketStructureResult:
     """
     Aggregated output produced by the MarketStructureEngine.
@@ -263,3 +344,6 @@ class MarketStructureResult:
 
     # Configuration value used to derive freshness on this result.
     freshness_decay_bars: int = 1
+
+    # Explicit immutable structure snapshot for strategy consumption.
+    structure_state: StructureState | None = None

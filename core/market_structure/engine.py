@@ -20,11 +20,14 @@ from core.market_structure.config import (
 )
 from core.market_structure.liquidity_detector import LiquidityDetector
 from core.market_structure.measurement_engine import MeasurementEngine
+from core.market_structure.enums import SwingType
 from core.market_structure.models import (
     BOSEvent,
     CHOCHEvent,
     LiquiditySweepEvent,
     MarketStructureResult,
+    StructureState,
+    SwingPoint,
 )
 from core.market_structure.swing_detector import SwingDetector
 from core.market_structure.swing_evaluator import StructureEvaluator
@@ -62,7 +65,6 @@ class MarketStructureEngine:
         self.bar_history: deque[MarketBar] = deque(
             maxlen=self.config.maximum_bar_history
         )
-
         self.swing_detector = SwingDetector(self.config.swing)
         self.bos_detector = BOSDetector(self.config.bos)
         self.choch_detector = CHOCHDetector(
@@ -156,6 +158,14 @@ class MarketStructureEngine:
             liquidity=last_liquidity,
         )
 
+        structure_state = self._build_structure_state(
+            timestamp=bar.timestamp,
+            current_bar_index=current_bar_index,
+            last_bos=last_bos,
+            last_choch=last_choch,
+            last_liquidity=last_liquidity,
+        )
+
         return MarketStructureResult(
             timestamp=bar.timestamp,
             last_swing=last_swing,
@@ -173,7 +183,65 @@ class MarketStructureEngine:
             liquidity_freshness=evaluation.liquidity_freshness,
             freshness_decay_bars=self.config.freshness_decay_bars,
             measurements=measurements,
+            structure_state=structure_state,
         )
+
+    def _build_structure_state(
+        self,
+        *,
+        timestamp,
+        current_bar_index: int,
+        last_bos: BOSEvent | None,
+        last_choch: CHOCHEvent | None,
+        last_liquidity: LiquiditySweepEvent | None,
+    ) -> StructureState:
+        """Build one immutable snapshot from authoritative detector state."""
+
+        swings = self.swing_detector.get_swings()
+        last_high = self._latest_swing_of_type(swings, SwingType.HIGH)
+        last_low = self._latest_swing_of_type(swings, SwingType.LOW)
+
+        protected = self.bos_detector.state.protected_swing
+        protected_high = (
+            protected
+            if protected is not None
+            and protected.swing_type is SwingType.HIGH
+            else None
+        )
+        protected_low = (
+            protected
+            if protected is not None
+            and protected.swing_type is SwingType.LOW
+            else None
+        )
+
+        return StructureState(
+            timestamp=timestamp,
+            current_bar_index=current_bar_index,
+            trend=self.bos_detector.state.current_trend,
+            confirmed_swings=swings,
+            last_swing=(swings[-1] if swings else None),
+            last_high=last_high,
+            last_low=last_low,
+            protected_high=protected_high,
+            protected_low=protected_low,
+            last_bos=last_bos,
+            last_choch=last_choch,
+            last_liquidity=last_liquidity,
+            tracked_liquidity_levels=tuple(
+                self.liquidity_detector.state.liquidity_levels
+            ),
+        )
+
+    @staticmethod
+    def _latest_swing_of_type(
+        swings: tuple[SwingPoint, ...],
+        swing_type: SwingType,
+    ) -> SwingPoint | None:
+        for swing in reversed(swings):
+            if swing.swing_type is swing_type:
+                return swing
+        return None
 
     def _calculate_atr(self) -> float | None:
         """Return a simple streaming ATR from completed bar history.
