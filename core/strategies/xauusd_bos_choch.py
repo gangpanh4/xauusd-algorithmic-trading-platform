@@ -177,6 +177,12 @@ class XAUUSDBOSCHOCHStrategy:
         )
         if invalidation_swing is None or target_swing is None:
             return None
+        if not self._target_is_beyond_invalidation(
+            direction=direction,
+            invalidation_price=invalidation_swing.price,
+            target_price=target_swing.price,
+        ):
+            return None
 
         detected_at = context.current_bar.timestamp.astimezone(UTC)
         expires_at = detected_at + timedelta(
@@ -352,6 +358,21 @@ class XAUUSDBOSCHOCHStrategy:
             take_profit_prices=target_prices,
             metadata={"observational_only": True},
         )
+
+    @staticmethod
+    def _target_is_beyond_invalidation(
+        *,
+        direction: TrendDirection,
+        invalidation_price: float,
+        target_price: float,
+    ) -> bool:
+        """Return whether target geometry is valid for the setup direction."""
+
+        if direction is TrendDirection.BULLISH:
+            return target_price > invalidation_price
+        if direction is TrendDirection.BEARISH:
+            return target_price < invalidation_price
+        return False
 
     @staticmethod
     def _structure_state(
