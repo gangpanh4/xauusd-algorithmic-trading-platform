@@ -64,24 +64,40 @@ def _comparison() -> BacktestStrategyComparison:
     )
 
 
-def test_candidate_outcome_exporter_writes_summary_and_csv(
+def test_candidate_outcome_exporter_writes_summary_csv_and_statistics(
     tmp_path,
 ) -> None:
     exporter = CandidateOutcomeExporter(tmp_path)
     evaluation = _evaluation()
+    output = BacktestRunOutput(
+        result=_result(),
+        strategy_comparison=_comparison(),
+        candidate_outcome_evaluations=(evaluation,),
+        candidate_outcome_summary={"UNRESOLVED": 1},
+    )
 
     summary_path = exporter.export_summary(
-        {
-            "TARGET_REACHED": 0,
-            "STOP_REACHED": 0,
-            "AMBIGUOUS_SAME_BAR": 0,
-            "UNRESOLVED": 1,
-        }
+        output.candidate_outcome_summary
     )
-    detail_path = exporter.export_evaluations((evaluation,))
+    detail_path = exporter.export_evaluations(
+        output.candidate_outcome_evaluations
+    )
+    statistics_path = exporter.export_statistics(
+        output.candidate_outcome_statistics
+    )
 
-    payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert payload["UNRESOLVED"] == 1
+    summary_payload = json.loads(
+        summary_path.read_text(encoding="utf-8")
+    )
+    assert summary_payload["UNRESOLVED"] == 1
+
+    statistics_payload = json.loads(
+        statistics_path.read_text(encoding="utf-8")
+    )
+    assert statistics_payload["total_candidates"] == 1
+    assert statistics_payload["unresolved_count"] == 1
+    assert statistics_payload["unresolved_rate"] == 1.0
+    assert statistics_payload["target_index_hit_counts"] == {}
 
     with detail_path.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
@@ -129,6 +145,9 @@ def test_generate_composite_reports_exports_candidate_research() -> None:
             "export_evaluations": (
                 lambda self, value: calls.append(("evaluations", value))
             ),
+            "export_statistics": (
+                lambda self, value: calls.append(("statistics", value))
+            ),
         },
     )()
 
@@ -140,4 +159,5 @@ def test_generate_composite_reports_exports_candidate_research() -> None:
         ("events", output.strategy_comparison),
         ("summary", output.candidate_outcome_summary),
         ("evaluations", output.candidate_outcome_evaluations),
+        ("statistics", output.candidate_outcome_statistics),
     ]
