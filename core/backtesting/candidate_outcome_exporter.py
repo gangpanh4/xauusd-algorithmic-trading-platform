@@ -9,6 +9,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .candidate_outcome_models import CandidateOutcomeEvaluation
+from .candidate_outcome_segmentation import (
+    CandidateOutcomeSegmentation,
+    CandidateOutcomeSegment,
+)
 from .candidate_outcome_statistics import CandidateOutcomeStatistics
 
 
@@ -64,15 +68,47 @@ class CandidateOutcomeExporter:
                 "statistics must be CandidateOutcomeStatistics"
             )
 
-        payload = asdict(statistics)
-        payload["target_index_hit_counts"] = {
-            str(index): count
-            for index, count in statistics.target_index_hit_counts
-        }
+        payload = self._statistics_payload(statistics)
 
         path = (
             self.output_directory
             / "candidate_outcome_statistics.json"
+        )
+        self._write_json(path, payload)
+        return path
+
+    def export_segments(
+        self,
+        segmentation: CandidateOutcomeSegmentation,
+    ) -> Path:
+        """Export ``candidate_outcome_segments.json``."""
+
+        if not isinstance(segmentation, CandidateOutcomeSegmentation):
+            raise TypeError(
+                "segmentation must be CandidateOutcomeSegmentation"
+            )
+
+        payload = {
+            "by_strategy_id": self._segments_payload(
+                segmentation.by_strategy_id
+            ),
+            "by_direction": self._segments_payload(
+                segmentation.by_direction
+            ),
+            "by_setup_timeframe": self._segments_payload(
+                segmentation.by_setup_timeframe
+            ),
+            "by_trigger_timeframe": self._segments_payload(
+                segmentation.by_trigger_timeframe
+            ),
+            "by_trigger_reason": self._segments_payload(
+                segmentation.by_trigger_reason
+            ),
+        }
+
+        path = (
+            self.output_directory
+            / "candidate_outcome_segments.json"
         )
         self._write_json(path, payload)
         return path
@@ -178,6 +214,27 @@ class CandidateOutcomeExporter:
                 )
 
         return path
+
+    @classmethod
+    def _segments_payload(
+        cls,
+        segments: tuple[CandidateOutcomeSegment, ...],
+    ) -> dict[str, dict[str, object]]:
+        return {
+            segment.key: cls._statistics_payload(segment.statistics)
+            for segment in segments
+        }
+
+    @staticmethod
+    def _statistics_payload(
+        statistics: CandidateOutcomeStatistics,
+    ) -> dict[str, object]:
+        payload = asdict(statistics)
+        payload["target_index_hit_counts"] = {
+            str(index): count
+            for index, count in statistics.target_index_hit_counts
+        }
+        return payload
 
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:

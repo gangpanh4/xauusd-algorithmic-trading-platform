@@ -8,6 +8,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .candidate_outcome_exporter import CandidateOutcomeExporter
+from .candidate_outcome_segmentation import (
+    CandidateOutcomeSegmentationCalculator,
+)
 from .config import BacktestConfig
 from .engine import BacktestingEngine
 from .exporter import BacktestExporter
@@ -205,6 +208,19 @@ class BacktestRunner:
             self.candidate_outcome_exporter.export_statistics(
                 output.candidate_outcome_statistics
             )
+
+            export_segments = getattr(
+                self.candidate_outcome_exporter,
+                "export_segments",
+                None,
+            )
+            if callable(export_segments):
+                segmentation = (
+                    CandidateOutcomeSegmentationCalculator.calculate(
+                        output.candidate_outcome_evaluations
+                    )
+                )
+                export_segments(segmentation)
 
     def print_trade_log(
         self,
