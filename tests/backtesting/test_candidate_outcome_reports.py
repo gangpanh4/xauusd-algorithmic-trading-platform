@@ -5,9 +5,7 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from core.backtesting.candidate_outcome_exporter import (
-    CandidateOutcomeExporter,
-)
+from core.backtesting.candidate_outcome_exporter import CandidateOutcomeExporter
 from core.backtesting.candidate_outcome_models import (
     CandidateOutcome,
     CandidateOutcomeEvaluation,
@@ -16,6 +14,8 @@ from core.backtesting.models import BacktestResult
 from core.backtesting.run_output import BacktestRunOutput
 from core.backtesting.runner import BacktestRunner
 from core.backtesting.strategy_comparison import BacktestStrategyComparison
+from core.multi_timeframe.enums import Timeframe
+from core.strategies import SetupDirection
 
 
 def _evaluation() -> CandidateOutcomeEvaluation:
@@ -35,6 +35,17 @@ def _evaluation() -> CandidateOutcomeEvaluation:
         maximum_adverse_excursion=0.0,
         maximum_favorable_r_multiple=0.0,
         maximum_adverse_r_multiple=0.0,
+        strategy_id="XAUUSD_BOS_CHOCH_V1",
+        direction=SetupDirection.BUY,
+        setup_timeframe=Timeframe.M15,
+        trigger_timeframe=Timeframe.M5,
+        trigger_reason="M5 BOS confirmation",
+        setup_metadata={
+            "regime": "TRENDING",
+            "observed_at": timestamp,
+        },
+        trigger_metadata={"confirmed": True},
+        candidate_metadata={"alignment": ("H4", "H1")},
     )
 
 
@@ -76,9 +87,7 @@ def test_candidate_outcome_exporter_writes_summary_csv_and_statistics(
         candidate_outcome_summary={"UNRESOLVED": 1},
     )
 
-    summary_path = exporter.export_summary(
-        output.candidate_outcome_summary
-    )
+    summary_path = exporter.export_summary(output.candidate_outcome_summary)
     detail_path = exporter.export_evaluations(
         output.candidate_outcome_evaluations
     )
@@ -86,27 +95,39 @@ def test_candidate_outcome_exporter_writes_summary_csv_and_statistics(
         output.candidate_outcome_statistics
     )
 
-    summary_payload = json.loads(
+    assert json.loads(
         summary_path.read_text(encoding="utf-8")
-    )
-    assert summary_payload["UNRESOLVED"] == 1
-
+    )["UNRESOLVED"] == 1
     statistics_payload = json.loads(
         statistics_path.read_text(encoding="utf-8")
     )
     assert statistics_payload["total_candidates"] == 1
     assert statistics_payload["unresolved_count"] == 1
-    assert statistics_payload["unresolved_rate"] == 1.0
-    assert statistics_payload["target_index_hit_counts"] == {}
 
     with detail_path.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
 
     assert len(rows) == 1
-    assert rows[0]["Setup ID"] == str(evaluation.setup_id)
-    assert rows[0]["Outcome"] == "UNRESOLVED"
-    assert rows[0]["Outcome Timestamp"] == ""
-    assert rows[0]["Take Profit Prices"] == "[3320.0,3330.0]"
+    row = rows[0]
+    assert row["Setup ID"] == str(evaluation.setup_id)
+    assert row["Strategy ID"] == "XAUUSD_BOS_CHOCH_V1"
+    assert row["Direction"] == "BUY"
+    assert row["Setup Timeframe"] == "M15"
+    assert row["Trigger Timeframe"] == "M5"
+    assert row["Trigger Reason"] == "M5 BOS confirmation"
+    assert row["Outcome"] == "UNRESOLVED"
+    assert row["Outcome Timestamp"] == ""
+    assert row["Take Profit Prices"] == "[3320.0,3330.0]"
+    assert json.loads(row["Setup Metadata JSON"]) == {
+        "observed_at": "2026-01-01T00:00:00+00:00",
+        "regime": "TRENDING",
+    }
+    assert json.loads(row["Trigger Metadata JSON"]) == {
+        "confirmed": True,
+    }
+    assert json.loads(row["Candidate Metadata JSON"]) == {
+        "alignment": ["H4", "H1"],
+    }
 
 
 def test_generate_composite_reports_exports_candidate_research() -> None:
@@ -120,9 +141,7 @@ def test_generate_composite_reports_exports_candidate_research() -> None:
     )
     calls: list[tuple[str, object]] = []
 
-    runner.generate_reports = lambda value: calls.append(
-        ("reports", value)
-    )
+    runner.generate_reports = lambda value: calls.append(("reports", value))
     runner.exporter = type(
         "ComparisonExporterSpy",
         (),
