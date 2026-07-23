@@ -16,6 +16,7 @@ from .reporter import (
     print_report,
     save_report,
 )
+from .run_output import BacktestRunOutput
 from .state import BacktestState
 from .statistics import StatisticsCalculator
 
@@ -70,15 +71,57 @@ class BacktestRunner:
 
         result = self.engine.run(context)
 
-        self.state.processed_bar_count = len(
-            context.m15_bars
+        self._complete_state(
+            processed_bar_count=len(context.m15_bars),
+            executed_trade_count=result.total_trades,
         )
-        self.state.executed_trade_count = (
-            result.total_trades
-        )
-        self.state.completed = True
 
         return result
+
+    def run_with_strategy_comparison(
+        self,
+        symbol: str,
+        timeframe: int,
+        bars: int,
+    ) -> BacktestRunOutput:
+        """Execute one backtest and return result plus strategy comparison.
+
+        This additive entry point preserves :meth:`run` and its existing
+        ``BacktestResult`` return contract.
+        """
+
+        self.state.reset()
+
+        context = self.loader.load(
+            symbol=symbol,
+            bars=bars,
+        )
+
+        if not context.m15_bars:
+            raise RuntimeError(
+                "No historical data returned."
+            )
+
+        output = self.engine.run_with_strategy_comparison(context)
+
+        self._complete_state(
+            processed_bar_count=len(context.m15_bars),
+            executed_trade_count=output.result.total_trades,
+        )
+
+        return output
+
+    def _complete_state(
+        self,
+        *,
+        processed_bar_count: int,
+        executed_trade_count: int,
+    ) -> None:
+        """Publish one completed runner state consistently."""
+
+        self.state.processed_bar_count = processed_bar_count
+        self.state.executed_trade_count = executed_trade_count
+        self.state.completed = True
 
     def generate_reports(
         self,
