@@ -1,5 +1,7 @@
-"""Explicit strategy-domain contracts."""
+"""Explicit strategy-domain contracts and observational strategies."""
 
+from .config import XAUUSDBOSCHOCHConfig
+from .context import StrategyContext, StrategyObservation
 from .enums import (
     EntryTriggerStatus,
     EntryTriggerType,
@@ -14,6 +16,8 @@ from .models import (
     PriceReference,
     TradingSetup,
 )
+from .state import XAUUSDBOSCHOCHState
+from .xauusd_bos_choch import XAUUSDBOSCHOCHStrategy
 
 __all__ = [
     "CandidateTrade",
@@ -25,5 +29,10 @@ __all__ = [
     "SetupDirection",
     "SetupInvalidationReason",
     "SetupStatus",
+    "StrategyContext",
+    "StrategyObservation",
     "TradingSetup",
+    "XAUUSDBOSCHOCHConfig",
+    "XAUUSDBOSCHOCHState",
+    "XAUUSDBOSCHOCHStrategy",
 ]
