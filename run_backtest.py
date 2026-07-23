@@ -31,13 +31,15 @@ def main() -> None:
         print("XAUUSD HISTORICAL BACKTEST")
         print("=" * 70)
 
-        result = runner.run(
+        output = runner.run_with_strategy_comparison(
             symbol="XAUUSD",
             timeframe=mt5.TIMEFRAME_M15,
             bars=500,
         )
 
-        runner.generate_reports(result)
+        runner.generate_composite_reports(output)
+
+        result = output.result
 
         print()
         print("=" * 70)
