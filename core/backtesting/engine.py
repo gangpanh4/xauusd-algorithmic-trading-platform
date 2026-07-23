@@ -33,6 +33,7 @@ from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import BacktestConfig
 from .models import BacktestResult, BacktestTrade
+from .run_output import BacktestRunOutput
 from .simulator import IncrementalTradeSimulation, TradeSimulator
 from .strategy_comparison import (
     BacktestStrategyComparison,
@@ -192,6 +193,22 @@ class BacktestingEngine:
             backtest_result=backtest_result,
             pipeline_audits=self.observation_audits,
             strategy_observations=self.strategy_observations,
+        )
+
+    def run_with_strategy_comparison(
+        self,
+        context: MarketContext,
+    ) -> BacktestRunOutput:
+        """Execute one backtest and return result plus comparison together.
+
+        This is an additive entry point. The existing ``run`` method and its
+        ``BacktestResult`` return type remain unchanged for all current callers.
+        """
+
+        result = self.run(context)
+        return BacktestRunOutput(
+            result=result,
+            strategy_comparison=self.build_strategy_comparison(result),
         )
 
     def run(self, context: MarketContext) -> BacktestResult:
