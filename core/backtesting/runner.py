@@ -194,6 +194,9 @@ class BacktestRunner:
         self.exporter.export_strategy_comparison_events(
             output.strategy_comparison
         )
+        self.exporter.export_strategy_setup_lifecycles(
+            output.strategy_comparison
+        )
         has_candidate_outcome_research = bool(
             output.candidate_outcome_evaluations
             or output.candidate_outcome_summary

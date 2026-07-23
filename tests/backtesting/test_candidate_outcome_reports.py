@@ -152,6 +152,9 @@ def test_generate_composite_reports_exports_candidate_research() -> None:
             "export_strategy_comparison_events": (
                 lambda self, value: calls.append(("events", value))
             ),
+            "export_strategy_setup_lifecycles": (
+                lambda self, value: calls.append(("lifecycles", value))
+            ),
         },
     )()
     runner.candidate_outcome_exporter = type(
@@ -176,6 +179,7 @@ def test_generate_composite_reports_exports_candidate_research() -> None:
         ("reports", output.result),
         ("comparison", output.strategy_comparison),
         ("events", output.strategy_comparison),
+        ("lifecycles", output.strategy_comparison),
         ("summary", output.candidate_outcome_summary),
         ("evaluations", output.candidate_outcome_evaluations),
         ("statistics", output.candidate_outcome_statistics),

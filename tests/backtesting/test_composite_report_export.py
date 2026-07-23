@@ -137,6 +137,9 @@ def test_generate_composite_reports_preserves_existing_reports() -> None:
             "export_strategy_comparison_events": lambda self, value: (
                 calls.append(("events", value))
             ),
+            "export_strategy_setup_lifecycles": lambda self, value: (
+                calls.append(("lifecycles", value))
+            ),
         },
     )()
 
@@ -146,6 +149,7 @@ def test_generate_composite_reports_preserves_existing_reports() -> None:
         ("existing", result),
         ("summary", comparison),
         ("events", comparison),
+        ("lifecycles", comparison),
     ]
 
 

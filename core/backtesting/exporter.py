@@ -513,6 +513,78 @@ class BacktestExporter:
 
         return path
 
+    def export_strategy_setup_lifecycles(
+        self,
+        comparison: BacktestStrategyComparison,
+    ) -> Path:
+        """Export one deterministic row per detected observational setup."""
+
+        if not isinstance(comparison, BacktestStrategyComparison):
+            raise TypeError("comparison must be BacktestStrategyComparison")
+
+        path = self.output_directory / "strategy_setup_lifecycles.csv"
+        fieldnames = (
+            "Setup Number",
+            "Setup ID",
+            "Strategy ID",
+            "Direction",
+            "Detected At",
+            "Expires At",
+            "Active Observation Count",
+            "No M5 Event Count",
+            "Stale M5 Event Count",
+            "Direction Mismatch Count",
+            "Index Mismatch Count",
+            "Invalid Trade Geometry Count",
+            "Candidate Created",
+            "Candidate Created At",
+            "Terminal Status",
+            "Terminal Timestamp",
+        )
+
+        with path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=list(fieldnames),
+                extrasaction="raise",
+            )
+            writer.writeheader()
+
+            for index, lifecycle in enumerate(
+                comparison.setup_lifecycles,
+                start=1,
+            ):
+                writer.writerow(
+                    {
+                        "Setup Number": index,
+                        "Setup ID": lifecycle.setup_id,
+                        "Strategy ID": lifecycle.strategy_id,
+                        "Direction": lifecycle.direction,
+                        "Detected At": lifecycle.detected_at.isoformat(),
+                        "Expires At": lifecycle.expires_at.isoformat(),
+                        "Active Observation Count": lifecycle.active_observation_count,
+                        "No M5 Event Count": lifecycle.no_m5_event_count,
+                        "Stale M5 Event Count": lifecycle.stale_m5_event_count,
+                        "Direction Mismatch Count": lifecycle.direction_mismatch_count,
+                        "Index Mismatch Count": lifecycle.index_mismatch_count,
+                        "Invalid Trade Geometry Count": lifecycle.invalid_trade_geometry_count,
+                        "Candidate Created": lifecycle.candidate_created,
+                        "Candidate Created At": (
+                            lifecycle.candidate_created_at.isoformat()
+                            if lifecycle.candidate_created_at is not None
+                            else ""
+                        ),
+                        "Terminal Status": lifecycle.terminal_status,
+                        "Terminal Timestamp": (
+                            lifecycle.terminal_timestamp.isoformat()
+                            if lifecycle.terminal_timestamp is not None
+                            else ""
+                        ),
+                    }
+                )
+
+        return path
+
     def export_equity_curve(
         self,
         result: BacktestResult,

@@ -23,6 +23,27 @@ class StrategyComparisonEvent:
 
 
 @dataclass(slots=True, frozen=True)
+class StrategySetupLifecycle:
+    """Aggregated observational lifecycle for one detected strategy setup."""
+
+    setup_id: str
+    strategy_id: str
+    direction: str
+    detected_at: datetime
+    expires_at: datetime
+    active_observation_count: int
+    no_m5_event_count: int
+    stale_m5_event_count: int
+    direction_mismatch_count: int
+    index_mismatch_count: int
+    invalid_trade_geometry_count: int
+    candidate_created: bool
+    candidate_created_at: datetime | None
+    terminal_status: str
+    terminal_timestamp: datetime | None
+
+
+@dataclass(slots=True, frozen=True)
 class BacktestStrategyComparison:
     """Read-only comparison between pipeline activity and strategy activity."""
 
@@ -35,6 +56,7 @@ class BacktestStrategyComparison:
     pipeline_reason_counts: tuple[tuple[str, int], ...]
     strategy_reason_counts: tuple[tuple[str, int], ...]
     events: tuple[StrategyComparisonEvent, ...]
+    setup_lifecycles: tuple[StrategySetupLifecycle, ...] = ()
 
 
 class BacktestStrategyComparisonBuilder:
@@ -87,6 +109,7 @@ class BacktestStrategyComparisonBuilder:
             pipeline_audits=pipeline_audits,
             strategy_observations=strategy_observations,
         )
+        setup_lifecycles = cls._build_setup_lifecycles(strategy_observations)
 
         return BacktestStrategyComparison(
             pipeline_observation_count=len(pipeline_audits),
@@ -98,6 +121,7 @@ class BacktestStrategyComparisonBuilder:
             pipeline_reason_counts=tuple(pipeline_reason_counts.items()),
             strategy_reason_counts=tuple(strategy_reason_counts.items()),
             events=events,
+            setup_lifecycles=setup_lifecycles,
         )
 
     @staticmethod
@@ -119,6 +143,86 @@ class BacktestStrategyComparisonBuilder:
             key = observation.reason_code
             counts[key] = counts.get(key, 0) + 1
         return dict(sorted(counts.items()))
+
+    @staticmethod
+    def _build_setup_lifecycles(
+        observations: tuple[StrategyObservation, ...],
+    ) -> tuple[StrategySetupLifecycle, ...]:
+        """Aggregate exact per-setup diagnostic counts from observations."""
+
+        tracked: dict[str, dict[str, object]] = {}
+
+        for observation in observations:
+            setup = observation.setup
+            if setup is None:
+                continue
+
+            setup_id = str(setup.setup_id)
+            record = tracked.get(setup_id)
+            if record is None:
+                record = {
+                    "setup_id": setup_id,
+                    "strategy_id": setup.strategy_id,
+                    "direction": setup.direction.value,
+                    "detected_at": setup.detected_at,
+                    "expires_at": setup.expires_at,
+                    "active_observation_count": 0,
+                    "no_m5_event_count": 0,
+                    "stale_m5_event_count": 0,
+                    "direction_mismatch_count": 0,
+                    "index_mismatch_count": 0,
+                    "invalid_trade_geometry_count": 0,
+                    "candidate_created": False,
+                    "candidate_created_at": None,
+                    "terminal_status": setup.status.value,
+                    "terminal_timestamp": None,
+                }
+                tracked[setup_id] = record
+
+            code = observation.reason_code
+            if code not in {
+                "SETUP_DETECTED",
+                "EXPIRED",
+                "INVALIDATED",
+                "CANDIDATE_CREATED",
+            }:
+                record["active_observation_count"] = (
+                    int(record["active_observation_count"]) + 1
+                )
+
+            counter_by_reason = {
+                "NO_M5_STRUCTURE_EVENT": "no_m5_event_count",
+                "M5_EVENT_NOT_FRESH": "stale_m5_event_count",
+                "M5_DIRECTION_MISMATCH": "direction_mismatch_count",
+                "M5_CONFIRMATION_INDEX_MISMATCH": "index_mismatch_count",
+                "INVALID_TRADE_GEOMETRY": "invalid_trade_geometry_count",
+            }
+            counter = counter_by_reason.get(code)
+            if counter is not None:
+                record[counter] = int(record[counter]) + 1
+
+            if observation.candidate_trade is not None:
+                record["candidate_created"] = True
+                record["candidate_created_at"] = observation.timestamp
+
+            if code in {"EXPIRED", "INVALIDATED", "CANDIDATE_CREATED"}:
+                record["terminal_status"] = (
+                    "CONSUMED" if code == "CANDIDATE_CREATED" else code
+                )
+                record["terminal_timestamp"] = observation.timestamp
+            else:
+                record["terminal_status"] = setup.status.value
+
+        return tuple(
+            StrategySetupLifecycle(**record)
+            for _, record in sorted(
+                tracked.items(),
+                key=lambda item: (
+                    item[1]["detected_at"],
+                    item[0],
+                ),
+            )
+        )
 
     @classmethod
     def _build_events(
