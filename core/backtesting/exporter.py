@@ -19,6 +19,7 @@ from core.trading_pipeline.models import (
 )
 
 from .models import BacktestResult, BacktestTrade
+from .strategy_comparison import BacktestStrategyComparison
 
 
 class BacktestExporter:
@@ -421,6 +422,96 @@ class BacktestExporter:
             previous_timestamp = audit.timestamp
 
         return tuple(validated)
+
+    def export_strategy_comparison_summary(
+        self,
+        comparison: BacktestStrategyComparison,
+    ) -> Path:
+        """Export deterministic pipeline-versus-strategy summary data."""
+
+        if not isinstance(comparison, BacktestStrategyComparison):
+            raise TypeError(
+                "comparison must be BacktestStrategyComparison"
+            )
+
+        payload = {
+            "pipeline_observation_count": (
+                comparison.pipeline_observation_count
+            ),
+            "pipeline_approval_count": comparison.pipeline_approval_count,
+            "executed_trade_count": comparison.executed_trade_count,
+            "strategy_observation_count": (
+                comparison.strategy_observation_count
+            ),
+            "strategy_setup_count": comparison.strategy_setup_count,
+            "strategy_candidate_count": comparison.strategy_candidate_count,
+            "pipeline_reason_counts": dict(
+                comparison.pipeline_reason_counts
+            ),
+            "strategy_reason_counts": dict(
+                comparison.strategy_reason_counts
+            ),
+        }
+
+        path = (
+            self.output_directory
+            / "strategy_comparison_summary.json"
+        )
+        self._write_json(path, payload)
+        return path
+
+    def export_strategy_comparison_events(
+        self,
+        comparison: BacktestStrategyComparison,
+    ) -> Path:
+        """Export the chronological comparison event timeline."""
+
+        if not isinstance(comparison, BacktestStrategyComparison):
+            raise TypeError(
+                "comparison must be BacktestStrategyComparison"
+            )
+
+        path = (
+            self.output_directory
+            / "strategy_comparison_events.csv"
+        )
+        fieldnames = (
+            "Event Number",
+            "Timestamp",
+            "Source",
+            "Event Type",
+            "Direction",
+            "Identifier",
+        )
+
+        with path.open(
+            "w",
+            newline="",
+            encoding="utf-8",
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=list(fieldnames),
+                extrasaction="raise",
+            )
+            writer.writeheader()
+
+            for index, event in enumerate(
+                comparison.events,
+                start=1,
+            ):
+                writer.writerow(
+                    {
+                        "Event Number": index,
+                        "Timestamp": event.timestamp.isoformat(),
+                        "Source": event.source,
+                        "Event Type": event.event_type,
+                        "Direction": event.direction or "",
+                        "Identifier": event.identifier or "",
+                    }
+                )
+
+        return path
 
     def export_equity_curve(
         self,

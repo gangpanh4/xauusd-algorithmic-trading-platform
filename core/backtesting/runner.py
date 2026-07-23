@@ -170,6 +170,23 @@ class BacktestRunner:
             asdict(stats),
         )
 
+    def generate_composite_reports(
+        self,
+        output: BacktestRunOutput,
+    ) -> None:
+        """Generate existing reports plus strategy-comparison artifacts."""
+
+        if not isinstance(output, BacktestRunOutput):
+            raise TypeError("output must be BacktestRunOutput")
+
+        self.generate_reports(output.result)
+        self.exporter.export_strategy_comparison_summary(
+            output.strategy_comparison
+        )
+        self.exporter.export_strategy_comparison_events(
+            output.strategy_comparison
+        )
+
     def print_trade_log(
         self,
         result: BacktestResult,
