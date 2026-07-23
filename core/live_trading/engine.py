@@ -11,6 +11,7 @@ from core.execution_adapter.adapter import ExecutionAdapter
 from core.execution_adapter.config import ExecutionAdapterConfig
 from core.mt5_execution.deal_history import get_realized_deals
 from core.mt5_execution.executor import MT5Executor
+from core.mt5_execution.active_orders import get_active_order_count
 from core.mt5_execution.models import OrderStatus
 from core.mt5_execution.positions import get_open_positions
 from core.multi_timeframe.enums import Timeframe
@@ -81,6 +82,13 @@ class LiveTradingEngine:
         positions = get_open_positions(self.config.symbol)
         count = len(positions)
         self.pipeline.set_open_position_count(count)
+        return count
+
+    def synchronize_active_orders(self) -> int:
+        """Synchronize unresolved broker orders for the configured symbol."""
+
+        count = get_active_order_count(self.config.symbol)
+        self.state.active_order_count = count
         return count
 
     def reconcile_realized_deals(
@@ -273,6 +281,18 @@ class LiveTradingEngine:
                 trade_executed=False,
             )
 
+        if self.state.active_order_count > 0:
+            self.state.skipped_trades += 1
+            self.state.last_error = (
+                "Execution blocked while an active MT5 order is unresolved."
+            )
+            logger.warning(self.state.last_error)
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=None,
+                trade_executed=False,
+            )
+
         if not self.executor.is_connected():
             self.state.last_error = (
                 "Live execution is enabled, but MT5 is not connected."
@@ -289,6 +309,26 @@ class LiveTradingEngine:
             OrderStatus.FILLED,
             OrderStatus.PARTIALLY_FILLED,
         }
+        if execution_result.status is OrderStatus.PENDING:
+            # A placed order may execute later. Block subsequent submissions
+            # until broker reconciliation confirms that no active order remains.
+            self.state.active_order_count = max(
+                1,
+                self.state.active_order_count,
+            )
+            self.state.skipped_trades += 1
+            self.state.last_ticket = execution_result.ticket
+            self.state.last_error = execution_result.message
+            logger.warning(
+                "MT5 accepted an unresolved order: %s",
+                execution_result.message,
+            )
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=execution_result,
+                trade_executed=False,
+            )
+
         if execution_result.status not in executed_statuses:
             self.state.skipped_trades += 1
             self.state.last_error = execution_result.message

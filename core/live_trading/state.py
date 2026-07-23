@@ -24,6 +24,8 @@ class LiveTradingState:
 
     last_ticket: int | None = None
 
+    active_order_count: int = 0
+
     last_error: str = ""
 
     last_processed_timestamp: datetime | None = None
@@ -46,6 +48,8 @@ class LiveTradingState:
         self.skipped_trades = 0
 
         self.last_ticket = None
+
+        self.active_order_count = 0
 
         self.last_error = ""
 

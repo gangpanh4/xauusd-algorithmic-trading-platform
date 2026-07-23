@@ -106,6 +106,7 @@ class TradingPlatform:
             mt5_started = True
             engine.start()
             engine.synchronize_open_positions()
+            engine.synchronize_active_orders()
 
             logger.info("Loading synchronized historical bars...")
             for timeframe, service in services.items():
@@ -213,6 +214,7 @@ class TradingPlatform:
                         as_of=boundary,
                     )
                     engine.synchronize_open_positions()
+                    engine.synchronize_active_orders()
 
                     engine.process_multi_timeframe(
                         snapshot,
