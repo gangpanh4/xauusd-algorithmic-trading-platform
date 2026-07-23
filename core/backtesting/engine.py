@@ -31,6 +31,8 @@ from core.trading_pipeline.models import (
 )
 from core.trading_pipeline.pipeline import TradingPipeline
 
+from .candidate_outcome_models import CandidateOutcomeEvaluation
+from .candidate_outcome_tracker import CandidateOutcomeTracker
 from .config import BacktestConfig
 from .models import BacktestResult, BacktestTrade
 from .run_output import BacktestRunOutput
@@ -104,6 +106,7 @@ class BacktestingEngine:
         )
         self.pipeline = self._create_pipeline()
         self.strategy_observer = BacktestStrategyObserver()
+        self.candidate_outcome_tracker = CandidateOutcomeTracker()
         self.research_storage = ResearchStorage()
         self.research_engine = ResearchAnalyticsEngine(self.research_storage)
         self._pending_analytics: TradeAnalytics | None = None
@@ -128,6 +131,7 @@ class BacktestingEngine:
         self.state.reset()
         self.pipeline = self._create_pipeline()
         self.strategy_observer.reset()
+        self._get_candidate_outcome_tracker().reset()
         self.research_storage = ResearchStorage()
         self.research_engine = ResearchAnalyticsEngine(self.research_storage)
         self._pending_analytics = None
@@ -177,6 +181,36 @@ class BacktestingEngine:
         """Return candidate count without affecting executed trades."""
 
         return self.strategy_observer.candidate_count
+
+    def _get_candidate_outcome_tracker(
+        self,
+    ) -> CandidateOutcomeTracker:
+        """Return the tracker, creating it for partially constructed engines.
+
+        Some focused tests and legacy integrations construct the engine with
+        ``object.__new__`` and intentionally bypass ``__init__``. Lazy creation
+        preserves those lightweight fixtures without weakening normal runtime
+        initialization.
+        """
+
+        tracker = getattr(self, "candidate_outcome_tracker", None)
+        if tracker is None:
+            tracker = CandidateOutcomeTracker()
+            self.candidate_outcome_tracker = tracker
+        return tracker
+
+    @property
+    def candidate_outcome_evaluations(
+        self,
+    ) -> tuple[CandidateOutcomeEvaluation, ...]:
+        """Return immutable finalized observational candidate outcomes."""
+
+        return self._get_candidate_outcome_tracker().evaluations
+
+    def candidate_outcome_summary(self) -> dict[str, int]:
+        """Return deterministic counts grouped by candidate outcome."""
+
+        return self._get_candidate_outcome_tracker().summary()
 
     def build_strategy_comparison(
         self,
@@ -282,6 +316,7 @@ class BacktestingEngine:
                     future_bars=historical_bars[index + 1 :],
                 )
 
+        self._get_candidate_outcome_tracker().finalize()
         return self._finalize()
 
 
@@ -405,11 +440,17 @@ class BacktestingEngine:
         if structure_state is None:
             return None
 
-        return self.strategy_observer.observe(
+        shared_bar = self._to_shared_bar(observation_bar)
+        tracker = self._get_candidate_outcome_tracker()
+        tracker.process_bar(shared_bar)
+        observation = self.strategy_observer.observe(
             multi_timeframe=multi_timeframe,
-            current_bar=self._to_shared_bar(observation_bar),
+            current_bar=shared_bar,
             current_bar_index=structure_state.current_bar_index,
         )
+        if observation.candidate_trade is not None:
+            tracker.register(observation.candidate_trade)
+        return observation
 
     def _process_pipeline_bar(
         self,
