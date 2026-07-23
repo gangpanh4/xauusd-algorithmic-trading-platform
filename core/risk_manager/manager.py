@@ -141,24 +141,32 @@ class RiskManager:
                 )
             )
 
+            risk_per_lot = self._calculate_risk_components(
+                position_size=1.0,
+                stop_loss_distance=effective_stop_distance,
+                pip_value=pip_value,
+                tick_size=tick_size,
+            )
             position_size = self._calculate_position_size(
                 working_balance=working_balance,
                 stop_loss_distance=effective_stop_distance,
                 pip_value=pip_value,
                 tick_size=tick_size,
                 lot_step=lot_step,
+                total_risk_per_lot=risk_per_lot["total"],
             )
 
             risk_reward_ratio = self._validate_risk_reward_ratio(
                 self.config.minimum_risk_reward_ratio
             )
 
-            actual_risk_amount = self._calculate_monetary_risk(
+            risk_components = self._calculate_risk_components(
                 position_size=position_size,
                 stop_loss_distance=effective_stop_distance,
                 pip_value=pip_value,
                 tick_size=tick_size,
             )
+            actual_risk_amount = risk_components["total"]
             actual_risk_fraction = actual_risk_amount / working_balance
 
             self._validate_actual_risk(actual_risk_fraction)
@@ -213,6 +221,11 @@ class RiskManager:
                     "lot_sizing_mode": self.config.lot_sizing_mode.value,
                     "working_balance": working_balance,
                     "monetary_risk": actual_risk_amount,
+                    "price_risk": risk_components["price"],
+                    "spread_risk": risk_components["spread"],
+                    "slippage_risk": risk_components["slippage"],
+                    "commission_risk": risk_components["commission"],
+                    "total_monetary_risk": risk_components["total"],
                     "tick_size": tick_size,
                     "tick_value_per_lot": pip_value,
                     "lot_step": lot_step,
@@ -333,6 +346,7 @@ class RiskManager:
         pip_value: float,
         tick_size: float,
         lot_step: float,
+        total_risk_per_lot: float | None = None,
     ) -> float:
         common_limits = {
             "minimum_lot": self.config.minimum_position_size,
@@ -358,13 +372,33 @@ class RiskManager:
             risk_fraction = self.config.risk_percent / 100.0
             self._validate_configured_risk(risk_fraction)
 
-            return PositionSizer.calculate_position_size(
-                account_balance=working_balance,
-                risk_percent=risk_fraction,
-                stop_loss_distance=stop_loss_distance,
-                pip_value=pip_value,
-                tick_size=tick_size,
-                **common_limits,
+            if total_risk_per_lot is None:
+                total_risk_per_lot = self._calculate_risk_components(
+                    position_size=1.0,
+                    stop_loss_distance=stop_loss_distance,
+                    pip_value=pip_value,
+                    tick_size=tick_size,
+                )["total"]
+            self._require_positive_finite(
+                total_risk_per_lot,
+                "total_risk_per_lot",
+            )
+
+            risk_amount = working_balance * risk_fraction
+            self._require_positive_finite(risk_amount, "risk_amount")
+            raw_lot = risk_amount / total_risk_per_lot
+
+            if raw_lot < self.config.minimum_position_size:
+                raise ValueError(
+                    "Calculated position size is below the broker minimum; "
+                    "the trade must be rejected rather than rounded up."
+                )
+
+            return PositionSizer.apply_broker_limits(
+                raw_lot,
+                minimum=self.config.minimum_position_size,
+                maximum=self.config.maximum_position_size,
+                step=lot_step,
             )
 
         raise ValueError(
@@ -602,6 +636,74 @@ class RiskManager:
         monetary_risk = ticks_to_stop * pip_value * position_size
         cls._require_positive_finite(monetary_risk, "monetary_risk")
         return monetary_risk
+
+    def _calculate_risk_components(
+        self,
+        *,
+        position_size: float,
+        stop_loss_distance: float,
+        pip_value: float,
+        tick_size: float,
+    ) -> dict[str, float]:
+        """Return price and configured round-trip execution risk components."""
+
+        self._require_positive_finite(position_size, "position_size")
+        self._require_positive_finite(pip_value, "pip_value")
+        self._require_positive_finite(tick_size, "tick_size")
+
+        price_risk = self._calculate_monetary_risk(
+            position_size=position_size,
+            stop_loss_distance=stop_loss_distance,
+            pip_value=pip_value,
+            tick_size=tick_size,
+        )
+
+        self._require_non_negative_finite(
+            self.config.spread_points,
+            "spread_points",
+        )
+        self._require_non_negative_finite(
+            self.config.slippage_points,
+            "slippage_points",
+        )
+        self._require_non_negative_finite(
+            self.config.commission_per_lot,
+            "commission_per_lot",
+        )
+
+        spread_risk = (
+            self.config.spread_points * pip_value * position_size
+            if self.config.include_spread
+            else 0.0
+        )
+        # Reserve adverse entry and stop-exit slippage, matching the
+        # conservative stop-loss path used by the historical simulator.
+        slippage_risk = (
+            self.config.slippage_points
+            * pip_value
+            * position_size
+            * 2.0
+        )
+        commission_risk = (
+            self.config.commission_per_lot * position_size
+            if self.config.include_commission
+            else 0.0
+        )
+        total_risk = (
+            price_risk
+            + spread_risk
+            + slippage_risk
+            + commission_risk
+        )
+        self._require_positive_finite(total_risk, "total_monetary_risk")
+
+        return {
+            "price": float(price_risk),
+            "spread": float(spread_risk),
+            "slippage": float(slippage_risk),
+            "commission": float(commission_risk),
+            "total": float(total_risk),
+        }
 
     @classmethod
     def _validate_risk_reward_ratio(cls, value: float) -> float:
