@@ -14,6 +14,7 @@ from core.data.market_data import MarketDataService
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.live_trading.multi_timeframe_buffer import LiveMultiTimeframeBuffer
+from core.mt5_execution.account import get_account_info
 from core.mt5_execution.symbol_specification import (
     get_live_symbol_specification,
 )
@@ -119,9 +120,7 @@ class TradingPlatform:
                     )
                 buffer.load(timeframe, history)
 
-            account = mt5.account_info()
-            if account is None:
-                raise RuntimeError("Unable to retrieve account information.")
+            account = get_account_info()
 
             engine.reconcile_realized_deals(
                 account_balance=account.balance,
@@ -199,13 +198,7 @@ class TradingPlatform:
                         time.sleep(config.poll_interval_seconds)
                         continue
 
-                    account = mt5.account_info()
-                    if account is None:
-                        logger.warning(
-                            "Unable to retrieve account information."
-                        )
-                        time.sleep(config.poll_interval_seconds)
-                        continue
+                    account = get_account_info()
 
                     # Reconcile realized P&L and exposure before every new
                     # M5 decision so daily-loss controls use broker state.
