@@ -10,6 +10,7 @@ from datetime import datetime
 from core.market_structure.enums import (
     BreakType,
     MarketTrend,
+    SwingClassification,
     SwingType,
     TrendDirection,
 )
@@ -44,6 +45,9 @@ class SwingPoint:
     pivot_dominance: float = 0.0
     # Confidence of the swing confirmation.
     confirmation_strength: float = 0.0
+
+    # Relationship to the previous confirmed swing of the same type.
+    classification: SwingClassification = SwingClassification.UNCLASSIFIED
 
 
 @dataclass(slots=True, frozen=True)

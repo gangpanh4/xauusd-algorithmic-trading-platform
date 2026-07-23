@@ -23,6 +23,18 @@ class SwingType(Enum):
     LOW = auto()
 
 
+class SwingClassification(Enum):
+    """Structural relationship to the previous swing of the same type."""
+
+    UNCLASSIFIED = auto()
+    HIGHER_HIGH = auto()
+    HIGHER_LOW = auto()
+    LOWER_HIGH = auto()
+    LOWER_LOW = auto()
+    EQUAL_HIGH = auto()
+    EQUAL_LOW = auto()
+
+
 class BreakType(Enum):
     """
     Type of market structure break.

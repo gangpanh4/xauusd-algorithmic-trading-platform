@@ -141,8 +141,22 @@ class CHOCHDetector:
         return None
 
     def _add_swing(self, swing: SwingPoint) -> None:
-        if self.state.confirmed_swings and self.state.confirmed_swings[-1] == swing:
-            return
+        if self.state.confirmed_swings:
+            latest = self.state.confirmed_swings[-1]
+            if latest == swing:
+                return
+            if latest.swing_type is swing.swing_type:
+                more_extreme = (
+                    swing.price > latest.price
+                    if swing.swing_type is SwingType.HIGH
+                    else swing.price < latest.price
+                )
+                if more_extreme:
+                    self.state.confirmed_swings[-1] = swing
+                    if getattr(self.state, "protected_swing", None) == latest:
+                        self.state.protected_swing = swing
+                return
+
         self.state.confirmed_swings.append(swing)
         self.state.processed_swing_count += 1
         self.state.detector_status = DetectorStatus.RUNNING

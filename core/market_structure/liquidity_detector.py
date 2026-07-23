@@ -41,7 +41,7 @@ class LiquidityDetector:
     def process(self, swing: SwingPoint) -> LiquiditySweepEvent | None:
         """Preserve the original confirmed-swing interface."""
 
-        self._add_level(swing)
+        self._add_level(swing, replace_latest=False)
         buy_side = self._detect_buy_side_sweep(swing)
         if buy_side is not None:
             return buy_side
@@ -65,19 +65,12 @@ class LiquidityDetector:
             raise ValueError("atr must be > 0 when supplied")
 
         if swing is not None:
-            self._add_level(swing)
-
-        # The completed-bar path can inspect many historical liquidity levels.
-        # Synchronize the compatibility index once per bar instead of once per
-        # candidate level, then reuse the resolved distance for both sides.
-        self._synchronize_sweep_index()
-        required_distance = self._required_sweep_distance(atr)
+            self._add_level(swing, replace_latest=True)
 
         buy_side = self._detect_completed_buy_side_sweep(
             bar=bar,
             bar_index=bar_index,
             atr=atr,
-            required_distance=required_distance,
         )
         if buy_side is not None:
             return buy_side
@@ -86,10 +79,14 @@ class LiquidityDetector:
             bar=bar,
             bar_index=bar_index,
             atr=atr,
-            required_distance=required_distance,
         )
 
-    def _add_level(self, swing: SwingPoint) -> None:
+    def _add_level(
+        self,
+        swing: SwingPoint,
+        *,
+        replace_latest: bool = False,
+    ) -> None:
         level = LiquidityLevel(
             timestamp=swing.timestamp,
             price=swing.price,
@@ -101,6 +98,28 @@ class LiquidityDetector:
             latest = self.state.liquidity_levels[-1]
             if latest.swing_point == swing:
                 return
+            if replace_latest and latest.is_buy_side == level.is_buy_side:
+                more_extreme = (
+                    level.price > latest.price
+                    if level.is_buy_side
+                    else level.price < latest.price
+                )
+                equal_price = level.price == latest.price
+
+                if more_extreme:
+                    self.state.liquidity_levels[-1] = level
+                    return
+
+                if equal_price:
+                    if not self.config.allow_equal_levels:
+                        return
+                    # Equal-price pools from distinct confirmed swings remain
+                    # independent liquidity facts. Fall through and append.
+                else:
+                    # A less-extreme consecutive level cannot replace the
+                    # active structural candidate.
+                    return
+
             if (
                 not self.config.allow_equal_levels
                 and latest.is_buy_side == level.is_buy_side
@@ -124,16 +143,16 @@ class LiquidityDetector:
         bar: MarketBar,
         bar_index: int,
         atr: float | None,
-        required_distance: float,
     ) -> LiquiditySweepEvent | None:
         for level in reversed(self.state.liquidity_levels):
             if not level.is_buy_side:
                 continue
             if bar_index <= level.swing_point.confirmation_index:
                 continue
-            if self._level_key(level) in self._swept_level_keys:
+            if self._level_already_swept(level):
                 continue
 
+            required_distance = self._required_sweep_distance(atr)
             if bar.high <= level.price + required_distance:
                 continue
             if self.config.require_reclaim_close and bar.close >= level.price:
@@ -155,16 +174,16 @@ class LiquidityDetector:
         bar: MarketBar,
         bar_index: int,
         atr: float | None,
-        required_distance: float,
     ) -> LiquiditySweepEvent | None:
         for level in reversed(self.state.liquidity_levels):
             if level.is_buy_side:
                 continue
             if bar_index <= level.swing_point.confirmation_index:
                 continue
-            if self._level_key(level) in self._swept_level_keys:
+            if self._level_already_swept(level):
                 continue
 
+            required_distance = self._required_sweep_distance(atr)
             if bar.low >= level.price - required_distance:
                 continue
             if self.config.require_reclaim_close and bar.close <= level.price:

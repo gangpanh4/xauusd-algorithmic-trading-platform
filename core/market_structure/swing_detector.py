@@ -4,9 +4,15 @@ Streaming Swing Detection Engine.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from core.data.models import MarketBar
 from core.market_structure.config import SwingDetectorConfig
-from core.market_structure.enums import DetectorStatus, SwingType
+from core.market_structure.enums import (
+    DetectorStatus,
+    SwingClassification,
+    SwingType,
+)
 from core.market_structure.models import SwingPoint
 from core.market_structure.state import SwingDetectorState
 
@@ -87,39 +93,94 @@ class SwingDetector:
         else:
             return None
 
-        #
-        # Bootstrap the very first confirmed structural swing.
-        #
-        # ATR validation requires a previously confirmed swing
-        # to measure swing-to-swing significance. Therefore the
-        # first structurally confirmed swing establishes the
-        # initial anchor before ATR validation becomes active.
-        #
+        swing = self._classify_swing(swing)
+
+        # Bootstrap the first confirmed structural swing.
         if self.state.last_swing is None:
-
-            self.state.confirmed_swings.append(
-                swing
-            )
-
+            self.state.confirmed_swings.append(swing)
             self.state.last_swing = swing
-
             return swing
 
-        #
-        # Validate all subsequent swings.
-        #
-        if not self._validate_swing(
-            swing
-        ):
+        # A more extreme consecutive high/low revises the latest structural
+        # candidate. Silently rejecting it would leave BOS, CHOCH, liquidity,
+        # and stop references anchored to a stale level.
+        if swing.swing_type is self.state.last_swing.swing_type:
+            return self._replace_same_type_swing(swing)
+
+        if not self._validate_swing(swing):
             return None
 
-        self.state.confirmed_swings.append(
-            swing
+        self.state.confirmed_swings.append(swing)
+        self.state.last_swing = swing
+        return swing
+
+    def _classify_swing(self, swing: SwingPoint) -> SwingPoint:
+        """Classify a swing against the previous swing of the same type."""
+
+        history = self.state.confirmed_swings
+        if history and history[-1].swing_type is swing.swing_type:
+            history = history[:-1]
+
+        previous = next(
+            (item for item in reversed(history) if item.swing_type is swing.swing_type),
+            None,
+        )
+        if previous is None:
+            return swing
+
+        if swing.swing_type is SwingType.HIGH:
+            tolerance = self.config.equal_high_tolerance
+            if swing.price > previous.price + tolerance:
+                classification = SwingClassification.HIGHER_HIGH
+            elif swing.price < previous.price - tolerance:
+                classification = SwingClassification.LOWER_HIGH
+            else:
+                classification = SwingClassification.EQUAL_HIGH
+        else:
+            tolerance = self.config.equal_low_tolerance
+            if swing.price > previous.price + tolerance:
+                classification = SwingClassification.HIGHER_LOW
+            elif swing.price < previous.price - tolerance:
+                classification = SwingClassification.LOWER_LOW
+            else:
+                classification = SwingClassification.EQUAL_LOW
+
+        return replace(swing, classification=classification)
+
+    def _replace_same_type_swing(self, swing: SwingPoint) -> SwingPoint | None:
+        """Replace the latest swing only when the candidate is more extreme."""
+
+        current = self.state.last_swing
+        if current is None or current.swing_type is not swing.swing_type:
+            return None
+
+        if swing.swing_type is SwingType.HIGH:
+            more_extreme = (
+                swing.price > current.price + self.config.equal_high_tolerance
+            )
+        else:
+            more_extreme = (
+                swing.price < current.price - self.config.equal_low_tolerance
+            )
+        if not more_extreme:
+            return None
+
+        reference = (
+            self.state.confirmed_swings[-2]
+            if len(self.state.confirmed_swings) >= 2
+            else None
+        )
+        distance = abs(swing.price - reference.price) if reference is not None else 0.0
+        atr = self._calculate_atr()
+        replacement = replace(
+            swing,
+            distance_from_previous=distance,
+            atr_multiple=(distance / atr if atr is not None and atr > 0.0 else 0.0),
         )
 
-        self.state.last_swing = swing
-
-        return swing
+        self.state.confirmed_swings[-1] = replacement
+        self.state.last_swing = replacement
+        return replacement
 
     def _add_bar(
         self,
