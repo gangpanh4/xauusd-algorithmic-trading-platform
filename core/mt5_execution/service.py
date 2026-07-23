@@ -4,8 +4,6 @@ High-level MT5 execution service.
 
 from __future__ import annotations
 
-from requests import request
-
 from .config import MT5ExecutionConfig
 from .executor import MT5Executor
 
@@ -13,11 +11,6 @@ from .models import (
     OrderRequest,
     OrderResult,
 )
-
-from .orders import (
-    send_order,
-)
-
 
 class ExecutionService:
     """
@@ -44,9 +37,8 @@ class ExecutionService:
         Execute a validated trade request.
         """
 
-        return send_order(
+        return self.executor.execute_order(
             request,
-            self.config,
         )
 
 
