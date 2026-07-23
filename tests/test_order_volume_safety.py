@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.models import (
     OrderRequest,
@@ -39,6 +38,14 @@ def _tradable_symbol() -> SymbolInfo:
     )
 
 
+def _mock_reference_quote(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        orders,
+        "get_market_price",
+        lambda symbol, side: 3300.0,
+    )
+
+
 def test_default_safety_lock_rejects_larger_volume_before_order_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -52,7 +59,6 @@ def test_default_safety_lock_rejects_larger_volume_before_order_send(
         "get_symbol_info",
         lambda symbol: _tradable_symbol(),
     )
-    order_send = pytest.MonkeyPatch()
     send_calls: list[dict] = []
 
     monkeypatch.setattr(
@@ -86,6 +92,7 @@ def test_default_safety_lock_allows_exact_configured_volume(
         "get_symbol_info",
         lambda symbol: _tradable_symbol(),
     )
+    _mock_reference_quote(monkeypatch)
     monkeypatch.setattr(
         orders.mt5,
         "order_send",
@@ -93,6 +100,7 @@ def test_default_safety_lock_allows_exact_configured_volume(
             retcode=orders.mt5.TRADE_RETCODE_DONE,
             order=123456,
             price=request["price"],
+            volume=request["volume"],
             comment="filled",
         ),
     )
@@ -187,6 +195,7 @@ def test_binary_float_noise_does_not_trigger_false_rejection(
         "get_symbol_info",
         lambda symbol: _tradable_symbol(),
     )
+    _mock_reference_quote(monkeypatch)
     monkeypatch.setattr(
         orders.mt5,
         "order_send",
@@ -194,6 +203,7 @@ def test_binary_float_noise_does_not_trigger_false_rejection(
             retcode=orders.mt5.TRADE_RETCODE_DONE,
             order=654321,
             price=request["price"],
+            volume=request["volume"],
             comment="filled",
         ),
     )

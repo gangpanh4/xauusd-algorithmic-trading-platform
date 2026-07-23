@@ -94,23 +94,22 @@ def build_mt5_request(
         else mt5.ORDER_TYPE_SELL
     )
 
-    # Use the supplied entry price during tests/backtesting.
-    # Otherwise use the live MT5 market price.
-    if request.entry_price > 0:
-        price = request.entry_price
-    else:
-        price = get_market_price(
-            request.symbol,
-            request.side,
+    if symbol is None:
+        # Preserve the deterministic supplied-price path used by isolated tests
+        # and non-live compatibility callers.
+        price = (
+            request.entry_price
+            if request.entry_price > 0.0
+            else get_market_price(request.symbol, request.side)
         )
-
-    if symbol is not None:
-        price = _normalize_price(price, symbol)
-        stop_loss = _normalize_price(request.stop_loss, symbol)
-        take_profit = _normalize_price(request.take_profit, symbol)
-    else:
         stop_loss = request.stop_loss
         take_profit = request.take_profit
+    else:
+        price, stop_loss, take_profit = _resolve_live_order_prices(
+            request=request,
+            symbol=symbol,
+            deviation=deviation,
+        )
 
     return {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -197,7 +196,7 @@ def send_order(
             deviation=config.default_slippage,
             symbol=symbol,
         )
-    except (TypeError, ValueError) as exc:
+    except (RuntimeError, TypeError, ValueError) as exc:
         return OrderResult(
             timestamp=datetime.now(UTC),
             status=OrderStatus.REJECTED,
@@ -393,6 +392,106 @@ def _normalize_price(value: float, symbol: SymbolInfo) -> float:
 
     ticks = round(float(value) / float(tick_size))
     return round(ticks * float(tick_size), symbol.digits)
+
+
+def _resolve_live_order_prices(
+    *,
+    request: OrderRequest,
+    symbol: SymbolInfo,
+    deviation: int,
+) -> tuple[float, float, float]:
+    """Resolve live market entry and recentered protective prices."""
+
+    if isinstance(deviation, bool) or not isinstance(deviation, int):
+        raise TypeError("deviation must be an integer number of symbol points")
+    if deviation < 0:
+        raise ValueError("deviation cannot be negative")
+    if (
+        isinstance(symbol.point, bool)
+        or not isinstance(symbol.point, (int, float))
+        or not isfinite(float(symbol.point))
+        or float(symbol.point) <= 0.0
+    ):
+        raise ValueError("Symbol point must be finite and greater than zero.")
+
+    live_price = get_market_price(request.symbol, request.side)
+    if (
+        isinstance(live_price, bool)
+        or not isinstance(live_price, (int, float))
+        or not isfinite(float(live_price))
+        or float(live_price) <= 0.0
+    ):
+        raise ValueError(
+            "Current executable market price must be finite and greater "
+            "than zero."
+        )
+
+    reference_price = float(request.entry_price)
+    if reference_price <= 0.0:
+        return (
+            _normalize_price(float(live_price), symbol),
+            _normalize_price(request.stop_loss, symbol),
+            _normalize_price(request.take_profit, symbol),
+        )
+
+    stop_distance, target_distance = _approved_exit_distances(
+        side=request.side,
+        entry_price=reference_price,
+        stop_loss=request.stop_loss,
+        take_profit=request.take_profit,
+    )
+    maximum_adverse_movement = float(deviation) * float(symbol.point)
+
+    if request.side is OrderSide.BUY:
+        adverse_movement = float(live_price) - reference_price
+    elif request.side is OrderSide.SELL:
+        adverse_movement = reference_price - float(live_price)
+    else:
+        raise ValueError("Unsupported order side.")
+
+    if adverse_movement > maximum_adverse_movement + 1e-12:
+        raise ValueError(
+            "Current market price exceeds the approved adverse-entry "
+            "deviation."
+        )
+
+    normalized_entry = _normalize_price(float(live_price), symbol)
+    if request.side is OrderSide.BUY:
+        stop_loss = normalized_entry - stop_distance
+        take_profit = normalized_entry + target_distance
+    else:
+        stop_loss = normalized_entry + stop_distance
+        take_profit = normalized_entry - target_distance
+
+    return (
+        normalized_entry,
+        _normalize_price(stop_loss, symbol),
+        _normalize_price(take_profit, symbol),
+    )
+
+
+def _approved_exit_distances(
+    *,
+    side: OrderSide,
+    entry_price: float,
+    stop_loss: float,
+    take_profit: float,
+) -> tuple[float, float]:
+    """Return positive risk-approved stop and target distances."""
+
+    valid, message = _validate_price_relationships(
+        side=side,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        minimum_stop_distance=0.0,
+    )
+    if not valid:
+        raise ValueError(message)
+
+    if side is OrderSide.BUY:
+        return entry_price - stop_loss, take_profit - entry_price
+    return stop_loss - entry_price, entry_price - take_profit
 
 
 def _validate_price_relationships(

@@ -42,8 +42,19 @@ def _request() -> OrderRequest:
     )
 
 
-def test_fok_is_preferred_when_both_fok_and_ioc_are_supported() -> None:
+def _mock_reference_quote(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        orders,
+        "get_market_price",
+        lambda symbol, side: 3300.0,
+    )
+
+
+def test_fok_is_preferred_when_both_fok_and_ioc_are_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     symbol = _symbol(flags=3, execution_mode=2)
+    _mock_reference_quote(monkeypatch)
 
     request = orders.build_mt5_request(
         _request(),
@@ -55,8 +66,11 @@ def test_fok_is_preferred_when_both_fok_and_ioc_are_supported() -> None:
     assert request["type_filling"] == orders.mt5.ORDER_FILLING_FOK
 
 
-def test_ioc_is_used_when_fok_is_not_supported() -> None:
+def test_ioc_is_used_when_fok_is_not_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     symbol = _symbol(flags=2, execution_mode=2)
+    _mock_reference_quote(monkeypatch)
 
     request = orders.build_mt5_request(
         _request(),
@@ -68,13 +82,16 @@ def test_ioc_is_used_when_fok_is_not_supported() -> None:
     assert request["type_filling"] == orders.mt5.ORDER_FILLING_IOC
 
 
-def test_return_is_used_outside_market_execution_when_flags_are_empty() -> None:
+def test_return_is_used_outside_market_execution_when_flags_are_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     instant_execution = getattr(
         orders.mt5,
         "SYMBOL_TRADE_EXECUTION_INSTANT",
         1,
     )
     symbol = _symbol(flags=0, execution_mode=instant_execution)
+    _mock_reference_quote(monkeypatch)
 
     request = orders.build_mt5_request(
         _request(),
@@ -96,6 +113,7 @@ def test_market_execution_without_fok_or_ioc_fails_closed(
     )
     symbol = _symbol(flags=0, execution_mode=market_execution)
     monkeypatch.setattr(orders, "get_symbol_info", lambda name: symbol)
+    _mock_reference_quote(monkeypatch)
 
     send_calls: list[dict] = []
     monkeypatch.setattr(
@@ -119,6 +137,7 @@ def test_invalid_filling_flags_fail_closed(
     symbol = _symbol(flags=0, execution_mode=2)
     object.__setattr__(symbol, "filling_mode_flags", invalid_flags)
     monkeypatch.setattr(orders, "get_symbol_info", lambda name: symbol)
+    _mock_reference_quote(monkeypatch)
 
     send_calls: list[dict] = []
     monkeypatch.setattr(
@@ -144,6 +163,7 @@ def test_selected_filling_mode_reaches_order_send(
         lambda request: SimpleNamespace(retcode=0, comment="Done"),
     )
     monkeypatch.setattr(orders, "get_symbol_info", lambda name: symbol)
+    _mock_reference_quote(monkeypatch)
 
     captured: dict = {}
 
@@ -153,6 +173,7 @@ def test_selected_filling_mode_reaches_order_send(
             retcode=orders.mt5.TRADE_RETCODE_DONE,
             order=123,
             price=request["price"],
+            volume=request["volume"],
             comment="filled",
         )
 

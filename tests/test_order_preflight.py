@@ -42,10 +42,19 @@ def _request() -> OrderRequest:
     )
 
 
+def _mock_reference_quote(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        orders,
+        "get_market_price",
+        lambda symbol, side: 3300.0,
+    )
+
+
 def test_preflight_rejection_prevents_order_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(orders, "get_symbol_info", lambda name: _symbol())
+    _mock_reference_quote(monkeypatch)
     monkeypatch.setattr(
         orders.mt5,
         "order_check",
@@ -73,6 +82,7 @@ def test_missing_preflight_result_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(orders, "get_symbol_info", lambda name: _symbol())
+    _mock_reference_quote(monkeypatch)
     monkeypatch.setattr(orders.mt5, "order_check", lambda request: None)
     monkeypatch.setattr(
         orders.mt5,
@@ -97,6 +107,7 @@ def test_successful_preflight_allows_submission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(orders, "get_symbol_info", lambda name: _symbol())
+    _mock_reference_quote(monkeypatch)
     monkeypatch.setattr(
         orders.mt5,
         "order_check",
