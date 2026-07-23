@@ -237,3 +237,47 @@ def test_setup_invalidates_when_price_crosses_structural_level() -> None:
     assert invalidated.setup is not None
     assert invalidated.setup.status is SetupStatus.INVALIDATED
     assert invalidated.candidate_trade is None
+
+
+
+def test_terminal_setup_releases_active_slot_for_new_setup() -> None:
+    strategy = XAUUSDBOSCHOCHStrategy()
+    detected = strategy.observe(_context(index=20))
+    assert detected.reason_code == "SETUP_DETECTED"
+    assert strategy.state.active_setup is not None
+
+    invalidated = strategy.observe(_context(index=21, close=3279.0))
+    assert invalidated.reason_code == SetupStatus.INVALIDATED.value
+    assert strategy.state.active_setup is None
+
+    replacement = strategy.observe(_context(index=22, close=3300.0))
+    assert replacement.reason_code == "SETUP_DETECTED"
+    assert replacement.setup is not None
+    assert strategy.state.active_setup is replacement.setup
+    assert replacement.setup.setup_id != detected.setup.setup_id
+
+
+def test_observation_history_and_summary_are_resettable() -> None:
+    strategy = XAUUSDBOSCHOCHStrategy()
+
+    strategy.observe(
+        _context(
+            index=20,
+            h4_bias=MarketBias.BULLISH,
+            h1_bias=MarketBias.BEARISH,
+        )
+    )
+    strategy.observe(_context(index=21))
+
+    assert len(strategy.state.observations) == 2
+    assert strategy.state.observation_summary() == {
+        "NO_SETUP": 1,
+        "SETUP_DETECTED": 1,
+    }
+
+    strategy.reset()
+
+    assert strategy.state.observations == []
+    assert strategy.state.latest_observation is None
+    assert strategy.state.processed_observations == 0
+    assert strategy.state.observation_summary() == {}

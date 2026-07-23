@@ -73,7 +73,9 @@ class XAUUSDBOSCHOCHStrategy:
         if active is not None:
             terminal = self._terminal_transition(active, context)
             if terminal is not None:
-                self.state.active_setup = terminal
+                # Terminal setups must leave the active slot immediately.
+                # Retaining them would block all future setup detection.
+                self.state.active_setup = None
                 return self._publish(
                     timestamp=timestamp,
                     setup=terminal,
@@ -427,4 +429,5 @@ class XAUUSDBOSCHOCHStrategy:
             reason=reason,
         )
         self.state.latest_observation = observation
+        self.state.observations.append(observation)
         return observation
