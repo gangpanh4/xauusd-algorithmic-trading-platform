@@ -214,7 +214,7 @@ def test_setup_requires_later_fresh_m5_trigger() -> None:
     assert detected.setup is not None
 
     waiting = strategy.observe(_context(index=21, m5_trigger=False))
-    assert waiting.reason_code == "SETUP_ACTIVE"
+    assert waiting.reason_code == "NO_M5_STRUCTURE_EVENT"
     assert waiting.candidate_trade is None
 
     triggered = strategy.observe(_context(index=22, m5_trigger=True))

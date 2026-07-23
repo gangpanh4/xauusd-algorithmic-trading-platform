@@ -87,7 +87,9 @@ class XAUUSDBOSCHOCHStrategy:
                     ),
                 )
 
-            trigger = self._entry_trigger(active, context)
+            trigger, trigger_reason_code, trigger_reason = (
+                self._entry_trigger_diagnostic(active, context)
+            )
             if trigger is not None:
                 triggered_setup = replace(
                     active,
@@ -130,8 +132,8 @@ class XAUUSDBOSCHOCHStrategy:
             return self._publish(
                 timestamp=timestamp,
                 setup=active,
-                reason_code="SETUP_ACTIVE",
-                reason="Valid setup remains active and is awaiting an M5 trigger.",
+                reason_code=trigger_reason_code,
+                reason=trigger_reason,
             )
 
         setup = self._detect_setup(context)
@@ -280,46 +282,37 @@ class XAUUSDBOSCHOCHStrategy:
             )
         return None
 
-    def _entry_trigger(
-        self,
-        setup: TradingSetup,
-        context: StrategyContext,
-    ) -> EntryTrigger | None:
+    def _entry_trigger(self, setup, context) -> EntryTrigger | None:
+        trigger, _, _ = self._entry_trigger_diagnostic(setup, context)
+        return trigger
+
+    def _entry_trigger_diagnostic(self, setup, context):
         structure = self._structure_state(context.multi_timeframe.m5)
         if structure is None:
-            return None
-
-        direction = (
-            TrendDirection.BULLISH
-            if setup.direction is SetupDirection.BUY
-            else TrendDirection.BEARISH
-        )
+            return None, "NO_M5_STRUCTURE_STATE", "M5 market-structure state is unavailable."
+        direction = (TrendDirection.BULLISH if setup.direction is SetupDirection.BUY else TrendDirection.BEARISH)
         event = self._latest_directional_event(structure, direction)
         if event is None:
-            return None
+            latest = self._latest_structure_event(structure)
+            if latest is None:
+                return None, "NO_M5_STRUCTURE_EVENT", "No M5 BOS or CHOCH event is available."
+            return None, "M5_DIRECTION_MISMATCH", "Latest M5 structural event is not aligned with the setup."
         if event.confirmation_index != context.current_bar_index:
-            return None
+            return None, "M5_CONFIRMATION_INDEX_MISMATCH", "Aligned M5 event was not confirmed on the current M5 bar."
         if event.age != 0:
-            return None
-
-        return EntryTrigger(
+            return None, "M5_EVENT_NOT_FRESH", "Aligned M5 event is not fresh."
+        trigger = EntryTrigger(
             setup_id=setup.setup_id,
-            trigger_type=(
-                EntryTriggerType.BOS_CONFIRMATION
-                if isinstance(event, BOSEvent)
-                else EntryTriggerType.CHOCH_CONFIRMATION
-            ),
+            trigger_type=(EntryTriggerType.BOS_CONFIRMATION if isinstance(event, BOSEvent) else EntryTriggerType.CHOCH_CONFIRMATION),
             status=EntryTriggerStatus.CONFIRMED,
             timeframe=Timeframe.M5,
             observed_at=context.current_bar.timestamp,
             trigger_price=context.current_bar.close,
             confirmation_bar_index=context.current_bar_index,
             reason="Fresh M5 structural break aligned with active setup.",
-            metadata={
-                "event_confirmation_index": event.confirmation_index,
-                "event_direction": event.direction.name,
-            },
+            metadata={"event_confirmation_index": event.confirmation_index, "event_direction": event.direction.name},
         )
+        return trigger, "TRIGGER_CONFIRMED", "Fresh M5 structural break aligned with the active setup."
 
     def _candidate_trade(
         self,
@@ -382,6 +375,11 @@ class XAUUSDBOSCHOCHStrategy:
         if not isinstance(result, MarketStructureResult):
             return None
         return result.structure_state
+
+    @staticmethod
+    def _latest_structure_event(structure):
+        events = tuple(event for event in (structure.last_bos, structure.last_choch) if event is not None)
+        return max(events, key=lambda event: event.confirmation_index) if events else None
 
     @staticmethod
     def _latest_directional_event(
