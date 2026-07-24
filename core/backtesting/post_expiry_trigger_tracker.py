@@ -36,6 +36,13 @@ class PostExpiryTriggerRecord:
     target_reference_prices: tuple[float, ...]
     geometry_rejection_code: str | None
     geometry_rejection_reason: str | None
+    nearest_target_price: float | None
+    target_directionally_valid_at_trigger: bool | None
+    target_crossed_before_trigger: bool
+    first_target_crossed_at: datetime | None
+    bars_since_target_cross: int | None
+    target_distance_at_first_post_expiry_bar: float | None
+    target_distance_at_trigger: float | None
     entry_price: float | None
     stop_loss_price: float | None
     take_profit_prices: tuple[float, ...]
@@ -65,6 +72,14 @@ class _PendingExpiredSetup:
     target_reference_prices: tuple[float, ...] = ()
     geometry_rejection_code: str | None = None
     geometry_rejection_reason: str | None = None
+    nearest_target_price: float | None = None
+    target_directionally_valid_at_trigger: bool | None = None
+    target_crossed_before_trigger: bool = False
+    first_target_crossed_at: datetime | None = None
+    target_cross_bar_number: int | None = None
+    bars_since_target_cross: int | None = None
+    target_distance_at_first_post_expiry_bar: float | None = None
+    target_distance_at_trigger: float | None = None
     candidate: CandidateTrade | None = None
     outcome_bars: list[MarketBar] | None = None
     outcome: str | None = None
@@ -133,6 +148,10 @@ class PostExpiryTriggerTracker:
                 continue
 
             pending.bars_observed += 1
+            self._observe_target_freshness(
+                pending,
+                context.current_bar,
+            )
             trigger, _, _ = strategy._entry_trigger_diagnostic(
                 pending.setup,
                 context,
@@ -170,6 +189,32 @@ class PostExpiryTriggerTracker:
                 )
                 if price is not None
             )
+            pending.nearest_target_price = self._nearest_target_price(
+                direction=getattr(pending.setup, "direction", None),
+                trigger_price=pending.trigger_price,
+                target_prices=pending.target_reference_prices,
+            )
+            pending.target_directionally_valid_at_trigger = (
+                self._target_directionally_valid(
+                    direction=getattr(pending.setup, "direction", None),
+                    trigger_price=pending.trigger_price,
+                    target_price=pending.nearest_target_price,
+                )
+                if pending.nearest_target_price is not None
+                else False
+            )
+            if (
+                pending.nearest_target_price is not None
+                and pending.trigger_price is not None
+            ):
+                pending.target_distance_at_trigger = abs(
+                    pending.nearest_target_price - pending.trigger_price
+                )
+            if pending.first_target_crossed_at is not None:
+                pending.bars_since_target_cross = (
+                    pending.bars_observed
+                    - self._cross_bar_number(pending)
+                )
 
             diagnostic_code, diagnostic_reason = self._diagnose_geometry(
                 strategy=strategy,
@@ -195,6 +240,91 @@ class PostExpiryTriggerTracker:
 
         for setup_id in completed_ids:
             self._completed.append(self._pending.pop(setup_id))
+
+    @classmethod
+    def _observe_target_freshness(
+        cls,
+        pending: _PendingExpiredSetup,
+        bar: MarketBar,
+    ) -> None:
+        target_prices = tuple(
+            price
+            for price in (
+                cls._reference_price(reference)
+                for reference in getattr(
+                    pending.setup,
+                    "target_references",
+                    (),
+                )
+            )
+            if price is not None
+        )
+        if not target_prices:
+            return
+
+        direction = getattr(pending.setup, "direction", None)
+        close = cls._numeric_price(getattr(bar, "close", None))
+        if (
+            pending.target_distance_at_first_post_expiry_bar is None
+            and close is not None
+        ):
+            nearest = min(target_prices, key=lambda price: abs(price - close))
+            pending.target_distance_at_first_post_expiry_bar = abs(
+                nearest - close
+            )
+
+        if pending.first_target_crossed_at is not None:
+            return
+
+        high = cls._numeric_price(getattr(bar, "high", None))
+        low = cls._numeric_price(getattr(bar, "low", None))
+        crossed = False
+        if direction is SetupDirection.BUY and high is not None:
+            crossed = any(high >= price for price in target_prices)
+        elif direction is SetupDirection.SELL and low is not None:
+            crossed = any(low <= price for price in target_prices)
+
+        if crossed:
+            pending.target_crossed_before_trigger = True
+            pending.first_target_crossed_at = bar.timestamp
+            pending.target_cross_bar_number = pending.bars_observed
+
+    @staticmethod
+    def _cross_bar_number(pending: _PendingExpiredSetup) -> int:
+        return (
+            pending.target_cross_bar_number
+            if pending.target_cross_bar_number is not None
+            else pending.bars_observed
+        )
+
+    @staticmethod
+    def _nearest_target_price(
+        *,
+        direction: object,
+        trigger_price: float | None,
+        target_prices: tuple[float, ...],
+    ) -> float | None:
+        if trigger_price is None or not target_prices:
+            return None
+        return min(
+            target_prices,
+            key=lambda price: abs(price - trigger_price),
+        )
+
+    @staticmethod
+    def _target_directionally_valid(
+        *,
+        direction: object,
+        trigger_price: float | None,
+        target_price: float | None,
+    ) -> bool:
+        if trigger_price is None or target_price is None:
+            return False
+        if direction is SetupDirection.BUY:
+            return target_price > trigger_price
+        if direction is SetupDirection.SELL:
+            return target_price < trigger_price
+        return False
 
     @staticmethod
     def _numeric_price(value: object | None) -> float | None:
@@ -360,6 +490,23 @@ class PostExpiryTriggerTracker:
                     target_reference_prices=item.target_reference_prices,
                     geometry_rejection_code=item.geometry_rejection_code,
                     geometry_rejection_reason=item.geometry_rejection_reason,
+                    nearest_target_price=item.nearest_target_price,
+                    target_directionally_valid_at_trigger=(
+                        item.target_directionally_valid_at_trigger
+                    ),
+                    target_crossed_before_trigger=(
+                        item.target_crossed_before_trigger
+                    ),
+                    first_target_crossed_at=(
+                        item.first_target_crossed_at
+                    ),
+                    bars_since_target_cross=item.bars_since_target_cross,
+                    target_distance_at_first_post_expiry_bar=(
+                        item.target_distance_at_first_post_expiry_bar
+                    ),
+                    target_distance_at_trigger=(
+                        item.target_distance_at_trigger
+                    ),
                     entry_price=(
                         candidate.entry_price if candidate is not None else None
                     ),
