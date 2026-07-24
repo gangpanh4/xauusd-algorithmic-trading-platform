@@ -23,6 +23,11 @@ from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
 from .models import LiveTradingResult
+from .partial_fill_store import (
+    PartialFillStateError,
+    PartialFillStateStore,
+    PersistedPartialFill,
+)
 from .state import LiveTradingState
 
 logger = logging.getLogger(__name__)
@@ -39,11 +44,17 @@ class LiveTradingEngine:
         self.adapter = ExecutionAdapter(
             ExecutionAdapterConfig(symbol=config.symbol)
         )
+        self.partial_fill_store = PartialFillStateStore(
+            config.partial_fill_state_path
+        )
 
     def start(self) -> None:
         """Start in analysis-only or live-execution mode."""
 
         self.state.reset()
+
+        if self.config.live_execution_enabled:
+            self._restore_partial_fill_state()
 
         if not self.config.live_execution_enabled:
             self.state.running = True
@@ -414,11 +425,12 @@ class LiveTradingEngine:
                     trade_executed=False,
                 )
 
-            self.pipeline.register_position_opened()
+            created_at = execution_result.timestamp
             self.state.unresolved_partial_ticket = execution_result.ticket
             self.state.unresolved_requested_volume = requested_volume
             self.state.unresolved_executed_volume = executed_volume
             self.state.unresolved_remaining_volume = remaining_volume
+            self.state.unresolved_partial_created_at = created_at
             self.state.active_order_count = max(
                 1,
                 self.state.active_order_count,
@@ -426,6 +438,14 @@ class LiveTradingEngine:
             self.state.last_ticket = execution_result.ticket
             self.state.last_partial_fill_resolution = ""
             self.state.last_error = execution_result.message
+
+            try:
+                self._persist_partial_fill_state()
+            except PartialFillStateError as exc:
+                self._fail_closed_partial_fill(str(exc))
+                raise
+
+            self.pipeline.register_position_opened()
             logger.warning(
                 "MT5 partially filled order %s: executed=%s remaining=%s",
                 execution_result.ticket,
@@ -525,6 +545,11 @@ class LiveTradingEngine:
             self.state.last_error = (
                 "Execution blocked while an MT5 order remainder is unresolved."
             )
+            try:
+                self._persist_partial_fill_state()
+            except PartialFillStateError as exc:
+                self._fail_closed_partial_fill(str(exc))
+                raise
             return
 
         self.state.active_order_count = 0
@@ -534,17 +559,81 @@ class LiveTradingEngine:
             rel_tol=0.0,
             abs_tol=tolerance,
         ):
-            self.state.executed_trades += 1
             resolution = "FILLED"
         else:
             resolution = "REMAINDER_CANCELLED_OR_REJECTED"
+
+        try:
+            self.partial_fill_store.clear()
+        except PartialFillStateError as exc:
+            self._fail_closed_partial_fill(str(exc))
+            raise
+
+        if resolution == "FILLED":
+            self.state.executed_trades += 1
 
         self.state.last_partial_fill_resolution = resolution
         self.state.unresolved_partial_ticket = None
         self.state.unresolved_requested_volume = 0.0
         self.state.unresolved_executed_volume = 0.0
         self.state.unresolved_remaining_volume = 0.0
+        self.state.unresolved_partial_created_at = None
         self.state.last_error = ""
+
+    def _restore_partial_fill_state(self) -> None:
+        """Restore durable unresolved state before broker reconciliation."""
+
+        try:
+            record = self.partial_fill_store.load()
+        except PartialFillStateError as exc:
+            self._fail_closed_partial_fill(str(exc))
+            raise
+
+        if record is None:
+            return
+        if record.symbol != self.config.symbol:
+            message = (
+                "Persisted partial-fill symbol does not match configured "
+                f"symbol: {record.symbol!r} != {self.config.symbol!r}."
+            )
+            self._fail_closed_partial_fill(message)
+            raise PartialFillStateError(message)
+
+        self.state.unresolved_partial_ticket = record.ticket
+        self.state.unresolved_requested_volume = record.requested_volume
+        self.state.unresolved_executed_volume = record.executed_volume
+        self.state.unresolved_remaining_volume = record.remaining_volume
+        self.state.unresolved_partial_created_at = record.created_at
+        self.state.active_order_count = max(
+            1,
+            self.state.active_order_count,
+        )
+        self.state.last_ticket = record.ticket
+        self.state.last_error = (
+            "Execution blocked while a restored MT5 order remainder is "
+            "unresolved."
+        )
+
+    def _persist_partial_fill_state(self) -> None:
+        """Atomically persist the current unresolved partial-fill state."""
+
+        ticket = self.state.unresolved_partial_ticket
+        created_at = self.state.unresolved_partial_created_at
+        if ticket is None or created_at is None:
+            raise PartialFillStateError(
+                "Unresolved partial-fill state is incomplete."
+            )
+
+        self.partial_fill_store.save(
+            PersistedPartialFill(
+                symbol=self.config.symbol,
+                ticket=ticket,
+                requested_volume=self.state.unresolved_requested_volume,
+                executed_volume=self.state.unresolved_executed_volume,
+                remaining_volume=self.state.unresolved_remaining_volume,
+                created_at=created_at,
+            )
+        )
 
     def _fail_closed_partial_fill(self, message: str) -> None:
         """Preserve the unresolved guard when broker state is inconsistent."""

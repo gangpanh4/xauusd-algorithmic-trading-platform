@@ -29,6 +29,7 @@ class LiveTradingState:
     unresolved_requested_volume: float = 0.0
     unresolved_executed_volume: float = 0.0
     unresolved_remaining_volume: float = 0.0
+    unresolved_partial_created_at: datetime | None = None
     last_partial_fill_resolution: str = ""
 
     def reset(self) -> None:
@@ -48,4 +49,5 @@ class LiveTradingState:
         self.unresolved_requested_volume = 0.0
         self.unresolved_executed_volume = 0.0
         self.unresolved_remaining_volume = 0.0
+        self.unresolved_partial_created_at = None
         self.last_partial_fill_resolution = ""

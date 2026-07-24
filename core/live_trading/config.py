@@ -5,6 +5,7 @@ Configuration for the Live Trading Engine.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from core.mt5_execution.config import (
     MT5ExecutionConfig,
@@ -38,3 +39,7 @@ class LiveTradingConfig:
     history_window_bars: int = 500
 
     live_execution_enabled: bool = False
+
+    partial_fill_state_path: Path = Path(
+        "runtime/live_partial_fill_state.json"
+    )
