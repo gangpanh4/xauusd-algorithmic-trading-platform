@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import copy
+from dataclasses import dataclass, is_dataclass, replace
 from datetime import datetime
 from typing import Any
 
 from core.data.models import MarketBar
 from core.strategies.context import StrategyContext
-from core.strategies.enums import SetupDirection
+from core.strategies.enums import SetupDirection, SetupStatus
 from core.strategies.models import CandidateTrade, TradingSetup
 from core.strategies.xauusd_bos_choch import XAUUSDBOSCHOCHStrategy
 
@@ -239,8 +240,11 @@ class PostExpiryTriggerTracker:
                 setup=pending.setup,
                 trigger=trigger,
             )
+            research_setup = self._triggered_research_setup(
+                pending.setup
+            )
             candidate = strategy._candidate_trade(
-                setup=pending.setup,
+                setup=research_setup,
                 trigger=trigger,
             )
             pending.geometry_valid = candidate is not None
@@ -262,6 +266,20 @@ class PostExpiryTriggerTracker:
 
         for setup_id in completed_ids:
             self._completed.append(self._pending.pop(setup_id))
+
+    @staticmethod
+    def _triggered_research_setup(setup: object) -> object:
+        if is_dataclass(setup):
+            return replace(
+                setup,
+                status=SetupStatus.TRIGGERED,
+                invalidation_reason=None,
+            )
+
+        research_setup = copy(setup)
+        setattr(research_setup, "status", SetupStatus.TRIGGERED)
+        setattr(research_setup, "invalidation_reason", None)
+        return research_setup
 
     @classmethod
     def _observe_target_freshness(
