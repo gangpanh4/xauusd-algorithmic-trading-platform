@@ -8,6 +8,7 @@ from typing import Any
 
 from core.data.models import MarketBar
 from core.strategies.context import StrategyContext
+from core.strategies.enums import SetupDirection
 from core.strategies.models import CandidateTrade, TradingSetup
 from core.strategies.xauusd_bos_choch import XAUUSDBOSCHOCHStrategy
 
@@ -29,6 +30,12 @@ class PostExpiryTriggerRecord:
     trigger_type: str | None
     window_complete: bool
     geometry_valid: bool | None
+    trigger_price: float | None
+    invalidation_price: float | None
+    stop_reference_price: float | None
+    target_reference_prices: tuple[float, ...]
+    geometry_rejection_code: str | None
+    geometry_rejection_reason: str | None
     entry_price: float | None
     stop_loss_price: float | None
     take_profit_prices: tuple[float, ...]
@@ -52,6 +59,12 @@ class _PendingExpiredSetup:
     trigger_type: str | None = None
     window_complete: bool = False
     geometry_valid: bool | None = None
+    trigger_price: float | None = None
+    invalidation_price: float | None = None
+    stop_reference_price: float | None = None
+    target_reference_prices: tuple[float, ...] = ()
+    geometry_rejection_code: str | None = None
+    geometry_rejection_reason: str | None = None
     candidate: CandidateTrade | None = None
     outcome_bars: list[MarketBar] | None = None
     outcome: str | None = None
@@ -136,7 +149,33 @@ class PostExpiryTriggerTracker:
             pending.bars_after_expiry = pending.bars_observed
             pending.trigger_type = trigger.trigger_type.value
             pending.window_complete = True
+            pending.trigger_price = self._numeric_price(
+                getattr(trigger, "trigger_price", None)
+            )
+            pending.invalidation_price = self._reference_price(
+                getattr(pending.setup, "invalidation", None)
+            )
+            pending.stop_reference_price = self._reference_price(
+                getattr(pending.setup, "stop_reference", None)
+            )
+            pending.target_reference_prices = tuple(
+                price
+                for price in (
+                    self._reference_price(reference)
+                    for reference in getattr(
+                        pending.setup,
+                        "target_references",
+                        (),
+                    )
+                )
+                if price is not None
+            )
 
+            diagnostic_code, diagnostic_reason = self._diagnose_geometry(
+                strategy=strategy,
+                setup=pending.setup,
+                trigger=trigger,
+            )
             candidate = strategy._candidate_trade(
                 setup=pending.setup,
                 trigger=trigger,
@@ -146,11 +185,112 @@ class PostExpiryTriggerTracker:
             pending.outcome_bars = []
 
             if candidate is None:
+                pending.geometry_rejection_code = diagnostic_code
+                pending.geometry_rejection_reason = diagnostic_reason
                 pending.outcome_window_complete = True
                 completed_ids.append(setup_id)
+            else:
+                pending.geometry_rejection_code = None
+                pending.geometry_rejection_reason = None
 
         for setup_id in completed_ids:
             self._completed.append(self._pending.pop(setup_id))
+
+    @staticmethod
+    def _numeric_price(value: object | None) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    @classmethod
+    def _reference_price(cls, reference: object | None) -> float | None:
+        return cls._numeric_price(getattr(reference, "price", None))
+
+    @classmethod
+    def _diagnose_geometry(
+        cls,
+        *,
+        strategy: XAUUSDBOSCHOCHStrategy,
+        setup: TradingSetup,
+        trigger: object,
+    ) -> tuple[str | None, str | None]:
+        """Mirror the strategy's candidate-geometry decision sequence."""
+
+        trigger_price = getattr(trigger, "trigger_price", None)
+        if isinstance(trigger_price, bool) or not isinstance(
+            trigger_price,
+            (int, float),
+        ):
+            return (
+                "INVALID_TRIGGER_PRICE",
+                "Trigger price is missing or non-numeric.",
+            )
+        trigger_price = float(trigger_price)
+
+        direction = getattr(setup, "direction", None)
+        target_prices = tuple(
+            price
+            for price in (
+                cls._reference_price(reference)
+                for reference in getattr(setup, "target_references", ())
+            )
+            if price is not None
+            and (
+                price > trigger_price
+                if direction is SetupDirection.BUY
+                else price < trigger_price
+            )
+        )
+        if not target_prices:
+            return (
+                "NO_TARGET_BEYOND_ENTRY",
+                "No setup target remains beyond the late trigger entry price.",
+            )
+
+        stop_price = cls._reference_price(
+            getattr(setup, "stop_reference", None)
+        )
+        if stop_price is None:
+            return (
+                "INVALID_STOP_REFERENCE",
+                "Stop reference price is missing or non-numeric.",
+            )
+
+        risk = abs(trigger_price - stop_price)
+        if risk <= 0.0:
+            return (
+                "ZERO_RISK_DISTANCE",
+                "Late trigger price equals the stop reference price.",
+            )
+
+        nearest_reward = min(
+            abs(target - trigger_price)
+            for target in target_prices
+        )
+        reward_risk = nearest_reward / risk
+        minimum = getattr(
+            getattr(strategy, "config", None),
+            "minimum_target_reward_risk",
+            None,
+        )
+        if isinstance(minimum, (int, float)) and not isinstance(minimum, bool):
+            if reward_risk < float(minimum):
+                return (
+                    "REWARD_RISK_BELOW_MINIMUM",
+                    (
+                        "Nearest target reward/risk "
+                        f"{reward_risk:.6f} is below configured minimum "
+                        f"{float(minimum):.6f}."
+                    ),
+                )
+
+        return (
+            "CANDIDATE_MODEL_REJECTED",
+            (
+                "Geometry passed explicit strategy filters but candidate "
+                "construction still returned no trade."
+            ),
+        )
 
     def _observe_outcome_bar(
         self,
@@ -214,6 +354,12 @@ class PostExpiryTriggerTracker:
                     trigger_type=item.trigger_type,
                     window_complete=item.window_complete,
                     geometry_valid=item.geometry_valid,
+                    trigger_price=item.trigger_price,
+                    invalidation_price=item.invalidation_price,
+                    stop_reference_price=item.stop_reference_price,
+                    target_reference_prices=item.target_reference_prices,
+                    geometry_rejection_code=item.geometry_rejection_code,
+                    geometry_rejection_reason=item.geometry_rejection_reason,
                     entry_price=(
                         candidate.entry_price if candidate is not None else None
                     ),
