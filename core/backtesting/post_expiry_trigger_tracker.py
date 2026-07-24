@@ -43,6 +43,13 @@ class PostExpiryTriggerRecord:
     bars_since_target_cross: int | None
     target_distance_at_first_post_expiry_bar: float | None
     target_distance_at_trigger: float | None
+    hypothetical_terminal_reason: str | None
+    hypothetical_terminal_at: datetime | None
+    bars_after_expiry_at_hypothetical_terminal: int | None
+    setup_age_minutes_at_hypothetical_terminal: float | None
+    trigger_appeared_after_hypothetical_terminal: bool
+    candidate_created_after_hypothetical_terminal: bool
+    bars_from_hypothetical_terminal_to_trigger: int | None
     entry_price: float | None
     stop_loss_price: float | None
     take_profit_prices: tuple[float, ...]
@@ -80,6 +87,13 @@ class _PendingExpiredSetup:
     bars_since_target_cross: int | None = None
     target_distance_at_first_post_expiry_bar: float | None = None
     target_distance_at_trigger: float | None = None
+    hypothetical_terminal_reason: str | None = None
+    hypothetical_terminal_at: datetime | None = None
+    bars_after_expiry_at_hypothetical_terminal: int | None = None
+    setup_age_minutes_at_hypothetical_terminal: float | None = None
+    trigger_appeared_after_hypothetical_terminal: bool = False
+    candidate_created_after_hypothetical_terminal: bool = False
+    bars_from_hypothetical_terminal_to_trigger: int | None = None
     candidate: CandidateTrade | None = None
     outcome_bars: list[MarketBar] | None = None
     outcome: str | None = None
@@ -215,6 +229,10 @@ class PostExpiryTriggerTracker:
                     pending.bars_observed
                     - self._cross_bar_number(pending)
                 )
+                pending.trigger_appeared_after_hypothetical_terminal = True
+                pending.bars_from_hypothetical_terminal_to_trigger = (
+                    pending.bars_since_target_cross
+                )
 
             diagnostic_code, diagnostic_reason = self._diagnose_geometry(
                 strategy=strategy,
@@ -227,6 +245,10 @@ class PostExpiryTriggerTracker:
             )
             pending.geometry_valid = candidate is not None
             pending.candidate = candidate
+            pending.candidate_created_after_hypothetical_terminal = (
+                candidate is not None
+                and pending.hypothetical_terminal_at is not None
+            )
             pending.outcome_bars = []
 
             if candidate is None:
@@ -288,6 +310,18 @@ class PostExpiryTriggerTracker:
             pending.target_crossed_before_trigger = True
             pending.first_target_crossed_at = bar.timestamp
             pending.target_cross_bar_number = pending.bars_observed
+            pending.hypothetical_terminal_reason = (
+                "TARGET_REACHED_BEFORE_TRIGGER"
+            )
+            pending.hypothetical_terminal_at = bar.timestamp
+            pending.bars_after_expiry_at_hypothetical_terminal = (
+                pending.bars_observed
+            )
+            detected_at = getattr(pending.setup, "detected_at", None)
+            if isinstance(detected_at, datetime):
+                pending.setup_age_minutes_at_hypothetical_terminal = (
+                    bar.timestamp - detected_at
+                ).total_seconds() / 60.0
 
     @staticmethod
     def _cross_bar_number(pending: _PendingExpiredSetup) -> int:
@@ -506,6 +540,27 @@ class PostExpiryTriggerTracker:
                     ),
                     target_distance_at_trigger=(
                         item.target_distance_at_trigger
+                    ),
+                    hypothetical_terminal_reason=(
+                        item.hypothetical_terminal_reason
+                    ),
+                    hypothetical_terminal_at=(
+                        item.hypothetical_terminal_at
+                    ),
+                    bars_after_expiry_at_hypothetical_terminal=(
+                        item.bars_after_expiry_at_hypothetical_terminal
+                    ),
+                    setup_age_minutes_at_hypothetical_terminal=(
+                        item.setup_age_minutes_at_hypothetical_terminal
+                    ),
+                    trigger_appeared_after_hypothetical_terminal=(
+                        item.trigger_appeared_after_hypothetical_terminal
+                    ),
+                    candidate_created_after_hypothetical_terminal=(
+                        item.candidate_created_after_hypothetical_terminal
+                    ),
+                    bars_from_hypothetical_terminal_to_trigger=(
+                        item.bars_from_hypothetical_terminal_to_trigger
                     ),
                     entry_price=(
                         candidate.entry_price if candidate is not None else None
