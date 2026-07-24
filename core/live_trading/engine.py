@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from math import isclose, isfinite
 import logging
 
 from core.data.models import MarketBar
@@ -86,11 +87,24 @@ class LiveTradingEngine:
         return count
 
     def synchronize_active_orders(self) -> int:
-        """Synchronize unresolved broker orders for the configured symbol."""
+        """Synchronize unresolved broker orders for the configured symbol.
+
+        When a partial fill is unresolved, active-order state and authoritative
+        broker position volume are reconciled together. Any inconsistent volume
+        transition fails closed and preserves the execution guard.
+        """
 
         count = get_active_order_count(self.config.symbol)
-        self.state.active_order_count = count
-        return count
+        if self.state.unresolved_partial_ticket is not None:
+            positions = get_open_positions(self.config.symbol)
+            observed_volume = sum(float(position.volume) for position in positions)
+            self._reconcile_partial_fill(
+                active_order_count=count,
+                observed_position_volume=observed_volume,
+            )
+        else:
+            self.state.active_order_count = count
+        return self.state.active_order_count
 
     def reconcile_realized_deals(
         self,
@@ -328,10 +342,13 @@ class LiveTradingEngine:
                 trade_executed=False,
             )
 
-        if self.state.active_order_count > 0:
+        if (
+            self.state.active_order_count > 0
+            or self.state.unresolved_partial_ticket is not None
+        ):
             self.state.skipped_trades += 1
             self.state.last_error = (
-                "Execution blocked while an active MT5 order is unresolved."
+                "Execution blocked while an MT5 order remainder is unresolved."
             )
             logger.warning(self.state.last_error)
             return LiveTradingResult(
@@ -352,10 +369,6 @@ class LiveTradingEngine:
             execution_request.order_request,
         )
 
-        executed_statuses = {
-            OrderStatus.FILLED,
-            OrderStatus.PARTIALLY_FILLED,
-        }
         if execution_result.status is OrderStatus.PENDING:
             # A placed order may execute later. Block subsequent submissions
             # until broker reconciliation confirms that no active order remains.
@@ -376,7 +389,56 @@ class LiveTradingEngine:
                 trade_executed=False,
             )
 
-        if execution_result.status not in executed_statuses:
+        if execution_result.status is OrderStatus.PARTIALLY_FILLED:
+            requested_volume = float(execution_request.order_request.volume)
+            executed_volume = float(execution_result.executed_volume)
+            remaining_volume = requested_volume - executed_volume
+
+            if (
+                execution_result.ticket is None
+                or not isfinite(requested_volume)
+                or not isfinite(executed_volume)
+                or not isfinite(remaining_volume)
+                or requested_volume <= 0.0
+                or executed_volume <= 0.0
+                or remaining_volume <= 0.0
+            ):
+                self.state.skipped_trades += 1
+                self.state.last_error = (
+                    "Partial-fill acknowledgement is internally inconsistent."
+                )
+                logger.error(self.state.last_error)
+                return LiveTradingResult(
+                    pipeline_result=pipeline_result,
+                    execution_result=execution_result,
+                    trade_executed=False,
+                )
+
+            self.pipeline.register_position_opened()
+            self.state.unresolved_partial_ticket = execution_result.ticket
+            self.state.unresolved_requested_volume = requested_volume
+            self.state.unresolved_executed_volume = executed_volume
+            self.state.unresolved_remaining_volume = remaining_volume
+            self.state.active_order_count = max(
+                1,
+                self.state.active_order_count,
+            )
+            self.state.last_ticket = execution_result.ticket
+            self.state.last_partial_fill_resolution = ""
+            self.state.last_error = execution_result.message
+            logger.warning(
+                "MT5 partially filled order %s: executed=%s remaining=%s",
+                execution_result.ticket,
+                executed_volume,
+                remaining_volume,
+            )
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=execution_result,
+                trade_executed=True,
+            )
+
+        if execution_result.status is not OrderStatus.FILLED:
             self.state.skipped_trades += 1
             self.state.last_error = execution_result.message
             logger.error(
@@ -399,3 +461,97 @@ class LiveTradingEngine:
             execution_result=execution_result,
             trade_executed=True,
         )
+
+    def _reconcile_partial_fill(
+        self,
+        *,
+        active_order_count: int,
+        observed_position_volume: float,
+    ) -> None:
+        """Reconcile one unresolved partial fill against broker state."""
+
+        requested = self.state.unresolved_requested_volume
+        previously_executed = self.state.unresolved_executed_volume
+
+        if (
+            isinstance(active_order_count, bool)
+            or not isinstance(active_order_count, int)
+            or active_order_count < 0
+            or not isfinite(observed_position_volume)
+            or observed_position_volume < 0.0
+            or not isfinite(requested)
+            or not isfinite(previously_executed)
+            or requested <= 0.0
+            or previously_executed <= 0.0
+            or previously_executed >= requested
+        ):
+            self._fail_closed_partial_fill(
+                "Partial-fill reconciliation state is invalid."
+            )
+            return
+
+        tolerance = 1e-12
+        if observed_position_volume + tolerance < previously_executed:
+            self._fail_closed_partial_fill(
+                "Broker position volume fell below the acknowledged partial "
+                "fill while its remainder was unresolved."
+            )
+            return
+        if observed_position_volume > requested + tolerance:
+            self._fail_closed_partial_fill(
+                "Broker position volume exceeds the originally requested "
+                "partial-fill volume."
+            )
+            return
+
+        executed = min(observed_position_volume, requested)
+        remaining = max(0.0, requested - executed)
+        self.state.unresolved_executed_volume = executed
+        self.state.unresolved_remaining_volume = remaining
+
+        if active_order_count > 0:
+            if isclose(
+                executed,
+                requested,
+                rel_tol=0.0,
+                abs_tol=tolerance,
+            ):
+                self._fail_closed_partial_fill(
+                    "Broker reports full requested position volume while the "
+                    "order remainder is still active."
+                )
+                return
+            self.state.active_order_count = active_order_count
+            self.state.last_error = (
+                "Execution blocked while an MT5 order remainder is unresolved."
+            )
+            return
+
+        self.state.active_order_count = 0
+        if isclose(
+            executed,
+            requested,
+            rel_tol=0.0,
+            abs_tol=tolerance,
+        ):
+            self.state.executed_trades += 1
+            resolution = "FILLED"
+        else:
+            resolution = "REMAINDER_CANCELLED_OR_REJECTED"
+
+        self.state.last_partial_fill_resolution = resolution
+        self.state.unresolved_partial_ticket = None
+        self.state.unresolved_requested_volume = 0.0
+        self.state.unresolved_executed_volume = 0.0
+        self.state.unresolved_remaining_volume = 0.0
+        self.state.last_error = ""
+
+    def _fail_closed_partial_fill(self, message: str) -> None:
+        """Preserve the unresolved guard when broker state is inconsistent."""
+
+        self.state.active_order_count = max(
+            1,
+            self.state.active_order_count,
+        )
+        self.state.last_error = message
+        logger.error(message)

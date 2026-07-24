@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -14,9 +14,9 @@ from core.regime_detector.models import MarketBar
 from core.risk_manager.models import RiskDecision
 
 
-def _bar() -> MarketBar:
+def _bar(*, seconds: int = 0) -> MarketBar:
     return MarketBar(
-        timestamp=datetime.now(UTC),
+        timestamp=datetime.now(UTC) + timedelta(seconds=seconds),
         open=4000.0,
         high=4005.0,
         low=3998.0,
@@ -49,6 +49,18 @@ def _pending_result() -> OrderResult:
     )
 
 
+def _partial_result(*, volume: float = 0.004) -> OrderResult:
+    return OrderResult(
+        timestamp=datetime.now(UTC),
+        status=OrderStatus.PARTIALLY_FILLED,
+        ticket=123456,
+        executed_price=4003.0,
+        message="DONE_PARTIAL [10010]: partial",
+        retcode=10010,
+        executed_volume=volume,
+    )
+
+
 def _enabled_engine() -> LiveTradingEngine:
     engine = LiveTradingEngine(
         LiveTradingConfig(live_execution_enabled=True)
@@ -58,7 +70,7 @@ def _enabled_engine() -> LiveTradingEngine:
     engine.executor.is_connected = Mock(return_value=True)
     engine.adapter.adapt = Mock(
         return_value=SimpleNamespace(
-            order_request=object(),
+            order_request=SimpleNamespace(volume=0.01),
         )
     )
     return engine
@@ -135,3 +147,166 @@ def test_active_order_query_failure_preserves_existing_guard(
         engine.synchronize_active_orders()
 
     assert engine.state.active_order_count == 1
+
+
+def test_partial_fill_records_actual_and_remaining_volume() -> None:
+    engine = _enabled_engine()
+    engine.pipeline.register_position_opened = Mock()
+    engine.executor.execute_order = Mock(
+        return_value=_partial_result(volume=0.004)
+    )
+
+    result = engine.process_bar(
+        _bar(),
+        account_balance=10_000.0,
+        stop_loss_distance=2.0,
+        pip_value=1.0,
+    )
+
+    assert result.trade_executed is True
+    assert result.execution_result.status is OrderStatus.PARTIALLY_FILLED
+    assert engine.state.unresolved_partial_ticket == 123456
+    assert engine.state.unresolved_requested_volume == pytest.approx(0.01)
+    assert engine.state.unresolved_executed_volume == pytest.approx(0.004)
+    assert engine.state.unresolved_remaining_volume == pytest.approx(0.006)
+    assert engine.state.active_order_count == 1
+    assert engine.state.executed_trades == 0
+    engine.pipeline.register_position_opened.assert_called_once_with()
+
+
+def test_unresolved_partial_fill_blocks_new_submission() -> None:
+    engine = _enabled_engine()
+    engine.state.unresolved_partial_ticket = 123456
+    engine.state.unresolved_requested_volume = 0.01
+    engine.state.unresolved_executed_volume = 0.004
+    engine.state.unresolved_remaining_volume = 0.006
+    engine.executor.execute_order = Mock()
+
+    result = engine.process_bar(
+        _bar(),
+        account_balance=10_000.0,
+        stop_loss_distance=2.0,
+        pip_value=1.0,
+    )
+
+    assert result.trade_executed is False
+    assert result.execution_result is None
+    assert "remainder is unresolved" in engine.state.last_error
+    engine.executor.execute_order.assert_not_called()
+
+
+def test_partial_fill_reconciliation_tracks_later_fill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    engine.state.unresolved_partial_ticket = 123456
+    engine.state.unresolved_requested_volume = 0.01
+    engine.state.unresolved_executed_volume = 0.004
+    engine.state.unresolved_remaining_volume = 0.006
+    engine.state.active_order_count = 1
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_active_order_count",
+        lambda symbol: 1,
+    )
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_open_positions",
+        lambda symbol: [SimpleNamespace(volume=0.007)],
+    )
+
+    assert engine.synchronize_active_orders() == 1
+    assert engine.state.unresolved_executed_volume == pytest.approx(0.007)
+    assert engine.state.unresolved_remaining_volume == pytest.approx(0.003)
+    assert engine.state.executed_trades == 0
+
+
+def test_partial_fill_completion_increments_counter_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    engine.state.unresolved_partial_ticket = 123456
+    engine.state.unresolved_requested_volume = 0.01
+    engine.state.unresolved_executed_volume = 0.004
+    engine.state.unresolved_remaining_volume = 0.006
+    engine.state.active_order_count = 1
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_active_order_count",
+        lambda symbol: 0,
+    )
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_open_positions",
+        lambda symbol: [SimpleNamespace(volume=0.01)],
+    )
+
+    assert engine.synchronize_active_orders() == 0
+    assert engine.state.executed_trades == 1
+    assert engine.state.last_partial_fill_resolution == "FILLED"
+    assert engine.state.unresolved_partial_ticket is None
+    assert engine.state.unresolved_remaining_volume == 0.0
+
+    assert engine.synchronize_active_orders() == 0
+    assert engine.state.executed_trades == 1
+
+
+def test_partial_fill_cancelled_remainder_preserves_actual_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    engine.state.unresolved_partial_ticket = 123456
+    engine.state.unresolved_requested_volume = 0.01
+    engine.state.unresolved_executed_volume = 0.004
+    engine.state.unresolved_remaining_volume = 0.006
+    engine.state.active_order_count = 1
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_active_order_count",
+        lambda symbol: 0,
+    )
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_open_positions",
+        lambda symbol: [SimpleNamespace(volume=0.004)],
+    )
+
+    assert engine.synchronize_active_orders() == 0
+    assert engine.state.executed_trades == 0
+    assert (
+        engine.state.last_partial_fill_resolution
+        == "REMAINDER_CANCELLED_OR_REJECTED"
+    )
+    assert engine.state.unresolved_partial_ticket is None
+
+
+@pytest.mark.parametrize("observed_volume", [0.003, 0.011])
+def test_inconsistent_partial_reconciliation_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    observed_volume: float,
+) -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    engine.state.unresolved_partial_ticket = 123456
+    engine.state.unresolved_requested_volume = 0.01
+    engine.state.unresolved_executed_volume = 0.004
+    engine.state.unresolved_remaining_volume = 0.006
+    engine.state.active_order_count = 1
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_active_order_count",
+        lambda symbol: 0,
+    )
+    monkeypatch.setattr(
+        live_engine_module,
+        "get_open_positions",
+        lambda symbol: [SimpleNamespace(volume=observed_volume)],
+    )
+
+    assert engine.synchronize_active_orders() == 1
+    assert engine.state.unresolved_partial_ticket == 123456
+    assert engine.state.last_error
+    assert engine.state.executed_trades == 0
