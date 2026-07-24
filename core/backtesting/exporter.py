@@ -598,6 +598,12 @@ class BacktestExporter:
             'Expired At', 'Maximum Bars', 'Bars Observed',
             'Trigger Found', 'First Trigger At', 'Bars After Expiry',
             'Trigger Type', 'Window Complete',
+            'Geometry Valid', 'Entry Price', 'Stop Loss Price',
+            'Take Profit Prices', 'Reward Risk', 'Outcome',
+            'Outcome Timestamp', 'Outcome Bars Evaluated',
+            'Maximum Favorable R Multiple',
+            'Maximum Adverse R Multiple',
+            'Outcome Window Complete',
         )
         with path.open('w', newline='', encoding='utf-8') as file:
             writer = csv.DictWriter(file, fieldnames=list(fieldnames), extrasaction='raise')
@@ -616,6 +622,17 @@ class BacktestExporter:
                     'Bars After Expiry': record.bars_after_expiry if record.bars_after_expiry is not None else '',
                     'Trigger Type': record.trigger_type or '',
                     'Window Complete': record.window_complete,
+                    'Geometry Valid': record.geometry_valid if record.geometry_valid is not None else '',
+                    'Entry Price': record.entry_price if record.entry_price is not None else '',
+                    'Stop Loss Price': record.stop_loss_price if record.stop_loss_price is not None else '',
+                    'Take Profit Prices': json.dumps(record.take_profit_prices),
+                    'Reward Risk': record.reward_risk if record.reward_risk is not None else '',
+                    'Outcome': record.outcome or '',
+                    'Outcome Timestamp': record.outcome_timestamp.isoformat() if record.outcome_timestamp is not None else '',
+                    'Outcome Bars Evaluated': record.outcome_bars_evaluated,
+                    'Maximum Favorable R Multiple': record.maximum_favorable_r_multiple if record.maximum_favorable_r_multiple is not None else '',
+                    'Maximum Adverse R Multiple': record.maximum_adverse_r_multiple if record.maximum_adverse_r_multiple is not None else '',
+                    'Outcome Window Complete': record.outcome_window_complete,
                 })
         return path
 

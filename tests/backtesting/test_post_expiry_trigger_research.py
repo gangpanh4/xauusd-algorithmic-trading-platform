@@ -46,6 +46,9 @@ def test_tracker_records_first_trigger_after_expiry() -> None:
                     "confirmed",
                 )
             return None, "M5_EVENT_NOT_FRESH", "stale"
+        
+        def _candidate_trade(self, *, setup, trigger):
+            return None
 
     strategy = StrategyStub()
     tracker.observe(strategy=strategy, context=_context(5))
