@@ -11,6 +11,11 @@ from datetime import UTC, datetime
 
 from core.data.models import MarketBar
 from core.multi_timeframe.models import MultiTimeframeResult
+from .post_expiry_trigger_tracker import (
+    PostExpiryTriggerRecord,
+    PostExpiryTriggerTracker,
+)
+
 from core.strategies import (
     StrategyContext,
     StrategyObservation,
@@ -28,6 +33,7 @@ class BacktestStrategyObserver:
         self.strategy = strategy or XAUUSDBOSCHOCHStrategy()
         self._last_timestamp: datetime | None = None
         self._last_bar_index: int | None = None
+        self._post_expiry_tracker = PostExpiryTriggerTracker(8)
 
     def reset(self) -> None:
         """Reset chronology and all owned strategy lifecycle state."""
@@ -35,6 +41,7 @@ class BacktestStrategyObserver:
         self.strategy.reset()
         self._last_timestamp = None
         self._last_bar_index = None
+        self._post_expiry_tracker.reset()
 
     def observe(
         self,
@@ -75,13 +82,24 @@ class BacktestStrategyObserver:
                 'strategy observation bar indexes must be strictly increasing'
             )
 
-        observation = self.strategy.observe(
-            StrategyContext(
-                multi_timeframe=multi_timeframe,
-                current_bar=current_bar,
-                current_bar_index=current_bar_index,
-            )
+        context = StrategyContext(
+            multi_timeframe=multi_timeframe,
+            current_bar=current_bar,
+            current_bar_index=current_bar_index,
         )
+        self._post_expiry_tracker.observe(
+            strategy=self.strategy,
+            context=context,
+        )
+        observation = self.strategy.observe(context)
+        if (
+            observation.reason_code == 'EXPIRED'
+            and observation.setup is not None
+        ):
+            self._post_expiry_tracker.register(
+                observation.setup,
+                expired_at=observation.timestamp,
+            )
         self._last_timestamp = timestamp
         self._last_bar_index = current_bar_index
         return observation
@@ -96,6 +114,12 @@ class BacktestStrategyObserver:
         """Return counts grouped by strategy reason code."""
 
         return self.strategy.state.observation_summary()
+
+    @property
+    def post_expiry_triggers(
+        self,
+    ) -> tuple[PostExpiryTriggerRecord, ...]:
+        return self._post_expiry_tracker.records
 
     @property
     def candidate_count(self) -> int:

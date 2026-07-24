@@ -229,6 +229,11 @@ class BacktestingEngine:
             backtest_result=backtest_result,
             pipeline_audits=self.observation_audits,
             strategy_observations=self.strategy_observations,
+            post_expiry_triggers=getattr(
+                self.strategy_observer,
+                'post_expiry_triggers',
+                (),
+            ),
         )
 
     def run_with_strategy_comparison(

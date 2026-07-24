@@ -9,6 +9,7 @@ from core.strategies import SetupDirection, StrategyObservation
 from core.trading_pipeline.models import PipelineObservationAudit
 
 from .models import BacktestResult
+from .post_expiry_trigger_tracker import PostExpiryTriggerRecord
 
 
 @dataclass(slots=True, frozen=True)
@@ -57,6 +58,7 @@ class BacktestStrategyComparison:
     strategy_reason_counts: tuple[tuple[str, int], ...]
     events: tuple[StrategyComparisonEvent, ...]
     setup_lifecycles: tuple[StrategySetupLifecycle, ...] = ()
+    post_expiry_triggers: tuple[PostExpiryTriggerRecord, ...] = ()
 
 
 class BacktestStrategyComparisonBuilder:
@@ -69,6 +71,7 @@ class BacktestStrategyComparisonBuilder:
         backtest_result: BacktestResult,
         pipeline_audits: tuple[PipelineObservationAudit, ...],
         strategy_observations: tuple[StrategyObservation, ...],
+        post_expiry_triggers: tuple[PostExpiryTriggerRecord, ...] = (),
     ) -> BacktestStrategyComparison:
         if not isinstance(backtest_result, BacktestResult):
             raise TypeError('backtest_result must be BacktestResult')
@@ -122,6 +125,7 @@ class BacktestStrategyComparisonBuilder:
             strategy_reason_counts=tuple(strategy_reason_counts.items()),
             events=events,
             setup_lifecycles=setup_lifecycles,
+            post_expiry_triggers=post_expiry_triggers,
         )
 
     @staticmethod

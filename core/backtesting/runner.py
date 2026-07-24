@@ -197,6 +197,13 @@ class BacktestRunner:
         self.exporter.export_strategy_setup_lifecycles(
             output.strategy_comparison
         )
+        export_post_expiry = getattr(
+            self.exporter,
+            'export_strategy_post_expiry_triggers',
+            None,
+        )
+        if callable(export_post_expiry):
+            export_post_expiry(output.strategy_comparison)
         has_candidate_outcome_research = bool(
             output.candidate_outcome_evaluations
             or output.candidate_outcome_summary

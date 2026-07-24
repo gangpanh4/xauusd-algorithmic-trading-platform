@@ -585,6 +585,40 @@ class BacktestExporter:
 
         return path
 
+    def export_strategy_post_expiry_triggers(
+        self,
+        comparison: BacktestStrategyComparison,
+    ) -> Path:
+        if not isinstance(comparison, BacktestStrategyComparison):
+            raise TypeError('comparison must be BacktestStrategyComparison')
+
+        path = self.output_directory / 'strategy_post_expiry_triggers.csv'
+        fieldnames = (
+            'Setup Number', 'Setup ID', 'Strategy ID', 'Direction',
+            'Expired At', 'Maximum Bars', 'Bars Observed',
+            'Trigger Found', 'First Trigger At', 'Bars After Expiry',
+            'Trigger Type', 'Window Complete',
+        )
+        with path.open('w', newline='', encoding='utf-8') as file:
+            writer = csv.DictWriter(file, fieldnames=list(fieldnames), extrasaction='raise')
+            writer.writeheader()
+            for index, record in enumerate(comparison.post_expiry_triggers, start=1):
+                writer.writerow({
+                    'Setup Number': index,
+                    'Setup ID': record.setup_id,
+                    'Strategy ID': record.strategy_id,
+                    'Direction': record.direction,
+                    'Expired At': record.expired_at.isoformat(),
+                    'Maximum Bars': record.maximum_bars,
+                    'Bars Observed': record.bars_observed,
+                    'Trigger Found': record.trigger_found,
+                    'First Trigger At': record.first_trigger_at.isoformat() if record.first_trigger_at else '',
+                    'Bars After Expiry': record.bars_after_expiry if record.bars_after_expiry is not None else '',
+                    'Trigger Type': record.trigger_type or '',
+                    'Window Complete': record.window_complete,
+                })
+        return path
+
     def export_equity_curve(
         self,
         result: BacktestResult,
