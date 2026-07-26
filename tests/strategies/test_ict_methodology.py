@@ -424,3 +424,36 @@ def test_module_does_not_import_runtime_authority_packages() -> None:
         imported.startswith(prohibited_prefixes)
         for imported in imported_modules
     )
+
+
+def test_known_off_session_fails_instead_of_becoming_unavailable() -> None:
+    result = ICTMethodologyEvaluator().evaluate(
+        _context(
+            price_location=PriceLocation.DISCOUNT,
+            displacement_present=True,
+            session_name=None,
+            missing_capabilities=(),
+        )
+    )
+
+    assert result.evaluation_status is MethodologyEvaluationStatus.NOT_CONFIRMED
+    assert "SESSION_CONTEXT_PRESENT" in _codes(result.failed_conditions)
+    assert "SESSION_CONTEXT_PRESENT" not in _codes(
+        result.unavailable_conditions
+    )
+
+
+def test_missing_session_capability_remains_unavailable() -> None:
+    result = ICTMethodologyEvaluator().evaluate(
+        _context(
+            price_location=PriceLocation.DISCOUNT,
+            displacement_present=True,
+            session_name=None,
+            missing_capabilities=("session_context",),
+        )
+    )
+
+    assert result.evaluation_status is MethodologyEvaluationStatus.INCOMPLETE
+    assert "SESSION_CONTEXT_PRESENT" in _codes(
+        result.unavailable_conditions
+    )

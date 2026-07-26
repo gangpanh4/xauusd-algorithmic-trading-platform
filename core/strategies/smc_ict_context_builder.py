@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, time
 from math import isfinite
 
 from core.fair_value_gap_detector.models import FairValueGap, FairValueGapCandidate
@@ -28,7 +28,6 @@ class SMCICTContextBuilder:
     """Assemble confirmed, chronology-safe facts without applying strategy rules."""
 
     _ALWAYS_UNAVAILABLE = (
-        "session_context",
         "market_regime",
     )
     _DEALING_RANGE_PRIORITY = (
@@ -108,6 +107,7 @@ class SMCICTContextBuilder:
             displacement_timeframe,
             displacement_atr_multiple,
         ) = self._displacement(event, event_timeframe)
+        session_name = self._session_name(observation_timestamp)
         missing_capabilities = self._missing_capabilities(
             price_location,
             displacement_present,
@@ -144,7 +144,7 @@ class SMCICTContextBuilder:
             displacement_direction=displacement_direction,
             displacement_timeframe=displacement_timeframe,
             displacement_atr_multiple=displacement_atr_multiple,
-            session_name=None,
+            session_name=session_name,
             regime_name=None,
             missing_capabilities=missing_capabilities,
         )
@@ -242,6 +242,23 @@ class SMCICTContextBuilder:
             )
 
         return None, None, None, None, PriceLocation.UNKNOWN
+
+
+    @staticmethod
+    def _session_name(timestamp: datetime) -> str | None:
+        """Classify a completed candle into deterministic UTC research sessions."""
+
+        utc_time = timestamp.astimezone(UTC).time().replace(tzinfo=None)
+
+        if time(0, 0) <= utc_time < time(8, 0):
+            return "Asia"
+        if time(8, 0) <= utc_time < time(13, 0):
+            return "London"
+        if time(13, 0) <= utc_time < time(16, 0):
+            return "London/New York Overlap"
+        if time(16, 0) <= utc_time < time(21, 0):
+            return "New York"
+        return None
 
     @classmethod
     def _missing_capabilities(

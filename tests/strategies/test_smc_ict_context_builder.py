@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -267,12 +267,11 @@ def test_builder_preserves_aligned_htf_bias_and_unknown_capabilities() -> None:
     assert result.current_price == 2401.0
     assert result.price_location is PriceLocation.UNKNOWN
     assert result.displacement_present is None
-    assert result.session_name is None
+    assert result.session_name == "London"
     assert result.regime_name is None
     assert result.missing_capabilities == (
         "dealing_range_price_location",
         "displacement_detection",
-        "session_context",
         "market_regime",
     )
 
@@ -1066,3 +1065,64 @@ def test_future_event_cannot_publish_displacement() -> None:
     assert result.displacement_present is None
     assert result.displacement_timeframe is None
     assert "displacement_detection" in result.missing_capabilities
+
+
+@pytest.mark.parametrize(
+    ("minutes", "expected"),
+    [
+        (-720, "Asia"),
+        (-240, "London"),
+        (60, "London/New York Overlap"),
+        (240, "New York"),
+        (600, None),
+    ],
+)
+def test_builder_classifies_deterministic_utc_session(
+    minutes: int,
+    expected: str | None,
+) -> None:
+    timestamp = NOW + timedelta(minutes=minutes)
+    context = _context()
+    context = replace(
+        context,
+        current_bar=MarketBar(
+            timestamp=timestamp,
+            open=2400.0,
+            high=2402.0,
+            low=2398.0,
+            close=2401.0,
+            tick_volume=1,
+        ),
+    )
+
+    result = SMCICTContextBuilder().build(context)
+
+    assert result.session_name == expected
+    assert "session_context" not in result.missing_capabilities
+
+
+def test_builder_normalizes_non_utc_timestamp_before_session_classification() -> None:
+    local_timestamp = datetime(
+        2026,
+        7,
+        24,
+        19,
+        0,
+        tzinfo=timezone(timedelta(hours=7)),
+    )
+    context = replace(
+        _context(),
+        current_bar=MarketBar(
+            timestamp=local_timestamp,
+            open=2400.0,
+            high=2402.0,
+            low=2398.0,
+            close=2401.0,
+            tick_volume=1,
+        ),
+    )
+
+    result = SMCICTContextBuilder().build(context)
+
+    assert result.session_name == "London"
+    assert "session_context" not in result.missing_capabilities

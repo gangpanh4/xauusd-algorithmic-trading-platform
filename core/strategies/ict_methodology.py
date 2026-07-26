@@ -340,11 +340,10 @@ class ICTMethodologyEvaluator:
             source_capability="session_context",
             evidence_reference="session_name",
         )
-        if (
-            "session_context" in context.missing_capabilities
-            or context.session_name is None
-        ):
+        if "session_context" in context.missing_capabilities:
             state = "unavailable"
+        elif context.session_name is None:
+            state = "failed"
         else:
             state = "satisfied"
         self._classify(
