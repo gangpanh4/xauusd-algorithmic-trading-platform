@@ -1,8 +1,8 @@
 """Backtest-safe adapter for observational strategy evaluation.
 
 This adapter consumes synchronized completed-bar multi-timeframe results and
-records strategy observations without opening trades or mutating the active
-trading pipeline.
+records strategy and methodology observations without opening trades or
+mutating the active trading pipeline.
 """
 
 from __future__ import annotations
@@ -13,6 +13,10 @@ from core.data.models import MarketBar
 from core.multi_timeframe.models import MultiTimeframeResult
 from core.regime_detector.models import MarketRegime
 
+from .methodology_observer import (
+    BacktestMethodologyObserver,
+    MethodologyObservation,
+)
 from .post_expiry_trigger_tracker import (
     PostExpiryTriggerRecord,
     PostExpiryTriggerTracker,
@@ -26,21 +30,27 @@ from core.strategies import (
 
 
 class BacktestStrategyObserver:
-    """Run the observational strategy on strictly ordered M5 closes."""
+    """Run observational strategy and methodology logic on ordered M5 closes."""
 
     def __init__(
         self,
         strategy: XAUUSDBOSCHOCHStrategy | None = None,
+        *,
+        methodology_observer: BacktestMethodologyObserver | None = None,
     ) -> None:
         self.strategy = strategy or XAUUSDBOSCHOCHStrategy()
+        self.methodology_observer = (
+            methodology_observer or BacktestMethodologyObserver()
+        )
         self._last_timestamp: datetime | None = None
         self._last_bar_index: int | None = None
         self._post_expiry_tracker = PostExpiryTriggerTracker(8)
 
     def reset(self) -> None:
-        """Reset chronology and all owned strategy lifecycle state."""
+        """Reset chronology and all owned observational lifecycle state."""
 
         self.strategy.reset()
+        self.methodology_observer.reset()
         self._last_timestamp = None
         self._last_bar_index = None
         self._post_expiry_tracker.reset()
@@ -58,6 +68,10 @@ class BacktestStrategyObserver:
         Duplicate or decreasing timestamps and bar indexes are rejected. When a
         regime is supplied, its observation timestamp must match this completed
         candle exactly; stale and future regime facts are rejected.
+
+        SMC and ICT methodology results are evaluated and stored as research-only
+        diagnostics. They are not passed to the baseline strategy and do not
+        authorize candidates, signals, risk, orders, or execution.
         """
 
         if not isinstance(multi_timeframe, MultiTimeframeResult):
@@ -111,6 +125,7 @@ class BacktestStrategyObserver:
             current_bar_index=current_bar_index,
             market_regime=market_regime,
         )
+        self.methodology_observer.observe(context)
         self._post_expiry_tracker.observe(
             strategy=self.strategy,
             context=context,
@@ -138,6 +153,19 @@ class BacktestStrategyObserver:
         """Return counts grouped by strategy reason code."""
 
         return self.strategy.state.observation_summary()
+
+    @property
+    def methodology_observations(
+        self,
+    ) -> tuple[MethodologyObservation, ...]:
+        """Return immutable SMC and ICT diagnostic history."""
+
+        return self.methodology_observer.observations
+
+    def methodology_summary(self) -> dict[str, int]:
+        """Return methodology counts without affecting strategy state."""
+
+        return self.methodology_observer.summary()
 
     @property
     def post_expiry_triggers(

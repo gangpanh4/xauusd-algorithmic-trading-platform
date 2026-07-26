@@ -213,3 +213,57 @@ def test_observer_reset_clears_history_and_chronology() -> None:
         current_bar_index=1,
     )
     assert observation.reason_code == "NO_SETUP"
+
+
+def test_observer_records_methodology_diagnostics_separately() -> None:
+    observer = BacktestStrategyObserver()
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+
+    strategy_observation = observer.observe(
+        multi_timeframe=_mtf(timestamp),
+        current_bar=_bar(timestamp),
+        current_bar_index=10,
+        market_regime=_regime(timestamp),
+    )
+
+    assert strategy_observation.reason_code == "NO_SETUP"
+    assert len(observer.observations) == 1
+    assert len(observer.methodology_observations) == 1
+    methodology = observer.methodology_observations[0]
+    assert methodology.timestamp == timestamp
+    assert methodology.context.regime_name == "TRENDING_BULL"
+    assert observer.methodology_summary() == {
+        "ICT:NOT_CONFIRMED": 1,
+        "SMC:NOT_CONFIRMED": 1,
+    }
+
+
+def test_methodology_results_do_not_change_candidate_count() -> None:
+    observer = BacktestStrategyObserver()
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+
+    observer.observe(
+        multi_timeframe=_mtf(timestamp),
+        current_bar=_bar(timestamp),
+        current_bar_index=10,
+        market_regime=_regime(timestamp),
+    )
+
+    assert observer.candidate_count == 0
+    assert observer.observations[0].candidate_trade is None
+    assert len(observer.methodology_observations) == 1
+
+
+def test_reset_clears_methodology_observations() -> None:
+    observer = BacktestStrategyObserver()
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    observer.observe(
+        multi_timeframe=_mtf(timestamp),
+        current_bar=_bar(timestamp),
+        current_bar_index=10,
+    )
+
+    observer.reset()
+
+    assert observer.methodology_observations == ()
+    assert observer.methodology_summary() == {}
