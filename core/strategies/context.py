@@ -7,6 +7,7 @@ from datetime import datetime
 
 from core.data.models import MarketBar
 from core.multi_timeframe.models import MultiTimeframeResult
+from core.regime_detector.models import MarketRegime
 
 from .models import CandidateTrade, EntryTrigger, TradingSetup
 
@@ -18,6 +19,7 @@ class StrategyContext:
     multi_timeframe: MultiTimeframeResult
     current_bar: MarketBar
     current_bar_index: int
+    market_regime: MarketRegime | None = None
 
 
 @dataclass(slots=True, frozen=True)

@@ -60,6 +60,8 @@ class SMCICTContext:
     displacement_atr_multiple: float | None = None
     session_name: str | None = None
     regime_name: str | None = None
+    regime_confidence: float | None = None
+    regime_observation_timestamp: datetime | None = None
     missing_capabilities: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -158,6 +160,7 @@ class SMCICTContext:
                 not isinstance(value, str) or not value.strip()
             ):
                 raise ValueError(f"{name} must be a non-empty string or None")
+        self._validate_regime()
 
         if not isinstance(self.missing_capabilities, tuple):
             raise TypeError("missing_capabilities must be a tuple")
@@ -172,6 +175,58 @@ class SMCICTContext:
             raise ValueError("missing_capabilities cannot contain duplicates")
 
 
+
+
+    def _validate_regime(self) -> None:
+        if self.regime_confidence is not None:
+            if isinstance(self.regime_confidence, bool) or not isinstance(
+                self.regime_confidence,
+                (int, float),
+            ):
+                raise TypeError("regime_confidence must be numeric or None")
+            confidence = float(self.regime_confidence)
+            if not isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+                raise ValueError(
+                    "regime_confidence must be finite and between 0.0 and 1.0"
+                )
+
+        if self.regime_observation_timestamp is not None:
+            if not isinstance(self.regime_observation_timestamp, datetime):
+                raise TypeError(
+                    "regime_observation_timestamp must be datetime or None"
+                )
+            if (
+                self.regime_observation_timestamp.tzinfo is None
+                or self.regime_observation_timestamp.utcoffset() is None
+            ):
+                raise ValueError(
+                    "regime_observation_timestamp must be timezone-aware"
+                )
+            if self.regime_observation_timestamp > self.timestamp:
+                raise ValueError(
+                    "regime_observation_timestamp cannot be after context timestamp"
+                )
+
+        provenance = (
+            self.regime_confidence,
+            self.regime_observation_timestamp,
+        )
+        if self.regime_name is None:
+            if any(value is not None for value in provenance):
+                raise ValueError(
+                    "regime provenance must be absent when regime_name is None"
+                )
+            return
+
+        # Preserve compatibility with existing direct methodology-test contexts,
+        # which may supply only regime_name. Builder-derived regime facts include
+        # both confidence and the exact observation timestamp.
+        if any(value is not None for value in provenance) and not all(
+            value is not None for value in provenance
+        ):
+            raise ValueError(
+                "builder-derived regime provenance must be complete"
+            )
 
     def _validate_displacement(self) -> None:
         if self.displacement_present is not None and not isinstance(

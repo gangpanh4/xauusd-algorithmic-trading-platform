@@ -27,6 +27,7 @@ from core.multi_timeframe.enums import MarketBias, Timeframe
 from core.multi_timeframe.models import MultiTimeframeResult, TimeframeState
 from core.order_block_detector.models import OrderBlock
 from core.price_action.models import PriceActionResult
+from core.regime_detector.models import MarketRegime, RegimeLabel
 from core.strategies.context import StrategyContext
 from core.strategies.smc_ict_context import PriceLocation
 from core.strategies.smc_ict_context_builder import SMCICTContextBuilder
@@ -1126,3 +1127,76 @@ def test_builder_normalizes_non_utc_timestamp_before_session_classification() ->
 
     assert result.session_name == "London"
     assert "session_context" not in result.missing_capabilities
+
+
+def test_builder_publishes_same_candle_confirmed_market_regime() -> None:
+    regime = MarketRegime(
+        primary_regime=RegimeLabel.TRENDING_BULL,
+        confidence=0.82,
+        observation_timestamp=NOW,
+        computation_timestamp=NOW,
+    )
+    result = SMCICTContextBuilder().build(
+        replace(_context(), market_regime=regime)
+    )
+
+    assert result.regime_name == "TRENDING_BULL"
+    assert result.regime_confidence == 0.82
+    assert result.regime_observation_timestamp == NOW
+    assert "market_regime" not in result.missing_capabilities
+
+
+def test_builder_rejects_stale_market_regime() -> None:
+    regime = MarketRegime(
+        primary_regime=RegimeLabel.RANGING,
+        confidence=0.70,
+        observation_timestamp=NOW - timedelta(minutes=5),
+        computation_timestamp=NOW,
+    )
+    result = SMCICTContextBuilder().build(
+        replace(_context(), market_regime=regime)
+    )
+
+    assert result.regime_name is None
+    assert result.regime_confidence is None
+    assert result.regime_observation_timestamp is None
+    assert "market_regime" in result.missing_capabilities
+
+
+def test_builder_rejects_future_market_regime() -> None:
+    regime = MarketRegime(
+        primary_regime=RegimeLabel.TRENDING_BEAR,
+        confidence=0.75,
+        observation_timestamp=NOW + timedelta(minutes=5),
+        computation_timestamp=NOW,
+    )
+    result = SMCICTContextBuilder().build(
+        replace(_context(), market_regime=regime)
+    )
+
+    assert result.regime_name is None
+    assert "market_regime" in result.missing_capabilities
+
+
+def test_builder_rejects_unknown_market_regime() -> None:
+    regime = MarketRegime(
+        primary_regime=RegimeLabel.UNKNOWN,
+        confidence=0.0,
+        observation_timestamp=NOW,
+        computation_timestamp=NOW,
+    )
+    result = SMCICTContextBuilder().build(
+        replace(_context(), market_regime=regime)
+    )
+
+    assert result.regime_name is None
+    assert "market_regime" in result.missing_capabilities
+
+
+def test_builder_keeps_regime_missing_when_strategy_context_has_none() -> None:
+    result = SMCICTContextBuilder().build(_context())
+
+    assert result.regime_name is None
+    assert result.regime_confidence is None
+    assert result.regime_observation_timestamp is None
+    assert "market_regime" in result.missing_capabilities

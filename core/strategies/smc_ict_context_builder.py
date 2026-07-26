@@ -19,6 +19,7 @@ from core.multi_timeframe.enums import MarketBias, Timeframe
 from core.multi_timeframe.models import TimeframeState
 from core.order_block_detector.models import OrderBlock
 from core.price_action.models import PriceActionResult
+from core.regime_detector.models import MarketRegime, RegimeLabel
 
 from .context import StrategyContext
 from .smc_ict_context import PriceLocation, SMCICTContext
@@ -27,9 +28,7 @@ from .smc_ict_context import PriceLocation, SMCICTContext
 class SMCICTContextBuilder:
     """Assemble confirmed, chronology-safe facts without applying strategy rules."""
 
-    _ALWAYS_UNAVAILABLE = (
-        "market_regime",
-    )
+    _ALWAYS_UNAVAILABLE: tuple[str, ...] = ()
     _DEALING_RANGE_PRIORITY = (
         Timeframe.H1,
         Timeframe.H4,
@@ -108,9 +107,18 @@ class SMCICTContextBuilder:
             displacement_atr_multiple,
         ) = self._displacement(event, event_timeframe)
         session_name = self._session_name(observation_timestamp)
+        (
+            regime_name,
+            regime_confidence,
+            regime_observation_timestamp,
+        ) = self._market_regime(
+            context.market_regime,
+            observation_timestamp=observation_timestamp,
+        )
         missing_capabilities = self._missing_capabilities(
             price_location,
             displacement_present,
+            regime_name,
         )
 
         return SMCICTContext(
@@ -145,7 +153,9 @@ class SMCICTContextBuilder:
             displacement_timeframe=displacement_timeframe,
             displacement_atr_multiple=displacement_atr_multiple,
             session_name=session_name,
-            regime_name=None,
+            regime_name=regime_name,
+            regime_confidence=regime_confidence,
+            regime_observation_timestamp=regime_observation_timestamp,
             missing_capabilities=missing_capabilities,
         )
 
@@ -244,6 +254,52 @@ class SMCICTContextBuilder:
         return None, None, None, None, PriceLocation.UNKNOWN
 
 
+
+    @staticmethod
+    def _market_regime(
+        regime: MarketRegime | None,
+        *,
+        observation_timestamp: datetime,
+    ) -> tuple[str | None, float | None, datetime | None]:
+        if not isinstance(regime, MarketRegime):
+            return None, None, None
+
+        regime_timestamp = regime.observation_timestamp
+        if (
+            not isinstance(regime_timestamp, datetime)
+            or regime_timestamp.tzinfo is None
+            or regime_timestamp.utcoffset() is None
+        ):
+            return None, None, None
+
+        normalized_regime_timestamp = regime_timestamp.astimezone(UTC)
+        normalized_observation = observation_timestamp.astimezone(UTC)
+        if normalized_regime_timestamp != normalized_observation:
+            return None, None, None
+
+        label = regime.primary_regime
+        if not isinstance(label, RegimeLabel) or label is RegimeLabel.UNKNOWN:
+            return None, None, None
+
+        confidence = regime.confidence
+        if isinstance(confidence, bool) or not isinstance(
+            confidence,
+            (int, float),
+        ):
+            return None, None, None
+        normalized_confidence = float(confidence)
+        if (
+            not isfinite(normalized_confidence)
+            or not 0.0 <= normalized_confidence <= 1.0
+        ):
+            return None, None, None
+
+        return (
+            label.value,
+            normalized_confidence,
+            normalized_regime_timestamp,
+        )
+
     @staticmethod
     def _session_name(timestamp: datetime) -> str | None:
         """Classify a completed candle into deterministic UTC research sessions."""
@@ -265,8 +321,11 @@ class SMCICTContextBuilder:
         cls,
         price_location: PriceLocation,
         displacement_present: bool | None,
+        regime_name: str | None,
     ) -> tuple[str, ...]:
         missing = list(cls._ALWAYS_UNAVAILABLE)
+        if regime_name is None:
+            missing.insert(0, "market_regime")
         if displacement_present is None:
             missing.insert(0, "displacement_detection")
         if price_location is PriceLocation.UNKNOWN:
