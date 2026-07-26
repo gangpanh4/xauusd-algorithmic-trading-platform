@@ -26,11 +26,16 @@ from .smc_ict_context import PriceLocation, SMCICTContext
 class SMCICTContextBuilder:
     """Assemble confirmed, chronology-safe facts without applying strategy rules."""
 
-    _UNAVAILABLE = (
-        "dealing_range_price_location",
+    _ALWAYS_UNAVAILABLE = (
         "displacement_detection",
         "session_context",
         "market_regime",
+    )
+    _DEALING_RANGE_PRIORITY = (
+        Timeframe.H1,
+        Timeframe.H4,
+        Timeframe.M15,
+        Timeframe.M5,
     )
     _STRUCTURE_PRIORITY = (
         Timeframe.M5,
@@ -86,6 +91,18 @@ class SMCICTContextBuilder:
             structures=structures,
             observation_timestamp=observation_timestamp,
         )
+        (
+            dealing_range_high,
+            dealing_range_low,
+            dealing_range_equilibrium,
+            dealing_range_timeframe,
+            price_location,
+        ) = self._dealing_range_price_location(
+            structures,
+            current_price=float(context.current_bar.close),
+            observation_timestamp=observation_timestamp,
+        )
+        missing_capabilities = self._missing_capabilities(price_location)
 
         return SMCICTContext(
             timestamp=observation_timestamp,
@@ -109,11 +126,15 @@ class SMCICTContextBuilder:
             opposing_liquidity_timeframe=target_timeframe,
             active_fair_value_gap_timeframe=fair_value_gap_timeframe,
             active_order_block_timeframe=order_block_timeframe,
-            price_location=PriceLocation.UNKNOWN,
+            dealing_range_high=dealing_range_high,
+            dealing_range_low=dealing_range_low,
+            dealing_range_equilibrium=dealing_range_equilibrium,
+            dealing_range_timeframe=dealing_range_timeframe,
+            price_location=price_location,
             displacement_present=None,
             session_name=None,
             regime_name=None,
-            missing_capabilities=self._UNAVAILABLE,
+            missing_capabilities=missing_capabilities,
         )
 
     @classmethod
@@ -154,6 +175,71 @@ class SMCICTContextBuilder:
             if h4 is h1 and h4 is not MarketBias.NEUTRAL
             else MarketBias.NEUTRAL
         )
+
+
+    @classmethod
+    def _dealing_range_price_location(
+        cls,
+        structures: dict[Timeframe, StructureState | None],
+        *,
+        current_price: float,
+        observation_timestamp: datetime,
+    ) -> tuple[
+        float | None,
+        float | None,
+        float | None,
+        Timeframe | None,
+        PriceLocation,
+    ]:
+        for timeframe in cls._DEALING_RANGE_PRIORITY:
+            structure = structures[timeframe]
+            if structure is None:
+                continue
+
+            high = structure.last_high
+            low = structure.last_low
+            if not cls._swing_is_known(
+                high,
+                structure=structure,
+                observation_timestamp=observation_timestamp,
+            ):
+                continue
+            if not cls._swing_is_known(
+                low,
+                structure=structure,
+                observation_timestamp=observation_timestamp,
+            ):
+                continue
+            if high.price <= low.price:
+                continue
+
+            equilibrium = (float(high.price) + float(low.price)) / 2.0
+            if current_price > equilibrium:
+                location = PriceLocation.PREMIUM
+            elif current_price < equilibrium:
+                location = PriceLocation.DISCOUNT
+            else:
+                location = PriceLocation.EQUILIBRIUM
+
+            return (
+                float(high.price),
+                float(low.price),
+                equilibrium,
+                timeframe,
+                location,
+            )
+
+        return None, None, None, None, PriceLocation.UNKNOWN
+
+    @classmethod
+    def _missing_capabilities(
+        cls,
+        price_location: PriceLocation,
+    ) -> tuple[str, ...]:
+        missing = list(cls._ALWAYS_UNAVAILABLE)
+        if price_location is PriceLocation.UNKNOWN:
+            missing.insert(0, "dealing_range_price_location")
+        return tuple(missing)
 
     @classmethod
     def _latest_event(

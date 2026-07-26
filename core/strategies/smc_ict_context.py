@@ -48,6 +48,10 @@ class SMCICTContext:
     opposing_liquidity_timeframe: Timeframe | None = None
     active_fair_value_gap_timeframe: Timeframe | None = None
     active_order_block_timeframe: Timeframe | None = None
+    dealing_range_high: float | None = None
+    dealing_range_low: float | None = None
+    dealing_range_equilibrium: float | None = None
+    dealing_range_timeframe: Timeframe | None = None
     price_location: PriceLocation = PriceLocation.UNKNOWN
     displacement_present: bool | None = None
     session_name: str | None = None
@@ -135,6 +139,7 @@ class SMCICTContext:
             self.active_order_block,
             self.active_order_block_timeframe,
         )
+        self._validate_dealing_range()
 
         if self.displacement_present is not None and not isinstance(
             self.displacement_present, bool
@@ -161,6 +166,53 @@ class SMCICTContext:
             )
         if len(self.missing_capabilities) != len(set(self.missing_capabilities)):
             raise ValueError("missing_capabilities cannot contain duplicates")
+
+
+    def _validate_dealing_range(self) -> None:
+        values = (
+            self.dealing_range_high,
+            self.dealing_range_low,
+            self.dealing_range_equilibrium,
+        )
+        supplied = tuple(value is not None for value in values)
+
+        if any(supplied) and not all(supplied):
+            raise ValueError(
+                "dealing-range prices must either all be present or all be None"
+            )
+        if not any(supplied):
+            if self.dealing_range_timeframe is not None:
+                raise ValueError(
+                    "dealing_range_timeframe must be None when the range is absent"
+                )
+            # Preserve the existing public contract: callers may provide a known
+            # price-location classification without dealing-range provenance.
+            # The builder added in this milestone supplies range provenance when
+            # it performs the classification itself.
+            return
+
+        if not isinstance(self.dealing_range_timeframe, Timeframe):
+            raise TypeError(
+                "dealing_range_timeframe must be Timeframe when the range is present"
+            )
+
+        high, low, equilibrium = (float(value) for value in values)
+        if not all(isfinite(value) for value in (high, low, equilibrium)):
+            raise ValueError("dealing-range prices must be finite")
+        if low <= 0 or high <= 0 or equilibrium <= 0:
+            raise ValueError("dealing-range prices must be positive")
+        if high <= low:
+            raise ValueError("dealing_range_high must be greater than dealing_range_low")
+
+        expected_equilibrium = (high + low) / 2.0
+        if equilibrium != expected_equilibrium:
+            raise ValueError(
+                "dealing_range_equilibrium must equal the range midpoint"
+            )
+        if self.price_location is PriceLocation.UNKNOWN:
+            raise ValueError(
+                "price_location cannot be UNKNOWN when the dealing range is present"
+            )
 
     @staticmethod
     def _validate_optional_type(

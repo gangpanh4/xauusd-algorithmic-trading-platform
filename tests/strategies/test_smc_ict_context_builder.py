@@ -654,3 +654,274 @@ def test_provenance_is_none_when_fact_is_absent() -> None:
     assert result.opposing_liquidity_timeframe is None
     assert result.active_fair_value_gap_timeframe is None
     assert result.active_order_block_timeframe is None
+
+
+def test_builder_classifies_discount_from_confirmed_h1_dealing_range() -> None:
+    high = _swing(
+        minutes=-20,
+        index=5,
+        confirmation_index=8,
+        price=2420.0,
+        swing_type=SwingType.HIGH,
+    )
+    low = _swing(
+        minutes=-30,
+        index=3,
+        confirmation_index=7,
+        price=2380.0,
+        swing_type=SwingType.LOW,
+    )
+    structure = replace(
+        _structure(current_bar_index=20),
+        last_high=high,
+        last_low=low,
+    )
+    context = _context(
+        h1_state=_state(
+            Timeframe.H1,
+            MarketBias.BULLISH,
+            structure=structure,
+        )
+    )
+    context = replace(
+        context,
+        current_bar=MarketBar(
+            timestamp=NOW,
+            open=2389.0,
+            high=2392.0,
+            low=2388.0,
+            close=2390.0,
+            tick_volume=1,
+        ),
+    )
+
+    result = SMCICTContextBuilder().build(context)
+
+    assert result.dealing_range_high == 2420.0
+    assert result.dealing_range_low == 2380.0
+    assert result.dealing_range_equilibrium == 2400.0
+    assert result.dealing_range_timeframe is Timeframe.H1
+    assert result.price_location is PriceLocation.DISCOUNT
+    assert "dealing_range_price_location" not in result.missing_capabilities
+
+
+def test_builder_classifies_premium_from_confirmed_range() -> None:
+    high = _swing(
+        minutes=-20,
+        index=5,
+        confirmation_index=8,
+        price=2420.0,
+        swing_type=SwingType.HIGH,
+    )
+    low = _swing(
+        minutes=-30,
+        index=3,
+        confirmation_index=7,
+        price=2380.0,
+        swing_type=SwingType.LOW,
+    )
+    structure = replace(
+        _structure(current_bar_index=20),
+        last_high=high,
+        last_low=low,
+    )
+    context = _context(
+        h1_state=_state(
+            Timeframe.H1,
+            MarketBias.BULLISH,
+            structure=structure,
+        )
+    )
+    context = replace(
+        context,
+        current_bar=MarketBar(
+            timestamp=NOW,
+            open=2410.0,
+            high=2412.0,
+            low=2408.0,
+            close=2410.0,
+            tick_volume=1,
+        ),
+    )
+
+    result = SMCICTContextBuilder().build(context)
+
+    assert result.price_location is PriceLocation.PREMIUM
+    assert result.dealing_range_timeframe is Timeframe.H1
+
+
+def test_builder_classifies_exact_midpoint_as_equilibrium() -> None:
+    high = _swing(
+        minutes=-20,
+        index=5,
+        confirmation_index=8,
+        price=2420.0,
+        swing_type=SwingType.HIGH,
+    )
+    low = _swing(
+        minutes=-30,
+        index=3,
+        confirmation_index=7,
+        price=2380.0,
+        swing_type=SwingType.LOW,
+    )
+    structure = replace(
+        _structure(current_bar_index=20),
+        last_high=high,
+        last_low=low,
+    )
+    result = SMCICTContextBuilder().build(
+        _context(
+            h1_state=_state(
+                Timeframe.H1,
+                MarketBias.BULLISH,
+                structure=structure,
+            )
+        )
+    )
+
+    assert result.current_price == 2401.0
+    assert result.price_location is PriceLocation.PREMIUM
+
+    midpoint_context = _context(
+        h1_state=_state(
+            Timeframe.H1,
+            MarketBias.BULLISH,
+            structure=structure,
+        )
+    )
+    midpoint_context = replace(
+        midpoint_context,
+        current_bar=MarketBar(
+            timestamp=NOW,
+            open=2400.0,
+            high=2401.0,
+            low=2399.0,
+            close=2400.0,
+            tick_volume=1,
+        ),
+    )
+    midpoint_result = SMCICTContextBuilder().build(midpoint_context)
+    assert midpoint_result.price_location is PriceLocation.EQUILIBRIUM
+
+
+def test_builder_uses_h1_before_h4_for_dealing_range() -> None:
+    h1 = replace(
+        _structure(current_bar_index=20),
+        last_high=_swing(
+            minutes=-20,
+            index=5,
+            confirmation_index=8,
+            price=2420.0,
+            swing_type=SwingType.HIGH,
+        ),
+        last_low=_swing(
+            minutes=-30,
+            index=3,
+            confirmation_index=7,
+            price=2380.0,
+            swing_type=SwingType.LOW,
+        ),
+    )
+    h4 = replace(
+        _structure(current_bar_index=20),
+        last_high=_swing(
+            minutes=-40,
+            index=5,
+            confirmation_index=8,
+            price=2500.0,
+            swing_type=SwingType.HIGH,
+        ),
+        last_low=_swing(
+            minutes=-50,
+            index=3,
+            confirmation_index=7,
+            price=2300.0,
+            swing_type=SwingType.LOW,
+        ),
+    )
+
+    result = SMCICTContextBuilder().build(
+        _context(
+            h1_state=_state(Timeframe.H1, MarketBias.BULLISH, structure=h1),
+            h4_state=_state(Timeframe.H4, MarketBias.BULLISH, structure=h4),
+        )
+    )
+
+    assert result.dealing_range_timeframe is Timeframe.H1
+    assert result.dealing_range_high == 2420.0
+    assert result.dealing_range_low == 2380.0
+
+
+def test_builder_rejects_future_or_unconfirmed_dealing_range_swings() -> None:
+    future_high = _swing(
+        minutes=5,
+        index=5,
+        confirmation_index=8,
+        price=2420.0,
+        swing_type=SwingType.HIGH,
+    )
+    unconfirmed_low = _swing(
+        minutes=-30,
+        index=3,
+        confirmation_index=21,
+        price=2380.0,
+        swing_type=SwingType.LOW,
+    )
+    structure = replace(
+        _structure(current_bar_index=20),
+        last_high=future_high,
+        last_low=unconfirmed_low,
+    )
+
+    result = SMCICTContextBuilder().build(
+        _context(
+            h1_state=_state(
+                Timeframe.H1,
+                MarketBias.BULLISH,
+                structure=structure,
+            )
+        )
+    )
+
+    assert result.price_location is PriceLocation.UNKNOWN
+    assert result.dealing_range_high is None
+    assert result.dealing_range_low is None
+    assert result.dealing_range_equilibrium is None
+    assert result.dealing_range_timeframe is None
+    assert "dealing_range_price_location" in result.missing_capabilities
+
+
+def test_builder_rejects_invalid_dealing_range_geometry() -> None:
+    high = _swing(
+        minutes=-20,
+        index=5,
+        confirmation_index=8,
+        price=2380.0,
+        swing_type=SwingType.HIGH,
+    )
+    low = _swing(
+        minutes=-30,
+        index=3,
+        confirmation_index=7,
+        price=2420.0,
+        swing_type=SwingType.LOW,
+    )
+    structure = replace(
+        _structure(current_bar_index=20),
+        last_high=high,
+        last_low=low,
+    )
+
+    result = SMCICTContextBuilder().build(
+        _context(
+            h1_state=_state(
+                Timeframe.H1,
+                MarketBias.BULLISH,
+                structure=structure,
+            )
+        )
+    )
+
+    assert result.price_location is PriceLocation.UNKNOWN
+    assert "dealing_range_price_location" in result.missing_capabilities
