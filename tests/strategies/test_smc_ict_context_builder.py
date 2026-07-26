@@ -925,3 +925,144 @@ def test_builder_rejects_invalid_dealing_range_geometry() -> None:
 
     assert result.price_location is PriceLocation.UNKNOWN
     assert "dealing_range_price_location" in result.missing_capabilities
+
+
+def test_builder_detects_displacement_from_atr_normalized_structure_break() -> None:
+    event = replace(
+        _event(
+            minutes=-5,
+            confirmation_index=10,
+            direction=TrendDirection.BULLISH,
+        ),
+        break_atr_multiple=1.25,
+    )
+    result = SMCICTContextBuilder().build(
+        _context(
+            m15_state=_state(
+                Timeframe.M15,
+                MarketBias.BULLISH,
+                structure=_structure(bos=event, current_bar_index=20),
+            )
+        )
+    )
+
+    assert result.displacement_present is True
+    assert result.displacement_direction is TrendDirection.BULLISH
+    assert result.displacement_timeframe is Timeframe.M15
+    assert result.displacement_atr_multiple == 1.25
+    assert "displacement_detection" not in result.missing_capabilities
+
+
+def test_builder_reports_known_absence_below_displacement_threshold() -> None:
+    event = replace(
+        _event(
+            minutes=-5,
+            confirmation_index=10,
+            direction=TrendDirection.BEARISH,
+        ),
+        break_atr_multiple=0.75,
+    )
+    result = SMCICTContextBuilder().build(
+        _context(
+            h1_state=_state(
+                Timeframe.H1,
+                MarketBias.BEARISH,
+                structure=_structure(bos=event, current_bar_index=20),
+            )
+        )
+    )
+
+    assert result.displacement_present is False
+    assert result.displacement_direction is TrendDirection.BEARISH
+    assert result.displacement_timeframe is Timeframe.H1
+    assert result.displacement_atr_multiple == 0.75
+    assert "displacement_detection" not in result.missing_capabilities
+
+
+def test_builder_keeps_displacement_unavailable_without_atr_measurement() -> None:
+    event = _event(
+        minutes=-5,
+        confirmation_index=10,
+        direction=TrendDirection.BULLISH,
+    )
+    assert event.break_atr_multiple == 0.0
+
+    result = SMCICTContextBuilder().build(
+        _context(
+            m15_state=_state(
+                Timeframe.M15,
+                MarketBias.BULLISH,
+                structure=_structure(bos=event, current_bar_index=20),
+            )
+        )
+    )
+
+    assert result.displacement_present is None
+    assert result.displacement_direction is None
+    assert result.displacement_timeframe is None
+    assert result.displacement_atr_multiple is None
+    assert "displacement_detection" in result.missing_capabilities
+
+
+def test_builder_uses_same_chronology_safe_event_for_displacement() -> None:
+    older_m5 = replace(
+        _event(
+            minutes=-20,
+            confirmation_index=500,
+            direction=TrendDirection.BULLISH,
+        ),
+        break_atr_multiple=2.0,
+    )
+    newer_h4 = replace(
+        _event(
+            minutes=-5,
+            confirmation_index=10,
+            direction=TrendDirection.BEARISH,
+        ),
+        break_atr_multiple=0.5,
+    )
+    result = SMCICTContextBuilder().build(
+        _context(
+            m5_state=_state(
+                Timeframe.M5,
+                MarketBias.BULLISH,
+                structure=_structure(bos=older_m5, current_bar_index=500),
+            ),
+            h4_state=_state(
+                Timeframe.H4,
+                MarketBias.BEARISH,
+                structure=_structure(bos=newer_h4, current_bar_index=10),
+            ),
+        )
+    )
+
+    assert result.latest_structure_event is newer_h4
+    assert result.displacement_present is False
+    assert result.displacement_direction is TrendDirection.BEARISH
+    assert result.displacement_timeframe is Timeframe.H4
+    assert result.displacement_atr_multiple == 0.5
+
+
+def test_future_event_cannot_publish_displacement() -> None:
+    future = replace(
+        _event(
+            minutes=5,
+            confirmation_index=10,
+            direction=TrendDirection.BULLISH,
+        ),
+        break_atr_multiple=2.0,
+    )
+    result = SMCICTContextBuilder().build(
+        _context(
+            m5_state=_state(
+                Timeframe.M5,
+                MarketBias.BULLISH,
+                structure=_structure(bos=future, current_bar_index=20),
+            )
+        )
+    )
+
+    assert result.latest_structure_event is None
+    assert result.displacement_present is None
+    assert result.displacement_timeframe is None
+    assert "displacement_detection" in result.missing_capabilities

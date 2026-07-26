@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from math import isfinite
 
 from core.fair_value_gap_detector.models import FairValueGap, FairValueGapCandidate
 from core.market_structure.enums import TrendDirection
@@ -27,7 +28,6 @@ class SMCICTContextBuilder:
     """Assemble confirmed, chronology-safe facts without applying strategy rules."""
 
     _ALWAYS_UNAVAILABLE = (
-        "displacement_detection",
         "session_context",
         "market_regime",
     )
@@ -102,7 +102,16 @@ class SMCICTContextBuilder:
             current_price=float(context.current_bar.close),
             observation_timestamp=observation_timestamp,
         )
-        missing_capabilities = self._missing_capabilities(price_location)
+        (
+            displacement_present,
+            displacement_direction,
+            displacement_timeframe,
+            displacement_atr_multiple,
+        ) = self._displacement(event, event_timeframe)
+        missing_capabilities = self._missing_capabilities(
+            price_location,
+            displacement_present,
+        )
 
         return SMCICTContext(
             timestamp=observation_timestamp,
@@ -131,7 +140,10 @@ class SMCICTContextBuilder:
             dealing_range_equilibrium=dealing_range_equilibrium,
             dealing_range_timeframe=dealing_range_timeframe,
             price_location=price_location,
-            displacement_present=None,
+            displacement_present=displacement_present,
+            displacement_direction=displacement_direction,
+            displacement_timeframe=displacement_timeframe,
+            displacement_atr_multiple=displacement_atr_multiple,
             session_name=None,
             regime_name=None,
             missing_capabilities=missing_capabilities,
@@ -235,11 +247,38 @@ class SMCICTContextBuilder:
     def _missing_capabilities(
         cls,
         price_location: PriceLocation,
+        displacement_present: bool | None,
     ) -> tuple[str, ...]:
         missing = list(cls._ALWAYS_UNAVAILABLE)
+        if displacement_present is None:
+            missing.insert(0, "displacement_detection")
         if price_location is PriceLocation.UNKNOWN:
             missing.insert(0, "dealing_range_price_location")
         return tuple(missing)
+
+    @staticmethod
+    def _displacement(
+        event: BOSEvent | CHOCHEvent | None,
+        timeframe: Timeframe | None,
+    ) -> tuple[
+        bool | None,
+        TrendDirection | None,
+        Timeframe | None,
+        float | None,
+    ]:
+        if event is None or timeframe is None:
+            return None, None, None, None
+
+        atr_multiple = float(event.break_atr_multiple)
+        if not isfinite(atr_multiple) or atr_multiple <= 0.0:
+            return None, None, None, None
+
+        return (
+            atr_multiple >= 1.0,
+            event.direction,
+            timeframe,
+            atr_multiple,
+        )
 
     @classmethod
     def _latest_event(

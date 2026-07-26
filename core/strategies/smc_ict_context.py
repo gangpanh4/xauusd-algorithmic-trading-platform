@@ -8,6 +8,7 @@ from enum import Enum
 from math import isfinite
 
 from core.fair_value_gap_detector.models import FairValueGap, FairValueGapCandidate
+from core.market_structure.enums import TrendDirection
 from core.market_structure.models import (
     BOSEvent,
     CHOCHEvent,
@@ -54,6 +55,9 @@ class SMCICTContext:
     dealing_range_timeframe: Timeframe | None = None
     price_location: PriceLocation = PriceLocation.UNKNOWN
     displacement_present: bool | None = None
+    displacement_direction: TrendDirection | None = None
+    displacement_timeframe: Timeframe | None = None
+    displacement_atr_multiple: float | None = None
     session_name: str | None = None
     regime_name: str | None = None
     missing_capabilities: tuple[str, ...] = ()
@@ -167,6 +171,64 @@ class SMCICTContext:
         if len(self.missing_capabilities) != len(set(self.missing_capabilities)):
             raise ValueError("missing_capabilities cannot contain duplicates")
 
+
+
+    def _validate_displacement(self) -> None:
+        if self.displacement_present is not None and not isinstance(
+            self.displacement_present,
+            bool,
+        ):
+            raise TypeError("displacement_present must be a boolean or None")
+
+        if (
+            self.displacement_direction is not None
+            and not isinstance(self.displacement_direction, TrendDirection)
+        ):
+            raise TypeError(
+                "displacement_direction must be TrendDirection or None"
+            )
+        if (
+            self.displacement_timeframe is not None
+            and not isinstance(self.displacement_timeframe, Timeframe)
+        ):
+            raise TypeError(
+                "displacement_timeframe must be Timeframe or None"
+            )
+        if self.displacement_atr_multiple is not None:
+            if isinstance(self.displacement_atr_multiple, bool) or not isinstance(
+                self.displacement_atr_multiple,
+                (int, float),
+            ):
+                raise TypeError(
+                    "displacement_atr_multiple must be numeric or None"
+                )
+            value = float(self.displacement_atr_multiple)
+            if not isfinite(value) or value <= 0.0:
+                raise ValueError(
+                    "displacement_atr_multiple must be finite and positive"
+                )
+
+        provenance = (
+            self.displacement_direction,
+            self.displacement_timeframe,
+            self.displacement_atr_multiple,
+        )
+        if self.displacement_present is None:
+            if any(value is not None for value in provenance):
+                raise ValueError(
+                    "displacement provenance must be absent when "
+                    "displacement_present is None"
+                )
+            return
+
+        # Preserve the existing public contract: callers may provide only the
+        # boolean result. Builder-derived results include all provenance fields.
+        if any(value is not None for value in provenance) and not all(
+            value is not None for value in provenance
+        ):
+            raise ValueError(
+                "builder-derived displacement provenance must be complete"
+            )
 
     def _validate_dealing_range(self) -> None:
         values = (
