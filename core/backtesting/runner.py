@@ -14,6 +14,7 @@ from .candidate_outcome_segmentation import (
 from .config import BacktestConfig
 from .engine import BacktestingEngine
 from .exporter import BacktestExporter
+from .methodology_condition_analytics import MethodologyConditionAnalytics
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -53,6 +54,10 @@ class BacktestRunner:
         )
 
         self.methodology_exporter = MethodologyDiagnosticsExporter(
+            config.output_directory,
+        )
+
+        self.methodology_condition_analytics = MethodologyConditionAnalytics(
             config.output_directory,
         )
 
@@ -204,6 +209,9 @@ class BacktestRunner:
         self.methodology_exporter.export_summary(
             methodology_summary,
             total_observations=len(methodology_observations),
+        )
+        self.methodology_condition_analytics.export(
+            methodology_observations,
         )
 
     def generate_composite_reports(
