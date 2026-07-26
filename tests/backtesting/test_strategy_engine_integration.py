@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from core.backtesting.engine import BacktestingEngine
+from core.backtesting.methodology_observer import MethodologyObservation
 from core.backtesting.strategy_observer import BacktestStrategyObserver
-from core.data.models import MarketBar as SharedMarketBar
 from core.market_structure.enums import MarketTrend
 from core.market_structure.measurements import MarketStructureMeasurements
 from core.market_structure.models import MarketStructureResult, StructureState
@@ -87,11 +87,62 @@ def test_engine_observes_strategy_with_authoritative_m5_index() -> None:
     )
 
     assert observation is not None
-    assert observation.reason_code == 'NO_SETUP'
+    assert observation.reason_code == "NO_SETUP"
     assert engine.strategy_observer._last_bar_index == 37
     assert engine.strategy_candidate_count == 0
-    assert engine.strategy_observation_summary() == {'NO_SETUP': 1}
+    assert engine.strategy_observation_summary() == {"NO_SETUP": 1}
     assert engine.strategy_observations == (observation,)
+
+
+def test_engine_exposes_methodology_observations_read_only() -> None:
+    engine = _engine()
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+
+    engine._observe_strategy(
+        multi_timeframe=_mtf(timestamp, structure_index=37),
+        observation_bar=_bar(timestamp),
+    )
+
+    observations = engine.methodology_observations
+    assert isinstance(observations, tuple)
+    assert len(observations) == 1
+    assert isinstance(observations[0], MethodologyObservation)
+    assert observations is not engine.strategy_observer.methodology_observations
+    assert observations == engine.strategy_observer.methodology_observations
+
+
+def test_engine_exposes_deterministic_methodology_summary() -> None:
+    engine = _engine()
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+
+    engine._observe_strategy(
+        multi_timeframe=_mtf(timestamp, structure_index=37),
+        observation_bar=_bar(timestamp),
+    )
+
+    assert engine.methodology_summary() == {
+        "ICT:NOT_CONFIRMED": 1,
+        "SMC:NOT_CONFIRMED": 1,
+    }
+
+
+def test_methodology_exposure_does_not_touch_trade_state() -> None:
+    engine = _engine()
+    trade_state = object()
+    engine.state = trade_state
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+
+    engine._observe_strategy(
+        multi_timeframe=_mtf(timestamp, structure_index=10),
+        observation_bar=_bar(timestamp),
+    )
+    before_candidate_count = engine.strategy_candidate_count
+
+    _ = engine.methodology_observations
+    _ = engine.methodology_summary()
+
+    assert engine.state is trade_state
+    assert engine.strategy_candidate_count == before_candidate_count == 0
 
 
 def test_engine_strategy_observation_does_not_touch_trade_state() -> None:
@@ -133,3 +184,5 @@ def test_engine_skips_observer_when_structure_state_is_missing() -> None:
 
     assert observation is None
     assert engine.strategy_observations == ()
+    assert engine.methodology_observations == ()
+    assert engine.methodology_summary() == {}

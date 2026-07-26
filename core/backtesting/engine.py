@@ -34,6 +34,7 @@ from core.trading_pipeline.pipeline import TradingPipeline
 from .candidate_outcome_models import CandidateOutcomeEvaluation
 from .candidate_outcome_tracker import CandidateOutcomeTracker
 from .config import BacktestConfig
+from .methodology_observer import MethodologyObservation
 from .models import BacktestResult, BacktestTrade
 from .run_output import BacktestRunOutput
 from .simulator import IncrementalTradeSimulation, TradeSimulator
@@ -177,6 +178,19 @@ class BacktestingEngine:
         """Return observational strategy counts grouped by reason code."""
 
         return self.strategy_observer.observation_summary()
+
+    @property
+    def methodology_observations(
+        self,
+    ) -> tuple[MethodologyObservation, ...]:
+        """Return immutable SMC and ICT methodology diagnostic history."""
+
+        return self.strategy_observer.methodology_observations
+
+    def methodology_summary(self) -> dict[str, int]:
+        """Return methodology counts without changing strategy or trade state."""
+
+        return self.strategy_observer.methodology_summary()
 
     @property
     def strategy_candidate_count(self) -> int:
