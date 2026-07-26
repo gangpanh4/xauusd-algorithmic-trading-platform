@@ -14,6 +14,9 @@ from .candidate_outcome_segmentation import (
 from .config import BacktestConfig
 from .engine import BacktestingEngine
 from .exporter import BacktestExporter
+from .methodology_diagnostics_exporter import (
+    MethodologyDiagnosticsExporter,
+)
 from .models import BacktestResult
 from .multi_timeframe_loader import MultiTimeframeLoader
 from .reporter import (
@@ -46,6 +49,10 @@ class BacktestRunner:
         )
 
         self.exporter = BacktestExporter(
+            config.output_directory,
+        )
+
+        self.methodology_exporter = MethodologyDiagnosticsExporter(
             config.output_directory,
         )
 
@@ -136,7 +143,7 @@ class BacktestRunner:
         result: BacktestResult,
     ) -> None:
         """
-        Generate all Sprint 1 reports.
+        Generate all Sprint 1 reports plus observational methodology artifacts.
         """
 
         output_dir = Path(
@@ -178,6 +185,27 @@ class BacktestRunner:
             asdict(stats),
         )
 
+        methodology_observations = tuple(
+            getattr(self.engine, "methodology_observations", ())
+        )
+        methodology_summary_method = getattr(
+            self.engine,
+            "methodology_summary",
+            None,
+        )
+        methodology_summary = (
+            methodology_summary_method()
+            if callable(methodology_summary_method)
+            else {}
+        )
+        self.methodology_exporter.export_observations(
+            methodology_observations,
+        )
+        self.methodology_exporter.export_summary(
+            methodology_summary,
+            total_observations=len(methodology_observations),
+        )
+
     def generate_composite_reports(
         self,
         output: BacktestRunOutput,
@@ -199,7 +227,7 @@ class BacktestRunner:
         )
         export_post_expiry = getattr(
             self.exporter,
-            'export_strategy_post_expiry_triggers',
+            "export_strategy_post_expiry_triggers",
             None,
         )
         if callable(export_post_expiry):
