@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 
 from core.data.models import MarketBar
 from core.multi_timeframe.models import MultiTimeframeResult
+from core.regime_detector.models import MarketRegime
+
 from .post_expiry_trigger_tracker import (
     PostExpiryTriggerRecord,
     PostExpiryTriggerTracker,
@@ -49,43 +51,65 @@ class BacktestStrategyObserver:
         multi_timeframe: MultiTimeframeResult,
         current_bar: MarketBar,
         current_bar_index: int,
+        market_regime: MarketRegime | None = None,
     ) -> StrategyObservation:
-        """Observe one completed M5 bar using synchronized MTF facts.
+        """Observe one completed M5 bar using synchronized market facts.
 
-        Duplicate or decreasing timestamps and bar indexes are rejected. This
-        protects stateful strategy logic from replaying the same historical
-        observation and preserves deterministic backtest chronology.
+        Duplicate or decreasing timestamps and bar indexes are rejected. When a
+        regime is supplied, its observation timestamp must match this completed
+        candle exactly; stale and future regime facts are rejected.
         """
 
         if not isinstance(multi_timeframe, MultiTimeframeResult):
-            raise TypeError('multi_timeframe must be MultiTimeframeResult')
+            raise TypeError("multi_timeframe must be MultiTimeframeResult")
         if not isinstance(current_bar, MarketBar):
-            raise TypeError('current_bar must be MarketBar')
+            raise TypeError("current_bar must be MarketBar")
         if isinstance(current_bar_index, bool) or not isinstance(
             current_bar_index,
             int,
         ):
-            raise TypeError('current_bar_index must be an integer')
+            raise TypeError("current_bar_index must be an integer")
         if current_bar_index < 0:
-            raise ValueError('current_bar_index cannot be negative')
+            raise ValueError("current_bar_index cannot be negative")
+        if market_regime is not None and not isinstance(
+            market_regime,
+            MarketRegime,
+        ):
+            raise TypeError("market_regime must be MarketRegime or None")
 
         timestamp = current_bar.timestamp.astimezone(UTC)
+        if market_regime is not None:
+            regime_timestamp = market_regime.observation_timestamp
+            if (
+                regime_timestamp.tzinfo is None
+                or regime_timestamp.utcoffset() is None
+            ):
+                raise ValueError(
+                    "market_regime observation_timestamp must be timezone-aware"
+                )
+            if regime_timestamp.astimezone(UTC) != timestamp:
+                raise ValueError(
+                    "market_regime observation_timestamp must match "
+                    "current_bar timestamp"
+                )
+
         if self._last_timestamp is not None and timestamp <= self._last_timestamp:
             raise ValueError(
-                'strategy observation timestamps must be strictly increasing'
+                "strategy observation timestamps must be strictly increasing"
             )
         if (
             self._last_bar_index is not None
             and current_bar_index <= self._last_bar_index
         ):
             raise ValueError(
-                'strategy observation bar indexes must be strictly increasing'
+                "strategy observation bar indexes must be strictly increasing"
             )
 
         context = StrategyContext(
             multi_timeframe=multi_timeframe,
             current_bar=current_bar,
             current_bar_index=current_bar_index,
+            market_regime=market_regime,
         )
         self._post_expiry_tracker.observe(
             strategy=self.strategy,
@@ -93,7 +117,7 @@ class BacktestStrategyObserver:
         )
         observation = self.strategy.observe(context)
         if (
-            observation.reason_code == 'EXPIRED'
+            observation.reason_code == "EXPIRED"
             and observation.setup is not None
         ):
             self._post_expiry_tracker.register(
@@ -123,7 +147,7 @@ class BacktestStrategyObserver:
 
     @property
     def candidate_count(self) -> int:
-        """Return observational candidates without authorizing execution."""
+        """Return candidate count without affecting executed trades."""
 
         return sum(
             observation.candidate_trade is not None

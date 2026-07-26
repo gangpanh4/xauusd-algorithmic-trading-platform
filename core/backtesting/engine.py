@@ -16,7 +16,7 @@ from core.market_structure.models import MarketStructureResult
 from core.multi_timeframe.enums import Timeframe
 from core.multi_timeframe.models import MultiTimeframeResult
 from core.strategies import StrategyObservation
-from core.regime_detector.models import MarketBar
+from core.regime_detector.models import MarketBar, MarketRegime
 from core.research_analytics.engine import ResearchAnalyticsEngine
 from core.research_analytics.models import TradeAnalytics
 from core.research_analytics.report_builder import ResearchReportBuilder
@@ -425,6 +425,12 @@ class BacktestingEngine:
             tick_size=self.tick_size,
             lot_step=self.lot_step,
         )
+        self._complete_latest_strategy_observation(
+            multi_timeframe=mtf_result,
+            observation_bar=observation_bar,
+            pipeline_result=result,
+            visible_m5_end=m5_end,
+        )
         return result, observation_bar
 
 
@@ -461,11 +467,12 @@ class BacktestingEngine:
                 continue
 
             final_result = self.pipeline.multi_timeframe.process(snapshot)
-            self._observe_strategy(
-                multi_timeframe=final_result,
-                observation_bar=context.m5_bars[m5_end - 1],
-            )
-            self._last_strategy_m5_end = m5_end
+            if m5_end < visible_m5_end:
+                self._observe_strategy(
+                    multi_timeframe=final_result,
+                    observation_bar=context.m5_bars[m5_end - 1],
+                )
+                self._last_strategy_m5_end = m5_end
 
         if final_result is not None:
             return final_result
@@ -519,6 +526,7 @@ class BacktestingEngine:
         *,
         multi_timeframe: MultiTimeframeResult,
         observation_bar: MarketBar,
+        market_regime: MarketRegime | None = None,
     ) -> StrategyObservation | None:
         """Record one synchronized strategy observation without execution.
 
@@ -542,9 +550,45 @@ class BacktestingEngine:
             multi_timeframe=multi_timeframe,
             current_bar=shared_bar,
             current_bar_index=structure_state.current_bar_index,
+            market_regime=market_regime,
         )
         if observation.candidate_trade is not None:
             tracker.register(observation.candidate_trade)
+        return observation
+
+    def _complete_latest_strategy_observation(
+        self,
+        *,
+        multi_timeframe: MultiTimeframeResult,
+        observation_bar: MarketBar,
+        pipeline_result: PipelineResult | None,
+        visible_m5_end: int,
+    ) -> StrategyObservation | None:
+        """Observe the latest M5 candle after its one pipeline evaluation.
+
+        Earlier newly visible M5 candles are replayed observationally without a
+        regime because the production pipeline does not process those candles.
+        The latest candle is deferred until ``PipelineResult`` exists so the
+        exact same-candle ``MarketRegime`` can be supplied without a second
+        detector update or stale-state reuse.
+        """
+
+        if pipeline_result is None:
+            return None
+        if isinstance(visible_m5_end, bool) or not isinstance(
+            visible_m5_end,
+            int,
+        ):
+            raise TypeError("visible_m5_end must be an integer")
+        if visible_m5_end <= 0:
+            raise ValueError("visible_m5_end must be greater than zero")
+
+        observation = self._observe_strategy(
+            multi_timeframe=multi_timeframe,
+            observation_bar=observation_bar,
+            market_regime=getattr(pipeline_result, "regime", None),
+        )
+        self._last_strategy_m5_end = visible_m5_end
         return observation
 
     def _process_pipeline_bar(
