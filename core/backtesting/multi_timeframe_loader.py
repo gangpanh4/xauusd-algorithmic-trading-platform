@@ -40,20 +40,38 @@ class MultiTimeframeLoader:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._validate_clock(self._clock())
 
-    def load(self, symbol: str, bars: int) -> MarketContext:
-        """Load histories and return the latest fully synchronized snapshot.
+    def load(
+        self,
+        symbol: str,
+        bars: int,
+        *,
+        end_time: datetime | None = None,
+    ) -> MarketContext:
+        """Load a latest or explicitly bounded synchronized snapshot.
 
-        The current still-forming broker candle is excluded using the injected
-        UTC clock. The latest completed M15 candle defines the observation.
+        With ``end_time=None`` the existing latest-history path is preserved.
+        An explicit ``end_time`` is a UTC visibility boundary: only candles
+        whose close is on or before that boundary may enter the result.
         """
 
         symbol_value = self._validate_symbol(symbol)
         bar_count = self._validate_bar_count(bars)
-        histories = self._load_histories(symbol_value, bar_count)
         now = self._normalize_utc(self._clock(), "clock")
+        boundary = (
+            self._normalize_utc(end_time, "end_time")
+            if end_time is not None
+            else now
+        )
+        if boundary > now:
+            raise ValueError("end_time cannot be in the future")
 
+        histories = self._load_histories(
+            symbol_value,
+            bar_count,
+            end_time=boundary if end_time is not None else None,
+        )
         completed = {
-            name: self._completed_by(name, series, now)
+            name: self._completed_by(name, series, boundary)
             for name, series in histories.items()
         }
         if not completed["m15"]:
@@ -153,14 +171,14 @@ class MultiTimeframeLoader:
                     observation_timestamp=bar.timestamp,
                 )
             except RuntimeError:
-                # Early M15 observations may predate the first completed H1/H4
-                # candle. They are warm-up-incomplete, not valid snapshots.
                 continue
 
     def _load_histories(
         self,
         symbol: str,
         bars: int,
+        *,
+        end_time: datetime | None,
     ) -> dict[str, list[MarketBar]]:
         mapping = {
             "m5": mt5.TIMEFRAME_M5,
@@ -168,14 +186,23 @@ class MultiTimeframeLoader:
             "h1": mt5.TIMEFRAME_H1,
             "h4": mt5.TIMEFRAME_H4,
         }
-        return {
-            name: self.loader.load_history(
-                symbol=symbol,
-                timeframe=timeframe,
-                bars=bars,
-            )
-            for name, timeframe in mapping.items()
-        }
+        histories: dict[str, list[MarketBar]] = {}
+        for name, timeframe in mapping.items():
+            if end_time is None:
+                series = self.loader.load_history(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    bars=bars,
+                )
+            else:
+                series = self.loader.load_history(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    bars=bars,
+                    end_time=end_time,
+                )
+            histories[name] = series
+        return histories
 
     def _validate_histories(
         self,

@@ -21,14 +21,25 @@ class HistoryLoader:
         symbol: str,
         timeframe: int,
         bars: int,
+        *,
+        end_time: datetime | None = None,
     ) -> list[MarketBar]:
 
-        rates = mt5.copy_rates_from_pos(
-            symbol,
-            timeframe,
-            0,
-            bars,
-        )
+        if end_time is None:
+            rates = mt5.copy_rates_from_pos(
+                symbol,
+                timeframe,
+                0,
+                bars,
+            )
+        else:
+            normalized_end = self._normalize_utc(end_time, "end_time")
+            rates = mt5.copy_rates_from(
+                symbol,
+                timeframe,
+                normalized_end,
+                bars,
+            )
 
         if rates is None:
             raise RuntimeError(
@@ -46,13 +57,11 @@ class HistoryLoader:
                 UTC,
             )
 
-            # Skip duplicated timestamps
             if timestamp in seen:
                 continue
 
             seen.add(timestamp)
 
-            # Ignore invalid candles
             if (
                 rate["high"] < rate["low"]
                 or rate["open"] <= 0
@@ -74,7 +83,6 @@ class HistoryLoader:
                 )
             )
 
-        # Ensure chronological order
         history.sort(
             key=lambda bar: bar.timestamp,
         )
@@ -84,14 +92,12 @@ class HistoryLoader:
                 "Insufficient historical data."
             )
 
-        # Detect abnormal time gaps
         gaps = 0
 
         for previous, current in zip(
             history,
             history[1:],
         ):
-
             delta = (
                 current.timestamp
                 - previous.timestamp
@@ -102,7 +108,6 @@ class HistoryLoader:
                     "History timestamps are not strictly increasing."
                 )
 
-            # Gap larger than one day
             if delta > 86400:
                 gaps += 1
 
@@ -112,3 +117,11 @@ class HistoryLoader:
             )
 
         return history
+
+    @staticmethod
+    def _normalize_utc(value: datetime, field_name: str) -> datetime:
+        if not isinstance(value, datetime):
+            raise TypeError(f"{field_name} must be a datetime")
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{field_name} must be timezone-aware")
+        return value.astimezone(UTC)

@@ -5,6 +5,8 @@ Historical Backtest Runner.
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import UTC, datetime
+import json
 from pathlib import Path
 
 from .candidate_outcome_exporter import CandidateOutcomeExporter
@@ -85,6 +87,8 @@ class BacktestRunner:
         )
 
         self._last_m5_bars: tuple[object, ...] = ()
+        self._last_requested_end_time: datetime | None = None
+        self._last_actual_window: dict[str, object] = {}
 
         self.candidate_outcome_exporter = CandidateOutcomeExporter(
             config.output_directory,
@@ -97,6 +101,8 @@ class BacktestRunner:
         symbol: str,
         timeframe: int,
         bars: int,
+        *,
+        end_time: datetime | None = None,
     ) -> BacktestResult:
         """
         Execute a complete historical backtest.
@@ -104,9 +110,10 @@ class BacktestRunner:
 
         self.state.reset()
 
-        context = self.loader.load(
+        context = self._load_context(
             symbol=symbol,
             bars=bars,
+            end_time=end_time,
         )
 
         if not context.m15_bars:
@@ -115,8 +122,10 @@ class BacktestRunner:
             )
 
         result = self.engine.run(context)
-        self._last_m5_bars = tuple(
-            getattr(context, "m5_bars", ())
+        self._capture_historical_window(
+            context=context,
+            requested_end_time=end_time,
+            requested_bars=bars,
         )
 
         self._complete_state(
@@ -131,6 +140,8 @@ class BacktestRunner:
         symbol: str,
         timeframe: int,
         bars: int,
+        *,
+        end_time: datetime | None = None,
     ) -> BacktestRunOutput:
         """Execute one backtest and return result plus strategy comparison.
 
@@ -140,9 +151,10 @@ class BacktestRunner:
 
         self.state.reset()
 
-        context = self.loader.load(
+        context = self._load_context(
             symbol=symbol,
             bars=bars,
+            end_time=end_time,
         )
 
         if not context.m15_bars:
@@ -151,8 +163,10 @@ class BacktestRunner:
             )
 
         output = self.engine.run_with_strategy_comparison(context)
-        self._last_m5_bars = tuple(
-            getattr(context, "m5_bars", ())
+        self._capture_historical_window(
+            context=context,
+            requested_end_time=end_time,
+            requested_bars=bars,
         )
 
         self._complete_state(
@@ -161,6 +175,97 @@ class BacktestRunner:
         )
 
         return output
+
+    def _load_context(
+        self,
+        *,
+        symbol: str,
+        bars: int,
+        end_time: datetime | None,
+    ) -> object:
+        """Preserve legacy loader calls when no explicit boundary is requested."""
+
+        if end_time is None:
+            return self.loader.load(
+                symbol=symbol,
+                bars=bars,
+            )
+        return self.loader.load(
+            symbol=symbol,
+            bars=bars,
+            end_time=end_time,
+        )
+
+    def _capture_historical_window(
+        self,
+        *,
+        context: object,
+        requested_end_time: datetime | None,
+        requested_bars: int,
+    ) -> None:
+        """Retain deterministic window provenance for research reports."""
+
+        m5_bars = tuple(getattr(context, "m5_bars", ()))
+        m15_bars = tuple(getattr(context, "m15_bars", ()))
+        h1_bars = tuple(getattr(context, "h1_bars", ()))
+        h4_bars = tuple(getattr(context, "h4_bars", ()))
+        self._last_m5_bars = m5_bars
+        self._last_requested_end_time = (
+            requested_end_time.astimezone(UTC)
+            if requested_end_time is not None
+            else None
+        )
+
+        def normalized_timestamp(value: object) -> str | None:
+            timestamp = getattr(value, "timestamp", None)
+            if not isinstance(timestamp, datetime):
+                return None
+            if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                return None
+            return timestamp.astimezone(UTC).isoformat()
+
+        def first_timestamp(values: tuple[object, ...]) -> str | None:
+            if not values:
+                return None
+            return normalized_timestamp(values[0])
+
+        def last_timestamp(values: tuple[object, ...]) -> str | None:
+            if not values:
+                return None
+            return normalized_timestamp(values[-1])
+
+        self._last_actual_window = {
+            "requested_bars_per_timeframe": requested_bars,
+            "requested_end_time": (
+                self._last_requested_end_time.isoformat()
+                if self._last_requested_end_time is not None
+                else None
+            ),
+            "actual": {
+                "m5": {
+                    "count": len(m5_bars),
+                    "first_timestamp": first_timestamp(m5_bars),
+                    "last_timestamp": last_timestamp(m5_bars),
+                },
+                "m15": {
+                    "count": len(m15_bars),
+                    "first_timestamp": first_timestamp(m15_bars),
+                    "last_timestamp": last_timestamp(m15_bars),
+                },
+                "h1": {
+                    "count": len(h1_bars),
+                    "first_timestamp": first_timestamp(h1_bars),
+                    "last_timestamp": last_timestamp(h1_bars),
+                },
+                "h4": {
+                    "count": len(h4_bars),
+                    "first_timestamp": first_timestamp(h4_bars),
+                    "last_timestamp": last_timestamp(h4_bars),
+                },
+            },
+            "closed_candle_only": True,
+            "no_lookahead": True,
+        }
 
     def _complete_state(
         self,
@@ -219,6 +324,16 @@ class BacktestRunner:
 
         self.exporter.export_statistics(
             asdict(stats),
+        )
+
+        (output_dir / "historical_window.json").write_text(
+            json.dumps(
+                self._last_actual_window,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
         )
 
         methodology_observations = tuple(
