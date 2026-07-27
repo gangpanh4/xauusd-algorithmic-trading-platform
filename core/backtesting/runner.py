@@ -18,6 +18,9 @@ from .methodology_condition_analytics import MethodologyConditionAnalytics
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
+from .methodology_outcome_integrity import (
+    MethodologyOutcomeIntegrityAnalytics,
+)
 from .methodology_outcome_research import MethodologyOutcomeResearch
 from .models import BacktestResult
 from .multi_timeframe_loader import MultiTimeframeLoader
@@ -64,6 +67,12 @@ class BacktestRunner:
 
         self.methodology_outcome_research = MethodologyOutcomeResearch(
             config.output_directory,
+        )
+
+        self.methodology_outcome_integrity = (
+            MethodologyOutcomeIntegrityAnalytics(
+                config.output_directory,
+            )
         )
 
         self._last_m5_bars: tuple[object, ...] = ()
@@ -231,6 +240,12 @@ class BacktestRunner:
             self._last_m5_bars,
         )
         self.methodology_outcome_research.export(methodology_outcomes)
+        self.methodology_outcome_integrity.export(
+            methodology_observations,
+            self._last_m5_bars,
+            methodology_outcomes,
+            horizons=self.methodology_outcome_research.horizons,
+        )
 
     def generate_composite_reports(
         self,
