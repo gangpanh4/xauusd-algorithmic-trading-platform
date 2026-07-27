@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import importlib
 import sys
 from types import ModuleType, SimpleNamespace
@@ -19,7 +20,7 @@ def _result() -> BacktestResult:
     )
 
 
-def test_run_backtest_uses_composite_research_path(
+def test_run_backtest_uses_bounded_composite_research_path(
     monkeypatch,
     capsys,
 ) -> None:
@@ -44,6 +45,7 @@ def test_run_backtest_uses_composite_research_path(
             symbol: str,
             timeframe: int,
             bars: int,
+            end_time: datetime,
         ):
             calls.append(
                 (
@@ -52,6 +54,7 @@ def test_run_backtest_uses_composite_research_path(
                         "symbol": symbol,
                         "timeframe": timeframe,
                         "bars": bars,
+                        "end_time": end_time,
                     },
                 )
             )
@@ -75,12 +78,23 @@ def test_run_backtest_uses_composite_research_path(
     module = importlib.import_module("run_backtest")
     module.main()
 
+    expected_end_time = datetime(
+        2026,
+        4,
+        9,
+        23,
+        59,
+        tzinfo=UTC,
+    )
+    assert module.HISTORICAL_BARS == 20_000
+    assert module.HISTORICAL_END_TIME == expected_end_time
     assert calls[1] == (
         "run_with_strategy_comparison",
         {
             "symbol": "XAUUSD",
             "timeframe": 15,
-            "bars": 5_000,
+            "bars": 20_000,
+            "end_time": expected_end_time,
         },
     )
     assert calls[2] == ("generate_composite_reports", output)
@@ -88,6 +102,8 @@ def test_run_backtest_uses_composite_research_path(
 
     stdout = capsys.readouterr().out
     assert "XAUUSD HISTORICAL BACKTEST" in stdout
+    assert "Bars requested  : 20,000" in stdout
+    assert "2026-04-09T23:59:00+00:00" in stdout
     assert "Trades          : 1" in stdout
     assert "Win Rate        : 100.00%" in stdout
     assert "Net Profit      : 155.82" in stdout
