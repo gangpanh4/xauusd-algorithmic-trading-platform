@@ -18,6 +18,7 @@ from .methodology_condition_analytics import MethodologyConditionAnalytics
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
+from .methodology_outcome_research import MethodologyOutcomeResearch
 from .models import BacktestResult
 from .multi_timeframe_loader import MultiTimeframeLoader
 from .reporter import (
@@ -61,6 +62,12 @@ class BacktestRunner:
             config.output_directory,
         )
 
+        self.methodology_outcome_research = MethodologyOutcomeResearch(
+            config.output_directory,
+        )
+
+        self._last_m5_bars: tuple[object, ...] = ()
+
         self.candidate_outcome_exporter = CandidateOutcomeExporter(
             config.output_directory,
         )
@@ -90,6 +97,9 @@ class BacktestRunner:
             )
 
         result = self.engine.run(context)
+        self._last_m5_bars = tuple(
+            getattr(context, "m5_bars", ())
+        )
 
         self._complete_state(
             processed_bar_count=len(context.m15_bars),
@@ -123,6 +133,9 @@ class BacktestRunner:
             )
 
         output = self.engine.run_with_strategy_comparison(context)
+        self._last_m5_bars = tuple(
+            getattr(context, "m5_bars", ())
+        )
 
         self._complete_state(
             processed_bar_count=len(context.m15_bars),
@@ -213,6 +226,11 @@ class BacktestRunner:
         self.methodology_condition_analytics.export(
             methodology_observations,
         )
+        methodology_outcomes = self.methodology_outcome_research.evaluate(
+            methodology_observations,
+            self._last_m5_bars,
+        )
+        self.methodology_outcome_research.export(methodology_outcomes)
 
     def generate_composite_reports(
         self,
