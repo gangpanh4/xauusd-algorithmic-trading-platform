@@ -17,6 +17,9 @@ from .config import BacktestConfig
 from .engine import BacktestingEngine
 from .exporter import BacktestExporter
 from .methodology_condition_analytics import MethodologyConditionAnalytics
+from .methodology_condition_outcome_attribution import (
+    MethodologyConditionOutcomeAttribution,
+)
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -68,6 +71,12 @@ class BacktestRunner:
 
         self.methodology_condition_analytics = MethodologyConditionAnalytics(
             config.output_directory,
+        )
+
+        self.methodology_condition_outcome_attribution = (
+            MethodologyConditionOutcomeAttribution(
+                config.output_directory,
+            )
         )
 
         self.methodology_outcome_research = MethodologyOutcomeResearch(
@@ -372,6 +381,11 @@ class BacktestRunner:
         )
         self.methodology_outcome_stability.export(
             methodology_outcomes,
+        )
+        self.methodology_condition_outcome_attribution.export(
+            methodology_observations,
+            methodology_outcomes,
+            window_metadata=self._last_actual_window,
         )
 
     def generate_composite_reports(
