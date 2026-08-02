@@ -466,12 +466,13 @@ class MethodologyShadowDecisionComparison:
                 ),
                 "classification": "OUTSIDE_COMMON_WINDOW",
             },
-            "unused_methodology_observation_count": len(
-                unused_observations
+            "unused_methodology_observations": (
+                self._summarize_unused_observations(
+                    unused_observations,
+                    common_window_start,
+                    common_window_end,
+                )
             ),
-            "unused_methodology_observation_timestamps": [
-                item.isoformat() for item in unused_observations
-            ],
             "variants": summaries,
             "observational_only": True,
             "trade_authority": False,
@@ -480,6 +481,37 @@ class MethodologyShadowDecisionComparison:
             "future_information_used_for_research_only": True,
         }
         return payload, rows
+
+    @staticmethod
+    def _summarize_unused_observations(
+        timestamps: tuple[datetime, ...],
+        common_window_start: datetime | None,
+        common_window_end: datetime | None,
+    ) -> dict[str, object]:
+        reason_counts = Counter[str]()
+        for timestamp in timestamps:
+            if common_window_start is None or common_window_end is None:
+                reason_counts["NO_COMMON_WINDOW"] += 1
+            elif timestamp < common_window_start:
+                reason_counts["BEFORE_COMMON_WINDOW"] += 1
+            elif timestamp > common_window_end:
+                reason_counts["AFTER_COMMON_WINDOW"] += 1
+            else:
+                reason_counts[
+                    "INSIDE_COMMON_WINDOW_NOT_AUDIT_ALIGNED"
+                ] += 1
+
+        return {
+            "count": len(timestamps),
+            "first_timestamp": (
+                timestamps[0].isoformat() if timestamps else None
+            ),
+            "last_timestamp": (
+                timestamps[-1].isoformat() if timestamps else None
+            ),
+            "reason_counts": dict(sorted(reason_counts.items())),
+            "full_timestamp_list_emitted": False,
+        }
 
     @staticmethod
     def _common_window(

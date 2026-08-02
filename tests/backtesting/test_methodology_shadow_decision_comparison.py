@@ -310,6 +310,10 @@ def test_export_writes_csv_json_and_window_metadata(tmp_path) -> None:
         "2026-04-09T23:59:00+00:00"
     )
     assert payload["trade_authority"] is False
+    assert "unused_methodology_observation_timestamps" not in payload
+    assert payload["unused_methodology_observations"][
+        "full_timestamp_list_emitted"
+    ] is False
 
 
 def test_aligns_active_audit_asof_backward_without_lookahead() -> None:
@@ -532,6 +536,89 @@ def test_classifies_audits_outside_common_window() -> None:
             common_end + timedelta(minutes=5)
         ).isoformat(),
         "classification": "OUTSIDE_COMMON_WINDOW",
+    }
+
+
+def test_compacts_unused_methodology_observation_diagnostics() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    inside_unused = start + timedelta(minutes=5)
+    aligned = start + timedelta(minutes=15)
+    after_window = start + timedelta(minutes=20)
+
+    observations = (
+        _observation(
+            start,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+        _observation(
+            inside_unused,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+        _observation(
+            aligned,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+        _observation(
+            after_window,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+    )
+    audits = (
+        _audit(start, accepted=False),
+        _audit(aligned, accepted=False),
+    )
+    outcomes = (
+        _outcome(
+            start,
+            direction=MethodologyDirection.BULLISH,
+            favorable=True,
+            return_percent=1.0,
+        ),
+        _outcome(
+            aligned,
+            direction=MethodologyDirection.BULLISH,
+            favorable=True,
+            return_percent=1.0,
+        ),
+    )
+
+    payload, _ = MethodologyShadowDecisionComparison().calculate(
+        observations,
+        audits,
+        outcomes,
+    )
+
+    assert "unused_methodology_observation_timestamps" not in payload
+    assert "unused_methodology_observation_count" not in payload
+    assert payload["unused_methodology_observations"] == {
+        "count": 2,
+        "first_timestamp": inside_unused.isoformat(),
+        "last_timestamp": after_window.isoformat(),
+        "reason_counts": {
+            "AFTER_COMMON_WINDOW": 1,
+            "INSIDE_COMMON_WINDOW_NOT_AUDIT_ALIGNED": 1,
+        },
+        "full_timestamp_list_emitted": False,
     }
 
 
