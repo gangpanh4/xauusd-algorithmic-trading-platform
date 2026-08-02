@@ -29,6 +29,9 @@ from .methodology_candidate_rule_simulator import (
 from .methodology_shadow_decision_comparison import (
     MethodologyShadowDecisionComparison,
 )
+from .methodology_variant_b_shadow_scoring import (
+    MethodologyVariantBShadowScoring,
+)
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -102,6 +105,12 @@ class BacktestRunner:
 
         self.methodology_shadow_decision_comparison = (
             MethodologyShadowDecisionComparison(
+                config.output_directory,
+            )
+        )
+
+        self.methodology_variant_b_shadow_scoring = (
+            MethodologyVariantBShadowScoring(
                 config.output_directory,
             )
         )
@@ -425,6 +434,12 @@ class BacktestRunner:
             window_metadata=self._last_actual_window,
         )
         self.methodology_shadow_decision_comparison.export(
+            methodology_observations,
+            tuple(self.engine.observation_audits),
+            methodology_outcomes,
+            window_metadata=self._last_actual_window,
+        )
+        self.methodology_variant_b_shadow_scoring.export(
             methodology_observations,
             tuple(self.engine.observation_audits),
             methodology_outcomes,
