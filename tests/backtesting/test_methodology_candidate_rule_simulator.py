@@ -284,6 +284,173 @@ def test_reports_retention_composition_and_folds() -> None:
     assert summary["positive_favorable_delta_folds"] == 2
 
 
+
+def test_builds_chronological_folds_separately_for_each_direction() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    observations = []
+    evaluations = []
+
+    for index in range(20):
+        timestamp = start + timedelta(minutes=5 * index)
+        direction = (
+            MethodologyDirection.BULLISH
+            if index % 2 == 0
+            else MethodologyDirection.BEARISH
+        )
+        if direction is MethodologyDirection.BULLISH:
+            satisfied = (
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            )
+            failed = ()
+            favorable = True
+            return_percent = 1.0
+            status = MethodologyEvaluationStatus.CONFIRMED
+        else:
+            satisfied = ("ORDER_BLOCK_PRESENT",)
+            failed = ("LIQUIDITY_SWEEP_COMPATIBLE",)
+            favorable = True
+            return_percent = 1.0
+            status = MethodologyEvaluationStatus.NOT_CONFIRMED
+
+        observations.append(
+            _observation(
+                timestamp,
+                direction=direction,
+                satisfied=satisfied,
+                failed=failed,
+                status=status,
+            )
+        )
+        evaluations.append(
+            _evaluation(
+                timestamp,
+                direction=direction,
+                status=status,
+                horizon=12,
+                favorable=favorable,
+                return_percent=return_percent,
+            )
+        )
+
+    payload, _ = MethodologyCandidateRuleSimulator(
+        fold_count=5,
+        minimum_sample_size=1,
+    ).calculate(tuple(observations), tuple(evaluations))
+
+    assert payload["fold_partitioning"] == (
+        "DIRECTION_SPECIFIC_TIMESTAMPS"
+    )
+
+    bullish = next(
+        item
+        for item in payload["variants"]
+        if item["direction"] == "BULLISH"
+    )
+    bearish = next(
+        item
+        for item in payload["variants"]
+        if item["direction"] == "BEARISH"
+    )
+
+    assert bullish["fold_partitioning"] == {
+        "basis": "DIRECTION_SPECIFIC_TIMESTAMPS",
+        "direction_timestamp_count": 10,
+        "requested_fold_count": 5,
+        "fold_timestamp_counts": [2, 2, 2, 2, 2],
+    }
+    assert bearish["fold_partitioning"] == {
+        "basis": "DIRECTION_SPECIFIC_TIMESTAMPS",
+        "direction_timestamp_count": 10,
+        "requested_fold_count": 5,
+        "fold_timestamp_counts": [2, 2, 2, 2, 2],
+    }
+
+    for variant in (bullish, bearish):
+        assert len(variant["folds"]) == 5
+        assert all(
+            fold["horizons"][0]["sample_counts"][
+                "DIRECTION_BASELINE"
+            ]
+            == 2
+            for fold in variant["folds"]
+        )
+
+
+def test_direction_specific_folds_preserve_directional_chronology() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    observations = []
+    evaluations = []
+
+    bullish_offsets = (0, 1, 8, 9, 16, 17)
+    bearish_offsets = (2, 3, 4, 5, 6, 7)
+
+    for offset in sorted(bullish_offsets + bearish_offsets):
+        timestamp = start + timedelta(minutes=5 * offset)
+        bullish = offset in bullish_offsets
+        direction = (
+            MethodologyDirection.BULLISH
+            if bullish
+            else MethodologyDirection.BEARISH
+        )
+        satisfied = (
+            ("ORDER_BLOCK_PRESENT", "STRUCTURE_EVENT_ALIGNED")
+            if bullish
+            else ("ORDER_BLOCK_PRESENT",)
+        )
+        failed = (
+            ()
+            if bullish
+            else ("LIQUIDITY_SWEEP_COMPATIBLE",)
+        )
+        status = (
+            MethodologyEvaluationStatus.CONFIRMED
+            if bullish
+            else MethodologyEvaluationStatus.NOT_CONFIRMED
+        )
+        observations.append(
+            _observation(
+                timestamp,
+                direction=direction,
+                satisfied=satisfied,
+                failed=failed,
+                status=status,
+            )
+        )
+        evaluations.append(
+            _evaluation(
+                timestamp,
+                direction=direction,
+                status=status,
+                horizon=12,
+                favorable=True,
+                return_percent=1.0,
+            )
+        )
+
+    payload, _ = MethodologyCandidateRuleSimulator(
+        fold_count=3,
+        minimum_sample_size=1,
+    ).calculate(tuple(observations), tuple(evaluations))
+
+    bullish_variant = next(
+        item
+        for item in payload["variants"]
+        if item["direction"] == "BULLISH"
+    )
+    bearish_variant = next(
+        item
+        for item in payload["variants"]
+        if item["direction"] == "BEARISH"
+    )
+
+    assert bullish_variant["fold_partitioning"][
+        "fold_timestamp_counts"
+    ] == [2, 2, 2]
+    assert bearish_variant["fold_partitioning"][
+        "fold_timestamp_counts"
+    ] == [2, 2, 2]
+
 def test_export_writes_csv_json_and_window_metadata(tmp_path) -> None:
     timestamp = datetime(2026, 1, 1, tzinfo=UTC)
     observation = _observation(

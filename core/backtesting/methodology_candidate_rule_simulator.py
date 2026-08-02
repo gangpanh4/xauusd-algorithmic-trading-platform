@@ -179,11 +179,6 @@ class MethodologyCandidateRuleSimulator:
                 "methodology observations"
             )
 
-        timestamps = tuple(
-            sorted({item.observation_timestamp.astimezone(UTC) for item in usable})
-        )
-        folds = self._build_folds(timestamps)
-
         csv_rows: list[dict[str, object]] = []
         variant_payloads: list[dict[str, object]] = []
 
@@ -192,6 +187,15 @@ class MethodologyCandidateRuleSimulator:
             direction_evaluations = tuple(
                 item for item in usable if item.direction is direction
             )
+            direction_timestamps = tuple(
+                sorted(
+                    {
+                        item.observation_timestamp.astimezone(UTC)
+                        for item in direction_evaluations
+                    }
+                )
+            )
+            direction_folds = self._build_folds(direction_timestamps)
 
             aggregate = self._evaluate_scope(
                 variant,
@@ -202,7 +206,10 @@ class MethodologyCandidateRuleSimulator:
             csv_rows.extend(aggregate["rows"])
 
             fold_results: list[dict[str, object]] = []
-            for fold_number, fold_timestamps in enumerate(folds, start=1):
+            for fold_number, fold_timestamps in enumerate(
+                direction_folds,
+                start=1,
+            ):
                 allowed = set(fold_timestamps)
                 subset = tuple(
                     item
@@ -246,6 +253,16 @@ class MethodologyCandidateRuleSimulator:
                     "required_failed_conditions": list(
                         variant["required_failed"]
                     ),
+                    "fold_partitioning": {
+                        "basis": "DIRECTION_SPECIFIC_TIMESTAMPS",
+                        "direction_timestamp_count": len(
+                            direction_timestamps
+                        ),
+                        "requested_fold_count": self.fold_count,
+                        "fold_timestamp_counts": [
+                            len(fold) for fold in direction_folds
+                        ],
+                    },
                     "aggregate": aggregate,
                     "folds": fold_results,
                     "retention": {
@@ -288,6 +305,7 @@ class MethodologyCandidateRuleSimulator:
             "observation_count": len(observations_tuple),
             "evaluation_count": len(evaluations_tuple),
             "usable_smc_evaluation_count": len(usable),
+            "fold_partitioning": "DIRECTION_SPECIFIC_TIMESTAMPS",
             "variants": variant_payloads,
             "observational_only": True,
             "trade_authority": False,
