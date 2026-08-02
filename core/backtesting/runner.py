@@ -35,6 +35,9 @@ from .methodology_variant_b_shadow_scoring import (
 from .methodology_variant_b_shadow_trades import (
     MethodologyVariantBShadowTrades,
 )
+from .methodology_variant_b_execution_diagnostics import (
+    MethodologyVariantBExecutionDiagnostics,
+)
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -124,6 +127,12 @@ class BacktestRunner:
                 config.output_directory,
                 tick_size=self.engine.tick_size,
                 tick_value_per_lot=self.engine.tick_value_per_lot,
+            )
+        )
+
+        self.methodology_variant_b_execution_diagnostics = (
+            MethodologyVariantBExecutionDiagnostics(
+                config.output_directory,
             )
         )
 
@@ -458,6 +467,11 @@ class BacktestRunner:
             window_metadata=self._last_actual_window,
         )
         self.methodology_variant_b_shadow_trades.export(
+            methodology_observations,
+            self._last_m5_bars,
+            window_metadata=self._last_actual_window,
+        )
+        self.methodology_variant_b_execution_diagnostics.export(
             methodology_observations,
             self._last_m5_bars,
             window_metadata=self._last_actual_window,
