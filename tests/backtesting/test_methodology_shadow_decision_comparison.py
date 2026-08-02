@@ -207,6 +207,8 @@ def test_compares_shadow_eligibility_with_active_decision() -> None:
         if row["Variant"]
         == "VARIANT_A_BULLISH_ORDER_BLOCK_STRUCTURE"
     ]
+    assert bullish_rows[0]["Alignment Method"] == "EXACT"
+    assert bullish_rows[0]["Alignment Lag Minutes"] == 0.0
     assert bullish_rows[0]["Agreement"] == "SHADOW_ONLY"
     assert bullish_rows[0]["Research Classification"] == (
         "SHADOW_TRUE_POSITIVE"
@@ -310,27 +312,138 @@ def test_export_writes_csv_json_and_window_metadata(tmp_path) -> None:
     assert payload["trade_authority"] is False
 
 
-def test_reports_unmatched_timestamp_diagnostics() -> None:
+def test_aligns_active_audit_asof_backward_without_lookahead() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
+    methodology_timestamp = start + timedelta(minutes=10)
+    audit_timestamp = start + timedelta(minutes=15)
+    future_timestamp = start + timedelta(minutes=20)
+
+    observations = (
+        _observation(
+            methodology_timestamp,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+        _observation(
+            future_timestamp,
+            direction=MethodologyDirection.BEARISH,
+            satisfied=("ORDER_BLOCK_PRESENT",),
+            failed=("LIQUIDITY_SWEEP_COMPATIBLE",),
+        ),
+    )
+    outcomes = (
+        _outcome(
+            methodology_timestamp,
+            direction=MethodologyDirection.BULLISH,
+            favorable=True,
+            return_percent=1.0,
+        ),
+        _outcome(
+            future_timestamp,
+            direction=MethodologyDirection.BEARISH,
+            favorable=False,
+            return_percent=-1.0,
+        ),
+    )
+
+    payload, rows = MethodologyShadowDecisionComparison().calculate(
+        observations,
+        (_audit(audit_timestamp, accepted=False),),
+        outcomes,
+    )
+
+    bullish_row = next(
+        row
+        for row in rows
+        if row["Direction"] == "BULLISH"
+    )
+    assert bullish_row["Active Audit Timestamp"] == (
+        audit_timestamp.isoformat()
+    )
+    assert bullish_row["Methodology Timestamp"] == (
+        methodology_timestamp.isoformat()
+    )
+    assert bullish_row["Alignment Method"] == "ASOF_BACKWARD"
+    assert bullish_row["Alignment Lag Minutes"] == 5.0
+    assert payload["aligned_audit_count"] == 1
+    assert payload["exact_alignment_count"] == 0
+    assert payload["asof_backward_alignment_count"] == 1
+    assert payload["unmatched_audit_count"] == 0
+    assert payload["alignment_policy"][
+        "future_methodology_observations_allowed"
+    ] is False
+
+
+def test_rejects_alignment_when_backward_lag_exceeds_limit() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    audit_timestamp = start + timedelta(minutes=20)
     observation = _observation(
         start,
         direction=MethodologyDirection.BULLISH,
         satisfied=("ORDER_BLOCK_PRESENT", "STRUCTURE_EVENT_ALIGNED"),
         failed=(),
     )
-    audit = _audit(start + timedelta(minutes=5), accepted=False)
 
-    payload, rows = MethodologyShadowDecisionComparison().calculate(
+    payload, rows = MethodologyShadowDecisionComparison(
+        maximum_alignment_lag_minutes=15,
+    ).calculate(
         (observation,),
-        (audit,),
+        (_audit(audit_timestamp, accepted=False),),
         (),
     )
 
     assert rows == []
-    assert payload["shared_timestamp_count"] == 0
-    assert payload["unmatched_observation_timestamps"] == [
-        start.isoformat()
+    assert payload["aligned_audit_count"] == 0
+    assert payload["unmatched_audit_count"] == 1
+    assert payload["unmatched_audits"] == [
+        {
+            "active_audit_timestamp": audit_timestamp.isoformat(),
+            "candidate_methodology_timestamp": start.isoformat(),
+            "candidate_lag_minutes": 20.0,
+            "maximum_alignment_lag_minutes": 15,
+            "reason": "ALIGNMENT_LAG_EXCEEDED",
+        }
     ]
-    assert payload["unmatched_audit_timestamps"] == [
-        (start + timedelta(minutes=5)).isoformat()
+
+
+def test_reports_no_prior_methodology_observation() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    audit_timestamp = start
+    methodology_timestamp = start + timedelta(minutes=5)
+    observation = _observation(
+        methodology_timestamp,
+        direction=MethodologyDirection.BULLISH,
+        satisfied=("ORDER_BLOCK_PRESENT", "STRUCTURE_EVENT_ALIGNED"),
+        failed=(),
+    )
+
+    payload, rows = MethodologyShadowDecisionComparison().calculate(
+        (observation,),
+        (_audit(audit_timestamp, accepted=False),),
+        (),
+    )
+
+    assert rows == []
+    assert payload["unmatched_audits"] == [
+        {
+            "active_audit_timestamp": audit_timestamp.isoformat(),
+            "reason": "NO_PRIOR_METHODOLOGY_OBSERVATION",
+        }
     ]
+
+
+def test_alignment_limit_validation() -> None:
+    import pytest
+
+    with pytest.raises(TypeError):
+        MethodologyShadowDecisionComparison(
+            maximum_alignment_lag_minutes=True,
+        )
+    with pytest.raises(ValueError):
+        MethodologyShadowDecisionComparison(
+            maximum_alignment_lag_minutes=-1,
+        )

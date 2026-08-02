@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import csv
 import json
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -25,6 +26,7 @@ class MethodologyShadowDecisionComparison:
     """Compare frozen shadow eligibility with immutable active decisions."""
 
     HORIZON_BARS: Final[int] = 24
+    DEFAULT_MAXIMUM_ALIGNMENT_LAG_MINUTES: Final[int] = 15
     VARIANTS: Final[tuple[dict[str, object], ...]] = (
         {
             "variant": "VARIANT_A_BULLISH_ORDER_BLOCK_STRUCTURE",
@@ -44,7 +46,11 @@ class MethodologyShadowDecisionComparison:
     )
 
     _CSV_COLUMNS: Final[tuple[str, ...]] = (
-        "Timestamp",
+        "Active Audit Timestamp",
+        "Methodology Timestamp",
+        "Alignment Method",
+        "Alignment Lag Minutes",
+        "Maximum Alignment Lag Minutes",
         "Variant",
         "Direction",
         "Active Accepted",
@@ -68,9 +74,28 @@ class MethodologyShadowDecisionComparison:
     def __init__(
         self,
         output_directory: str | Path = "output/backtests",
+        *,
+        maximum_alignment_lag_minutes: int = (
+            DEFAULT_MAXIMUM_ALIGNMENT_LAG_MINUTES
+        ),
     ) -> None:
+        if isinstance(maximum_alignment_lag_minutes, bool) or not isinstance(
+            maximum_alignment_lag_minutes,
+            int,
+        ):
+            raise TypeError(
+                "maximum_alignment_lag_minutes must be an integer"
+            )
+        if maximum_alignment_lag_minutes < 0:
+            raise ValueError(
+                "maximum_alignment_lag_minutes cannot be negative"
+            )
+
         self.output_directory = Path(output_directory)
         self.output_directory.mkdir(parents=True, exist_ok=True)
+        self.maximum_alignment_lag_minutes = (
+            maximum_alignment_lag_minutes
+        )
 
     def export(
         self,
@@ -127,6 +152,7 @@ class MethodologyShadowDecisionComparison:
             item.timestamp.astimezone(UTC): item
             for item in observations_tuple
         }
+        observation_timestamps = tuple(sorted(observation_index))
         audit_index = {
             item.timestamp.astimezone(UTC): item
             for item in audits_tuple
@@ -141,14 +167,78 @@ class MethodologyShadowDecisionComparison:
             and item.horizon_bars == self.HORIZON_BARS
         }
 
-        shared_timestamps = tuple(
-            sorted(set(observation_index).intersection(audit_index))
-        )
-        unmatched_observations = tuple(
-            sorted(set(observation_index).difference(audit_index))
-        )
-        unmatched_audits = tuple(
-            sorted(set(audit_index).difference(observation_index))
+        alignments: list[
+            tuple[
+                datetime,
+                datetime,
+                str,
+                float,
+                PipelineObservationAudit,
+                MethodologyObservation,
+            ]
+        ] = []
+        unmatched_audits: list[dict[str, object]] = []
+        exact_count = 0
+        asof_count = 0
+
+        for audit_timestamp in sorted(audit_index):
+            audit = audit_index[audit_timestamp]
+            matched = self._align_observation_timestamp(
+                audit_timestamp,
+                observation_timestamps,
+            )
+            if matched is None:
+                unmatched_audits.append(
+                    {
+                        "active_audit_timestamp": (
+                            audit_timestamp.isoformat()
+                        ),
+                        "reason": "NO_PRIOR_METHODOLOGY_OBSERVATION",
+                    }
+                )
+                continue
+
+            methodology_timestamp, method, lag_minutes = matched
+            if lag_minutes > self.maximum_alignment_lag_minutes:
+                unmatched_audits.append(
+                    {
+                        "active_audit_timestamp": (
+                            audit_timestamp.isoformat()
+                        ),
+                        "candidate_methodology_timestamp": (
+                            methodology_timestamp.isoformat()
+                        ),
+                        "candidate_lag_minutes": lag_minutes,
+                        "maximum_alignment_lag_minutes": (
+                            self.maximum_alignment_lag_minutes
+                        ),
+                        "reason": "ALIGNMENT_LAG_EXCEEDED",
+                    }
+                )
+                continue
+
+            if method == "EXACT":
+                exact_count += 1
+            else:
+                asof_count += 1
+            alignments.append(
+                (
+                    audit_timestamp,
+                    methodology_timestamp,
+                    method,
+                    lag_minutes,
+                    audit,
+                    observation_index[methodology_timestamp],
+                )
+            )
+
+        matched_methodology_timestamps = {
+            item[1] for item in alignments
+        }
+        unused_observations = tuple(
+            timestamp
+            for timestamp in observation_timestamps
+            if timestamp not in matched_methodology_timestamps
         )
 
         rows: list[dict[str, object]] = []
@@ -157,13 +247,20 @@ class MethodologyShadowDecisionComparison:
         for variant in self.VARIANTS:
             direction = variant["direction"]
             variant_rows: list[dict[str, object]] = []
-            for timestamp in shared_timestamps:
-                observation = observation_index[timestamp]
+            for (
+                audit_timestamp,
+                methodology_timestamp,
+                alignment_method,
+                alignment_lag_minutes,
+                audit,
+                observation,
+            ) in alignments:
                 if observation.smc.direction is not direction:
                     continue
 
-                audit = audit_index[timestamp]
-                outcome = outcome_index.get((timestamp, direction))
+                outcome = outcome_index.get(
+                    (methodology_timestamp, direction)
+                )
                 eligible = self._matches_variant(variant, observation.smc)
                 active_accepted = audit.accepted
                 favorable = (
@@ -185,7 +282,17 @@ class MethodologyShadowDecisionComparison:
                     favorable=favorable,
                 )
                 row = {
-                    "Timestamp": timestamp.isoformat(),
+                    "Active Audit Timestamp": (
+                        audit_timestamp.isoformat()
+                    ),
+                    "Methodology Timestamp": (
+                        methodology_timestamp.isoformat()
+                    ),
+                    "Alignment Method": alignment_method,
+                    "Alignment Lag Minutes": alignment_lag_minutes,
+                    "Maximum Alignment Lag Minutes": (
+                        self.maximum_alignment_lag_minutes
+                    ),
                     "Variant": variant["variant"],
                     "Direction": direction.value,
                     "Active Accepted": active_accepted,
@@ -241,12 +348,24 @@ class MethodologyShadowDecisionComparison:
             "observation_count": len(observations_tuple),
             "audit_count": len(audits_tuple),
             "evaluation_count": len(evaluations_tuple),
-            "shared_timestamp_count": len(shared_timestamps),
-            "unmatched_observation_timestamps": [
-                item.isoformat() for item in unmatched_observations
-            ],
-            "unmatched_audit_timestamps": [
-                item.isoformat() for item in unmatched_audits
+            "alignment_policy": {
+                "anchor": "ACTIVE_AUDIT_TIMESTAMP",
+                "method": "EXACT_OR_ASOF_BACKWARD",
+                "maximum_alignment_lag_minutes": (
+                    self.maximum_alignment_lag_minutes
+                ),
+                "future_methodology_observations_allowed": False,
+            },
+            "aligned_audit_count": len(alignments),
+            "exact_alignment_count": exact_count,
+            "asof_backward_alignment_count": asof_count,
+            "unmatched_audit_count": len(unmatched_audits),
+            "unmatched_audits": unmatched_audits,
+            "unused_methodology_observation_count": len(
+                unused_observations
+            ),
+            "unused_methodology_observation_timestamps": [
+                item.isoformat() for item in unused_observations
             ],
             "variants": summaries,
             "observational_only": True,
@@ -256,6 +375,38 @@ class MethodologyShadowDecisionComparison:
             "future_information_used_for_research_only": True,
         }
         return payload, rows
+
+    def _align_observation_timestamp(
+        self,
+        audit_timestamp: datetime,
+        observation_timestamps: tuple[datetime, ...],
+    ) -> tuple[datetime, str, float] | None:
+        if not observation_timestamps:
+            return None
+
+        index = bisect_right(
+            observation_timestamps,
+            audit_timestamp,
+        ) - 1
+        if index < 0:
+            return None
+
+        methodology_timestamp = observation_timestamps[index]
+        lag = audit_timestamp - methodology_timestamp
+        if lag < timedelta(0):
+            raise RuntimeError(
+                "backward alignment selected a future observation"
+            )
+        method = (
+            "EXACT"
+            if methodology_timestamp == audit_timestamp
+            else "ASOF_BACKWARD"
+        )
+        return (
+            methodology_timestamp,
+            method,
+            lag.total_seconds() / 60.0,
+        )
 
     def _summarize_variant(
         self,
