@@ -23,6 +23,9 @@ from .methodology_condition_outcome_attribution import (
 from .methodology_counterfactual_cohorts import (
     MethodologyCounterfactualCohorts,
 )
+from .methodology_candidate_rule_simulator import (
+    MethodologyCandidateRuleSimulator,
+)
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -84,6 +87,12 @@ class BacktestRunner:
 
         self.methodology_counterfactual_cohorts = (
             MethodologyCounterfactualCohorts(
+                config.output_directory,
+            )
+        )
+
+        self.methodology_candidate_rule_simulator = (
+            MethodologyCandidateRuleSimulator(
                 config.output_directory,
             )
         )
@@ -397,6 +406,11 @@ class BacktestRunner:
             window_metadata=self._last_actual_window,
         )
         self.methodology_counterfactual_cohorts.export(
+            methodology_observations,
+            methodology_outcomes,
+            window_metadata=self._last_actual_window,
+        )
+        self.methodology_candidate_rule_simulator.export(
             methodology_observations,
             methodology_outcomes,
             window_metadata=self._last_actual_window,
