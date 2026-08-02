@@ -381,19 +381,48 @@ def test_aligns_active_audit_asof_backward_without_lookahead() -> None:
 def test_rejects_alignment_when_backward_lag_exceeds_limit() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     audit_timestamp = start + timedelta(minutes=20)
-    observation = _observation(
-        start,
-        direction=MethodologyDirection.BULLISH,
-        satisfied=("ORDER_BLOCK_PRESENT", "STRUCTURE_EVENT_ALIGNED"),
-        failed=(),
+    later_timestamp = start + timedelta(minutes=30)
+    observations = (
+        _observation(
+            start,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+        _observation(
+            later_timestamp,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+    )
+    outcomes = (
+        _outcome(
+            start,
+            direction=MethodologyDirection.BULLISH,
+            favorable=True,
+            return_percent=1.0,
+        ),
+        _outcome(
+            later_timestamp,
+            direction=MethodologyDirection.BULLISH,
+            favorable=True,
+            return_percent=1.0,
+        ),
     )
 
     payload, rows = MethodologyShadowDecisionComparison(
         maximum_alignment_lag_minutes=15,
     ).calculate(
-        (observation,),
+        observations,
         (_audit(audit_timestamp, accepted=False),),
-        (),
+        outcomes,
     )
 
     assert rows == []
@@ -408,14 +437,108 @@ def test_rejects_alignment_when_backward_lag_exceeds_limit() -> None:
             "reason": "ALIGNMENT_LAG_EXCEEDED",
         }
     ]
+    assert payload["common_window"][
+        "alignment_coverage_rate_inside_window"
+    ] == 0.0
 
 
-def test_reports_no_prior_methodology_observation() -> None:
+def test_classifies_audits_outside_common_window() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
-    audit_timestamp = start
-    methodology_timestamp = start + timedelta(minutes=5)
+    methodology_start = start + timedelta(minutes=5)
+    common_end = start + timedelta(minutes=20)
+    audits = (
+        _audit(start, accepted=False),
+        _audit(methodology_start, accepted=False),
+        _audit(common_end, accepted=False),
+        _audit(common_end + timedelta(minutes=5), accepted=False),
+    )
+    observations = (
+        _observation(
+            methodology_start,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+        _observation(
+            common_end,
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+        _observation(
+            common_end + timedelta(minutes=5),
+            direction=MethodologyDirection.BULLISH,
+            satisfied=(
+                "ORDER_BLOCK_PRESENT",
+                "STRUCTURE_EVENT_ALIGNED",
+            ),
+            failed=(),
+        ),
+    )
+    outcomes = (
+        _outcome(
+            methodology_start,
+            direction=MethodologyDirection.BULLISH,
+            favorable=True,
+            return_percent=1.0,
+        ),
+        _outcome(
+            common_end,
+            direction=MethodologyDirection.BULLISH,
+            favorable=True,
+            return_percent=1.0,
+        ),
+    )
+
+    payload, rows = MethodologyShadowDecisionComparison().calculate(
+        observations,
+        audits,
+        outcomes,
+    )
+
+    assert len(rows) == 2
+    assert payload["common_window"] == {
+        "basis": (
+            "INTERSECTION_OF_ACTIVE_AUDITS_"
+            "METHODOLOGY_OBSERVATIONS_"
+            "AND_COMPLETE_24_BAR_OUTCOMES"
+        ),
+        "start": methodology_start.isoformat(),
+        "end": common_end.isoformat(),
+        "audit_count_before_window": 1,
+        "audit_count_inside_window": 2,
+        "audit_count_after_window": 1,
+        "methodology_observation_count_inside_window": 2,
+        "complete_outcome_timestamp_count_inside_window": 2,
+        "alignment_coverage_rate_inside_window": 1.0,
+        "outside_window_classification": "OUTSIDE_COMMON_WINDOW",
+    }
+    assert payload["unmatched_audit_count"] == 0
+    assert payload["outside_common_window"] == {
+        "before_count": 1,
+        "before_first_timestamp": start.isoformat(),
+        "before_last_timestamp": start.isoformat(),
+        "after_count": 1,
+        "after_first_timestamp": (
+            common_end + timedelta(minutes=5)
+        ).isoformat(),
+        "after_last_timestamp": (
+            common_end + timedelta(minutes=5)
+        ).isoformat(),
+        "classification": "OUTSIDE_COMMON_WINDOW",
+    }
+
+
+def test_reports_empty_common_window_when_required_domain_missing() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
     observation = _observation(
-        methodology_timestamp,
+        start,
         direction=MethodologyDirection.BULLISH,
         satisfied=("ORDER_BLOCK_PRESENT", "STRUCTURE_EVENT_ALIGNED"),
         failed=(),
@@ -423,17 +546,17 @@ def test_reports_no_prior_methodology_observation() -> None:
 
     payload, rows = MethodologyShadowDecisionComparison().calculate(
         (observation,),
-        (_audit(audit_timestamp, accepted=False),),
+        (_audit(start, accepted=False),),
         (),
     )
 
     assert rows == []
-    assert payload["unmatched_audits"] == [
-        {
-            "active_audit_timestamp": audit_timestamp.isoformat(),
-            "reason": "NO_PRIOR_METHODOLOGY_OBSERVATION",
-        }
-    ]
+    assert payload["common_window"]["start"] is None
+    assert payload["common_window"]["end"] is None
+    assert payload["common_window"][
+        "audit_count_inside_window"
+    ] == 0
+    assert payload["aligned_audit_count"] == 0
 
 
 def test_alignment_limit_validation() -> None:

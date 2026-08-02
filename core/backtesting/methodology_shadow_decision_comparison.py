@@ -166,6 +166,28 @@ class MethodologyShadowDecisionComparison:
             if item.methodology is MethodologyIdentifier.SMC
             and item.horizon_bars == self.HORIZON_BARS
         }
+        complete_outcome_timestamps = tuple(
+            sorted(
+                {
+                    item.observation_timestamp.astimezone(UTC)
+                    for item in evaluations_tuple
+                    if item.methodology is MethodologyIdentifier.SMC
+                    and item.horizon_bars == self.HORIZON_BARS
+                    and item.horizon_complete
+                }
+            )
+        )
+        common_window = self._common_window(
+            audit_timestamps=tuple(sorted(audit_index)),
+            observation_timestamps=observation_timestamps,
+            complete_outcome_timestamps=complete_outcome_timestamps,
+        )
+        common_window_start = (
+            common_window[0] if common_window is not None else None
+        )
+        common_window_end = (
+            common_window[1] if common_window is not None else None
+        )
 
         alignments: list[
             tuple[
@@ -178,10 +200,21 @@ class MethodologyShadowDecisionComparison:
             ]
         ] = []
         unmatched_audits: list[dict[str, object]] = []
+        audits_before_common_window: list[datetime] = []
+        audits_after_common_window: list[datetime] = []
         exact_count = 0
         asof_count = 0
 
         for audit_timestamp in sorted(audit_index):
+            if common_window_start is None or common_window_end is None:
+                continue
+            if audit_timestamp < common_window_start:
+                audits_before_common_window.append(audit_timestamp)
+                continue
+            if audit_timestamp > common_window_end:
+                audits_after_common_window.append(audit_timestamp)
+                continue
+
             audit = audit_index[audit_timestamp]
             matched = self._align_observation_timestamp(
                 audit_timestamp,
@@ -348,6 +381,53 @@ class MethodologyShadowDecisionComparison:
             "observation_count": len(observations_tuple),
             "audit_count": len(audits_tuple),
             "evaluation_count": len(evaluations_tuple),
+            "common_window": {
+                "basis": (
+                    "INTERSECTION_OF_ACTIVE_AUDITS_"
+                    "METHODOLOGY_OBSERVATIONS_"
+                    "AND_COMPLETE_24_BAR_OUTCOMES"
+                ),
+                "start": (
+                    common_window_start.isoformat()
+                    if common_window_start is not None
+                    else None
+                ),
+                "end": (
+                    common_window_end.isoformat()
+                    if common_window_end is not None
+                    else None
+                ),
+                "audit_count_before_window": len(
+                    audits_before_common_window
+                ),
+                "audit_count_inside_window": (
+                    len(alignments) + len(unmatched_audits)
+                ),
+                "audit_count_after_window": len(
+                    audits_after_common_window
+                ),
+                "methodology_observation_count_inside_window": (
+                    self._count_inside_window(
+                        observation_timestamps,
+                        common_window_start,
+                        common_window_end,
+                    )
+                ),
+                "complete_outcome_timestamp_count_inside_window": (
+                    self._count_inside_window(
+                        complete_outcome_timestamps,
+                        common_window_start,
+                        common_window_end,
+                    )
+                ),
+                "alignment_coverage_rate_inside_window": (
+                    len(alignments)
+                    / (len(alignments) + len(unmatched_audits))
+                    if len(alignments) + len(unmatched_audits)
+                    else None
+                ),
+                "outside_window_classification": "OUTSIDE_COMMON_WINDOW",
+            },
             "alignment_policy": {
                 "anchor": "ACTIVE_AUDIT_TIMESTAMP",
                 "method": "EXACT_OR_ASOF_BACKWARD",
@@ -361,6 +441,31 @@ class MethodologyShadowDecisionComparison:
             "asof_backward_alignment_count": asof_count,
             "unmatched_audit_count": len(unmatched_audits),
             "unmatched_audits": unmatched_audits,
+            "outside_common_window": {
+                "before_count": len(audits_before_common_window),
+                "before_first_timestamp": (
+                    audits_before_common_window[0].isoformat()
+                    if audits_before_common_window
+                    else None
+                ),
+                "before_last_timestamp": (
+                    audits_before_common_window[-1].isoformat()
+                    if audits_before_common_window
+                    else None
+                ),
+                "after_count": len(audits_after_common_window),
+                "after_first_timestamp": (
+                    audits_after_common_window[0].isoformat()
+                    if audits_after_common_window
+                    else None
+                ),
+                "after_last_timestamp": (
+                    audits_after_common_window[-1].isoformat()
+                    if audits_after_common_window
+                    else None
+                ),
+                "classification": "OUTSIDE_COMMON_WINDOW",
+            },
             "unused_methodology_observation_count": len(
                 unused_observations
             ),
@@ -375,6 +480,44 @@ class MethodologyShadowDecisionComparison:
             "future_information_used_for_research_only": True,
         }
         return payload, rows
+
+    @staticmethod
+    def _common_window(
+        *,
+        audit_timestamps: tuple[datetime, ...],
+        observation_timestamps: tuple[datetime, ...],
+        complete_outcome_timestamps: tuple[datetime, ...],
+    ) -> tuple[datetime, datetime] | None:
+        if (
+            not audit_timestamps
+            or not observation_timestamps
+            or not complete_outcome_timestamps
+        ):
+            return None
+
+        start = max(
+            audit_timestamps[0],
+            observation_timestamps[0],
+            complete_outcome_timestamps[0],
+        )
+        end = min(
+            audit_timestamps[-1],
+            observation_timestamps[-1],
+            complete_outcome_timestamps[-1],
+        )
+        if start > end:
+            return None
+        return start, end
+
+    @staticmethod
+    def _count_inside_window(
+        timestamps: tuple[datetime, ...],
+        start: datetime | None,
+        end: datetime | None,
+    ) -> int:
+        if start is None or end is None:
+            return 0
+        return sum(start <= timestamp <= end for timestamp in timestamps)
 
     def _align_observation_timestamp(
         self,
