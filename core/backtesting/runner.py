@@ -26,6 +26,9 @@ from .methodology_counterfactual_cohorts import (
 from .methodology_candidate_rule_simulator import (
     MethodologyCandidateRuleSimulator,
 )
+from .methodology_shadow_decision_comparison import (
+    MethodologyShadowDecisionComparison,
+)
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -93,6 +96,12 @@ class BacktestRunner:
 
         self.methodology_candidate_rule_simulator = (
             MethodologyCandidateRuleSimulator(
+                config.output_directory,
+            )
+        )
+
+        self.methodology_shadow_decision_comparison = (
+            MethodologyShadowDecisionComparison(
                 config.output_directory,
             )
         )
@@ -412,6 +421,12 @@ class BacktestRunner:
         )
         self.methodology_candidate_rule_simulator.export(
             methodology_observations,
+            methodology_outcomes,
+            window_metadata=self._last_actual_window,
+        )
+        self.methodology_shadow_decision_comparison.export(
+            methodology_observations,
+            tuple(self.engine.observation_audits),
             methodology_outcomes,
             window_metadata=self._last_actual_window,
         )
