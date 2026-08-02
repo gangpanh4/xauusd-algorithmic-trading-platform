@@ -80,8 +80,8 @@ def test_run_backtest_uses_bounded_composite_research_path(
 
     expected_end_time = datetime(
         2026,
-        7,
-        27,
+        4,
+        9,
         23,
         59,
         tzinfo=UTC,
@@ -103,7 +103,7 @@ def test_run_backtest_uses_bounded_composite_research_path(
     stdout = capsys.readouterr().out
     assert "XAUUSD HISTORICAL BACKTEST" in stdout
     assert "Bars requested  : 20,000" in stdout
-    assert "2026-07-27T23:59:00+00:00" in stdout
+    assert "2026-04-09T23:59:00+00:00" in stdout
     assert "Trades          : 1" in stdout
     assert "Win Rate        : 100.00%" in stdout
     assert "Net Profit      : 155.82" in stdout

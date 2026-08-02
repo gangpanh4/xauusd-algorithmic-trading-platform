@@ -19,8 +19,8 @@ from core.backtesting.runner import BacktestRunner
 HISTORICAL_BARS = 20_000
 HISTORICAL_END_TIME = datetime(
     2026,
-    7,
-    27,
+    4,
+    9,
     23,
     59,
     tzinfo=UTC,
