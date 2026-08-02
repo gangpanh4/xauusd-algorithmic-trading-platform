@@ -40,7 +40,7 @@ class MethodologyVariantBShadowScoring:
         "Alignment Lag Minutes",
         "Variant",
         "Score",
-        "Score Band",
+        "Research Cohort",
         "Bearish Direction Points",
         "Compatible Sweep Failed Points",
         "Bearish Direction Satisfied",
@@ -211,7 +211,10 @@ class MethodologyVariantBShadowScoring:
                 else 0
             )
             score = bearish_points + sweep_points
-            score_band = self._score_band(score)
+            research_cohort = self._research_cohort(
+                bearish=bearish,
+                sweep_failed=sweep_failed,
+            )
             favorable = (
                 outcome.favorable_terminal_outcome
                 if outcome is not None and outcome.horizon_complete
@@ -229,7 +232,7 @@ class MethodologyVariantBShadowScoring:
                     "Alignment Lag Minutes": lag_minutes,
                     "Variant": self.VARIANT,
                     "Score": score,
-                    "Score Band": score_band,
+                    "Research Cohort": research_cohort,
                     "Bearish Direction Points": bearish_points,
                     "Compatible Sweep Failed Points": sweep_points,
                     "Bearish Direction Satisfied": bearish,
@@ -274,16 +277,33 @@ class MethodologyVariantBShadowScoring:
                 }
             )
 
-        band_summaries = [
-            self._summarize_band(band, rows)
-            for band in ("SCORE_0", "SCORE_50", "SCORE_100")
+        cohort_summaries = [
+            self._summarize_cohort(cohort, rows)
+            for cohort in (
+                "SCORE_50_BASELINE",
+                "SCORE_100_VARIANT_B",
+            )
+        ]
+        out_of_scope_rows = [
+            row
+            for row in rows
+            if row["Research Cohort"] == "OUT_OF_SCOPE_DIRECTION"
         ]
         inside = len(rows) + unmatched
         payload = {
             "variant": self.VARIANT,
             "horizon_bars": self.HORIZON_BARS,
             "component_weights": dict(self.COMPONENT_WEIGHTS),
-            "score_bands": band_summaries,
+            "cohorts": cohort_summaries,
+            "out_of_scope_direction": {
+                "classification": "OUT_OF_SCOPE_DIRECTION",
+                "sample_count": len(out_of_scope_rows),
+                "excluded_from_outcome_cohort_statistics": True,
+                "active_accepted_count": sum(
+                    bool(row["Active Accepted"])
+                    for row in out_of_scope_rows
+                ),
+            },
             "window_metadata": metadata,
             "common_window": {
                 "start": (
@@ -327,21 +347,36 @@ class MethodologyVariantBShadowScoring:
         return payload, rows
 
     @staticmethod
-    def _score_band(score: int) -> str:
-        if score == 0:
-            return "SCORE_0"
-        if score == 50:
-            return "SCORE_50"
-        if score == 100:
-            return "SCORE_100"
-        raise ValueError("Variant B score must be 0, 50, or 100")
+    def _research_cohort(
+        *,
+        bearish: bool,
+        sweep_failed: bool,
+    ) -> str:
+        if not bearish:
+            return "OUT_OF_SCOPE_DIRECTION"
+        if sweep_failed:
+            return "SCORE_100_VARIANT_B"
+        return "SCORE_50_BASELINE"
 
     @staticmethod
-    def _summarize_band(
-        band: str,
+    def _summarize_cohort(
+        cohort: str,
         rows: Sequence[Mapping[str, object]],
     ) -> dict[str, object]:
-        selected = [row for row in rows if row["Score Band"] == band]
+        selected = [
+            row
+            for row in rows
+            if row["Research Cohort"] == cohort
+        ]
+        if any(
+            not bool(row["Bearish Direction Satisfied"])
+            for row in selected
+        ):
+            raise RuntimeError(
+                "direction-conditioned cohorts cannot contain "
+                "non-bearish observations"
+            )
+
         complete = [
             row
             for row in selected
@@ -368,11 +403,22 @@ class MethodologyVariantBShadowScoring:
         favorable_count = sum(
             row["Favorable Outcome"] is True for row in complete
         )
+        expected_score = (
+            100
+            if cohort == "SCORE_100_VARIANT_B"
+            else 50
+        )
         return {
-            "score_band": band,
-            "score": int(band.rsplit("_", 1)[1]),
+            "research_cohort": cohort,
+            "score": expected_score,
+            "direction": MethodologyDirection.BEARISH.value,
             "sample_count": len(selected),
             "complete_outcome_count": len(complete),
+            "outcome_coverage_rate": (
+                len(complete) / len(selected)
+                if selected
+                else None
+            ),
             "favorable_count": favorable_count,
             "unfavorable_count": len(complete) - favorable_count,
             "favorable_rate": (

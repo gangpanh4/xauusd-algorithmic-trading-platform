@@ -198,11 +198,17 @@ def test_scores_only_frozen_variant_b_components() -> None:
     )
 
     assert [row["Score"] for row in rows] == [0, 50, 100]
-    assert [row["Score Band"] for row in rows] == [
-        "SCORE_0",
-        "SCORE_50",
-        "SCORE_100",
+    assert [row["Research Cohort"] for row in rows] == [
+        "OUT_OF_SCOPE_DIRECTION",
+        "SCORE_50_BASELINE",
+        "SCORE_100_VARIANT_B",
     ]
+    assert payload["out_of_scope_direction"] == {
+        "classification": "OUT_OF_SCOPE_DIRECTION",
+        "sample_count": 1,
+        "excluded_from_outcome_cohort_statistics": True,
+        "active_accepted_count": 0,
+    }
     assert rows[-1]["Variant B Eligible"] is True
     assert payload["component_weights"] == {
         "BEARISH_DIRECTION": 50,
@@ -214,7 +220,7 @@ def test_scores_only_frozen_variant_b_components() -> None:
     assert payload["position_sizing_authority"] is False
 
 
-def test_summarizes_score_bands_against_24_bar_outcomes() -> None:
+def test_summarizes_direction_conditioned_cohorts() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     observations = (
         _observation(
@@ -247,17 +253,71 @@ def test_summarizes_score_bands_against_24_bar_outcomes() -> None:
         outcomes,
     )
 
-    score_100 = next(
+    variant_b = next(
         item
-        for item in payload["score_bands"]
-        if item["score_band"] == "SCORE_100"
+        for item in payload["cohorts"]
+        if item["research_cohort"] == "SCORE_100_VARIANT_B"
     )
-    assert score_100["sample_count"] == 2
-    assert score_100["favorable_rate"] == 0.5
-    assert score_100["average_directional_return_percent"] == 0.5
-    assert score_100["active_accepted_count"] == 1
-    assert score_100["active_rejection_reason_counts"] == {
+    assert variant_b["direction"] == "BEARISH"
+    assert variant_b["sample_count"] == 2
+    assert variant_b["complete_outcome_count"] == 2
+    assert variant_b["outcome_coverage_rate"] == 1.0
+    assert variant_b["favorable_rate"] == 0.5
+    assert variant_b["average_directional_return_percent"] == 0.5
+    assert variant_b["active_accepted_count"] == 1
+    assert variant_b["active_rejection_reason_counts"] == {
         "PROBABILITY_REJECTED": 1
+    }
+
+
+
+def test_excludes_non_bearish_rows_from_cohort_statistics() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    observations = (
+        _observation(
+            start,
+            direction=MethodologyDirection.BULLISH,
+            sweep_failed=True,
+        ),
+        _observation(
+            start + timedelta(minutes=5),
+            direction=MethodologyDirection.BEARISH,
+            sweep_failed=False,
+        ),
+        _observation(
+            start + timedelta(minutes=10),
+            direction=MethodologyDirection.BEARISH,
+            sweep_failed=True,
+        ),
+    )
+    audits = tuple(_audit(item.timestamp) for item in observations)
+    outcomes = tuple(
+        _outcome(
+            item.timestamp,
+            favorable=True,
+            return_percent=1.0,
+        )
+        for item in observations
+    )
+
+    payload, rows = MethodologyVariantBShadowScoring().calculate(
+        observations,
+        audits,
+        outcomes,
+    )
+
+    assert len(rows) == 3
+    assert payload["out_of_scope_direction"]["sample_count"] == 1
+    assert sum(
+        cohort["sample_count"]
+        for cohort in payload["cohorts"]
+    ) == 2
+    assert {
+        cohort["research_cohort"]
+        for cohort in payload["cohorts"]
+    } == {
+        "SCORE_50_BASELINE",
+        "SCORE_100_VARIANT_B",
     }
 
 
@@ -284,6 +344,7 @@ def test_exports_csv_and_json(tmp_path) -> None:
 
     assert len(rows) == 1
     assert rows[0]["Score"] == "100"
+    assert rows[0]["Research Cohort"] == "SCORE_100_VARIANT_B"
     assert payload["window_metadata"] == {
         "requested_end_time": "2026-04-09"
     }
