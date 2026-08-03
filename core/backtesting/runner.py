@@ -65,6 +65,9 @@ from .methodology_variant_b_alignment_integrity import (
 from .methodology_variant_b_probability_subset import (
     MethodologyVariantBProbabilitySubset,
 )
+from .methodology_variant_b_shadow_exception_monitor import (
+    MethodologyVariantBShadowExceptionMonitor,
+)
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -213,6 +216,12 @@ class BacktestRunner:
 
         self.methodology_variant_b_probability_subset = (
             MethodologyVariantBProbabilitySubset(
+                config.output_directory,
+            )
+        )
+
+        self.methodology_variant_b_shadow_exception_monitor = (
+            MethodologyVariantBShadowExceptionMonitor(
                 config.output_directory,
             )
         )
@@ -600,6 +609,12 @@ class BacktestRunner:
             window_metadata=self._last_actual_window,
         )
         self.methodology_variant_b_probability_subset.export(
+            methodology_observations,
+            tuple(self.engine.observation_audits),
+            self._last_m5_bars,
+            window_metadata=self._last_actual_window,
+        )
+        self.methodology_variant_b_shadow_exception_monitor.export(
             methodology_observations,
             tuple(self.engine.observation_audits),
             self._last_m5_bars,
