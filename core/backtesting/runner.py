@@ -56,6 +56,9 @@ from .methodology_variant_b_confirmation_delay import (
 from .methodology_variant_b_statistical_stability import (
     MethodologyVariantBStatisticalStability,
 )
+from .methodology_variant_b_shadow_integration import (
+    MethodologyVariantBShadowIntegration,
+)
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -186,6 +189,12 @@ class BacktestRunner:
 
         self.methodology_variant_b_statistical_stability = (
             MethodologyVariantBStatisticalStability(
+                config.output_directory,
+            )
+        )
+
+        self.methodology_variant_b_shadow_integration = (
+            MethodologyVariantBShadowIntegration(
                 config.output_directory,
             )
         )
@@ -557,6 +566,12 @@ class BacktestRunner:
         )
         self.methodology_variant_b_statistical_stability.export(
             methodology_observations,
+            self._last_m5_bars,
+            window_metadata=self._last_actual_window,
+        )
+        self.methodology_variant_b_shadow_integration.export(
+            methodology_observations,
+            tuple(self.engine.observation_audits),
             self._last_m5_bars,
             window_metadata=self._last_actual_window,
         )
