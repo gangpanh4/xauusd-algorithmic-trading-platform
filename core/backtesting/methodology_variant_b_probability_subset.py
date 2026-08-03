@@ -73,6 +73,37 @@ class MethodologyVariantBProbabilitySubset:
         "Bootstrap Probability Mean Above Zero",
     )
 
+    _DETAIL_CSV_COLUMNS: Final[tuple[str, ...]] = (
+        "Variant",
+        "Requested End Time",
+        "M5 Window First Timestamp",
+        "M5 Window Last Timestamp",
+        "Observation Timestamp",
+        "Entry Timestamp",
+        "Exit Timestamp",
+        "Probability Value",
+        "Probability Band",
+        "ATR 14",
+        "Entry Price",
+        "Stop ATR Multiple",
+        "Stop Price",
+        "Target R",
+        "Target Price",
+        "Exit Price",
+        "Gross Result R",
+        "Net R Zero Cost",
+        "Net R Low Cost",
+        "Net R Medium Cost",
+        "Net R High Cost",
+        "Exit Reason",
+        "Holding Bars",
+        "Same Candle Dual Touch",
+        "Maximum Favorable Excursion R",
+        "Maximum Adverse Excursion R",
+        "Session",
+        "Regime",
+    )
+
     def __init__(
         self,
         output_directory: str | Path = "output/backtests",
@@ -110,6 +141,23 @@ class MethodologyVariantBProbabilitySubset:
             )
             writer.writeheader()
             writer.writerows(rows)
+
+        detail_csv_path = (
+            self.output_directory
+            / "methodology_variant_b_probability_subset_trades.csv"
+        )
+        with detail_csv_path.open(
+            "w",
+            newline="",
+            encoding="utf-8",
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=list(self._DETAIL_CSV_COLUMNS),
+                extrasaction="raise",
+            )
+            writer.writeheader()
+            writer.writerows(payload["trade_details"])
 
         json_path = (
             self.output_directory
@@ -266,6 +314,10 @@ class MethodologyVariantBProbabilitySubset:
         best_five_removed = self._remove_best_five_percent(
             zero_cost_values
         )
+        trade_details = self._trade_details(
+            subset,
+            window_metadata=window_metadata,
+        )
 
         payload = {
             "variant": self.VARIANT,
@@ -323,6 +375,16 @@ class MethodologyVariantBProbabilitySubset:
                 },
             },
             "best_5_percent_concentration": best_five_removed,
+            "trade_details": trade_details,
+            "detail_export": {
+                "file_name": (
+                    "methodology_variant_b_probability_subset_trades.csv"
+                ),
+                "row_count": len(trade_details),
+                "scope": (
+                    "STRICT_EXACT_PROBABILITY_REJECTED_TRADES_ALL_BANDS"
+                ),
+            },
             "cost_definition": (
                 "Adverse total round-trip price cost converted to R "
                 "using each trade's pre-entry ATR stop distance."
@@ -346,6 +408,99 @@ class MethodologyVariantBProbabilitySubset:
             "future_information_used_for_research_only": True,
         }
         return payload, rows
+
+    def _trade_details(
+        self,
+        subset: Sequence[
+            tuple[VariantBATRShadowResult, PipelineObservationAudit]
+        ],
+        *,
+        window_metadata: Mapping[str, object] | None,
+    ) -> list[dict[str, object]]:
+        metadata = dict(window_metadata or {})
+        actual = metadata.get("actual", {})
+        m5 = actual.get("m5", {}) if isinstance(actual, Mapping) else {}
+
+        requested_end_time = metadata.get("requested_end_time")
+        m5_first = (
+            m5.get("first_timestamp")
+            if isinstance(m5, Mapping)
+            else None
+        )
+        m5_last = (
+            m5.get("last_timestamp")
+            if isinstance(m5, Mapping)
+            else None
+        )
+
+        details: list[dict[str, object]] = []
+        for result, audit in sorted(
+            subset,
+            key=lambda item: item[0].observation_timestamp,
+        ):
+            probability_value = audit.probability_value
+            if probability_value is None:
+                continue
+
+            stop_distance = (
+                result.atr_14 * self.STOP_ATR_MULTIPLE
+            )
+            net_by_cost = {
+                name: (
+                    result.result_r
+                    - (
+                        cost_price_units / stop_distance
+                        if stop_distance > 0.0
+                        else 0.0
+                    )
+                )
+                for name, cost_price_units
+                in self.ROUND_TRIP_COST_PRICE_UNITS
+            }
+
+            details.append(
+                {
+                    "Variant": self.VARIANT,
+                    "Requested End Time": requested_end_time,
+                    "M5 Window First Timestamp": m5_first,
+                    "M5 Window Last Timestamp": m5_last,
+                    "Observation Timestamp": (
+                        result.observation_timestamp.isoformat()
+                    ),
+                    "Entry Timestamp": result.entry_timestamp.isoformat(),
+                    "Exit Timestamp": result.exit_timestamp.isoformat(),
+                    "Probability Value": probability_value,
+                    "Probability Band": self._band_label(
+                        probability_value
+                    ),
+                    "ATR 14": result.atr_14,
+                    "Entry Price": result.entry_price,
+                    "Stop ATR Multiple": result.stop_atr_multiple,
+                    "Stop Price": result.stop_price,
+                    "Target R": result.target_r,
+                    "Target Price": result.target_price,
+                    "Exit Price": result.exit_price,
+                    "Gross Result R": result.result_r,
+                    "Net R Zero Cost": net_by_cost["ZERO_COST"],
+                    "Net R Low Cost": net_by_cost["LOW_COST"],
+                    "Net R Medium Cost": net_by_cost["MEDIUM_COST"],
+                    "Net R High Cost": net_by_cost["HIGH_COST"],
+                    "Exit Reason": result.exit_reason,
+                    "Holding Bars": result.holding_bars,
+                    "Same Candle Dual Touch": (
+                        result.same_candle_dual_touch
+                    ),
+                    "Maximum Favorable Excursion R": (
+                        result.maximum_favorable_excursion_r
+                    ),
+                    "Maximum Adverse Excursion R": (
+                        result.maximum_adverse_excursion_r
+                    ),
+                    "Session": result.session,
+                    "Regime": result.regime,
+                }
+            )
+        return details
 
     def _band_label(self, value: float) -> str:
         for lower, upper in self.PROBABILITY_BANDS:

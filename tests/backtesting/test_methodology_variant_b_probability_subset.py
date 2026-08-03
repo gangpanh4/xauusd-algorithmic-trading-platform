@@ -163,3 +163,54 @@ def test_safety_flags_remain_false() -> None:
 
     assert payload["trade_authority"] is False
     assert payload["active_pipeline_modified"] is False
+
+
+def test_exports_raw_strict_exact_trade_details(tmp_path) -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    observation = _observation(start + timedelta(minutes=100))
+    study = MethodologyVariantBProbabilitySubset(tmp_path)
+
+    payload, _ = study.calculate(
+        (observation,),
+        (_audit(observation.timestamp, 0.55),),
+        _bars(start),
+        window_metadata={
+            "requested_end_time": "2026-04-09T23:59:00+00:00",
+            "actual": {
+                "m5": {
+                    "first_timestamp": "2025-12-24T10:05:00+00:00",
+                    "last_timestamp": "2026-04-09T22:55:00+00:00",
+                }
+            },
+        },
+    )
+
+    assert payload["detail_export"]["row_count"] == 1
+    detail = payload["trade_details"][0]
+    assert detail["Probability Band"] == "[0.5,0.6)"
+    assert detail["Probability Value"] == 0.55
+    assert detail["Net R Zero Cost"] == detail["Gross Result R"]
+    assert detail["Requested End Time"] == (
+        "2026-04-09T23:59:00+00:00"
+    )
+
+
+def test_export_writes_probability_subset_trade_csv(tmp_path) -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    observation = _observation(start + timedelta(minutes=100))
+    study = MethodologyVariantBProbabilitySubset(tmp_path)
+
+    study.export(
+        (observation,),
+        (_audit(observation.timestamp, 0.55),),
+        _bars(start),
+    )
+
+    detail_path = (
+        tmp_path
+        / "methodology_variant_b_probability_subset_trades.csv"
+    )
+    assert detail_path.exists()
+    text = detail_path.read_text(encoding="utf-8")
+    assert "Probability Value" in text
+    assert "[0.5,0.6)" in text
