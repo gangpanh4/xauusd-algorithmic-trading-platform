@@ -50,6 +50,9 @@ from .methodology_variant_b_execution_context import (
 from .methodology_variant_b_cluster_selection import (
     MethodologyVariantBClusterSelection,
 )
+from .methodology_variant_b_confirmation_delay import (
+    MethodologyVariantBConfirmationDelay,
+)
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
 )
@@ -168,6 +171,12 @@ class BacktestRunner:
 
         self.methodology_variant_b_cluster_selection = (
             MethodologyVariantBClusterSelection(
+                config.output_directory,
+            )
+        )
+
+        self.methodology_variant_b_confirmation_delay = (
+            MethodologyVariantBConfirmationDelay(
                 config.output_directory,
             )
         )
@@ -528,6 +537,11 @@ class BacktestRunner:
             window_metadata=self._last_actual_window,
         )
         self.methodology_variant_b_cluster_selection.export(
+            methodology_observations,
+            self._last_m5_bars,
+            window_metadata=self._last_actual_window,
+        )
+        self.methodology_variant_b_confirmation_delay.export(
             methodology_observations,
             self._last_m5_bars,
             window_metadata=self._last_actual_window,
