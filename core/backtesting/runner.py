@@ -403,6 +403,12 @@ class BacktestRunner:
                 return None
             return normalized_timestamp(values[-1])
 
+        config = getattr(self, "config", None)
+        if config is None:
+            # Compatibility for focused tests and legacy integrations that
+            # intentionally construct BacktestRunner without calling __init__.
+            config = BacktestConfig()
+
         self._last_actual_window = {
             "requested_bars_per_timeframe": requested_bars,
             "requested_end_time": (
@@ -431,6 +437,28 @@ class BacktestRunner:
                     "first_timestamp": first_timestamp(h4_bars),
                     "last_timestamp": last_timestamp(h4_bars),
                 },
+            },
+            "execution_cost_assumptions": {
+                "profile": config.cost_assumption_profile,
+                "verified": config.cost_assumptions_verified,
+                "spread_points": config.spread_points,
+                "slippage_points": config.slippage_points,
+                "commission_per_trade": (
+                    config.commission_per_trade
+                ),
+                "commission_per_lot": config.commission_per_lot,
+                "spread_definition": (
+                    "Configured round-trip spread points applied by the "
+                    "historical simulator."
+                ),
+                "slippage_definition": (
+                    "Configured adverse points used by the simulator; this "
+                    "is separate from MT5 order-deviation tolerance."
+                ),
+                "commission_definition": (
+                    "Explicit account-specific assumptions; not inferred "
+                    "from MT5 symbol metadata."
+                ),
             },
             "closed_candle_only": True,
             "no_lookahead": True,

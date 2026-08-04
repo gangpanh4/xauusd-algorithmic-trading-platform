@@ -20,6 +20,17 @@ from core.mt5_execution.symbol_specification import (
 
 
 HISTORICAL_BARS = 20_000
+
+# Explicit execution-cost assumptions for this historical run.
+# Zero remains the safe placeholder until broker/account-specific values are
+# verified. These values are recorded in historical_window.json.
+BACKTEST_SPREAD_POINTS = 0.0
+BACKTEST_SLIPPAGE_POINTS = 0.0
+BACKTEST_COMMISSION_PER_TRADE = 0.0
+BACKTEST_COMMISSION_PER_LOT = 0.0
+BACKTEST_COST_ASSUMPTION_PROFILE = "UNVERIFIED_ZERO_COST"
+BACKTEST_COST_ASSUMPTIONS_VERIFIED = False
+
 HISTORICAL_END_TIME = datetime(
     2026,
     4,
@@ -53,6 +64,16 @@ def main() -> None:
                 lot_step=symbol_spec.lot_step,
                 minimum_lot=symbol_spec.minimum_lot,
                 maximum_lot=symbol_spec.maximum_lot,
+                spread_points=BACKTEST_SPREAD_POINTS,
+                slippage_points=BACKTEST_SLIPPAGE_POINTS,
+                commission_per_trade=BACKTEST_COMMISSION_PER_TRADE,
+                commission_per_lot=BACKTEST_COMMISSION_PER_LOT,
+                cost_assumption_profile=(
+                    BACKTEST_COST_ASSUMPTION_PROFILE
+                ),
+                cost_assumptions_verified=(
+                    BACKTEST_COST_ASSUMPTIONS_VERIFIED
+                ),
             )
         else:
             # Compatibility for isolated entrypoint tests and non-production
@@ -60,7 +81,18 @@ def main() -> None:
             # A real MT5 runtime must expose symbol_info and therefore uses the
             # validated broker specification above.
             symbol_spec = None
-            config = BacktestConfig()
+            config = BacktestConfig(
+                spread_points=BACKTEST_SPREAD_POINTS,
+                slippage_points=BACKTEST_SLIPPAGE_POINTS,
+                commission_per_trade=BACKTEST_COMMISSION_PER_TRADE,
+                commission_per_lot=BACKTEST_COMMISSION_PER_LOT,
+                cost_assumption_profile=(
+                    BACKTEST_COST_ASSUMPTION_PROFILE
+                ),
+                cost_assumptions_verified=(
+                    BACKTEST_COST_ASSUMPTIONS_VERIFIED
+                ),
+            )
 
         runner = BacktestRunner(config)
 
@@ -82,6 +114,30 @@ def main() -> None:
             print(
                 "Minimum stop    : "
                 f"{symbol_spec.minimum_stop_distance}"
+            )
+
+        print(
+            "Cost profile     : "
+            f"{config.cost_assumption_profile}"
+        )
+        print(
+            "Costs verified   : "
+            f"{config.cost_assumptions_verified}"
+        )
+        print(f"Spread points   : {config.spread_points}")
+        print(f"Slippage points : {config.slippage_points}")
+        print(
+            "Commission/trade: "
+            f"{config.commission_per_trade}"
+        )
+        print(
+            "Commission/lot  : "
+            f"{config.commission_per_lot}"
+        )
+        if not config.cost_assumptions_verified:
+            print(
+                "WARNING          : Execution costs are not verified for "
+                "this broker account."
             )
 
         output = runner.run_with_strategy_comparison(

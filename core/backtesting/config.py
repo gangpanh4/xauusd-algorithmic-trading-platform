@@ -79,6 +79,10 @@ class BacktestConfig:
 
     slippage_points: float = 0.0
 
+    cost_assumption_profile: str = "UNVERIFIED_ZERO_COST"
+
+    cost_assumptions_verified: bool = False
+
     # ===========================
     # Trading Options
     # ===========================
