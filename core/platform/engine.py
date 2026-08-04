@@ -52,10 +52,19 @@ class TradingPlatform:
             )
 
         try:
-            config = BacktestConfig()
+            symbol = "XAUUSD"
+            symbol_spec = get_live_symbol_specification(symbol)
+            config = BacktestConfig(
+                stop_loss_distance=symbol_spec.minimum_stop_distance,
+                tick_size=symbol_spec.tick_size,
+                tick_value_per_lot=symbol_spec.tick_value_per_lot,
+                lot_step=symbol_spec.lot_step,
+                minimum_lot=symbol_spec.minimum_lot,
+                maximum_lot=symbol_spec.maximum_lot,
+            )
             runner = BacktestRunner(config)
             result = runner.run(
-                symbol="XAUUSD",
+                symbol=symbol,
                 timeframe=mt5.TIMEFRAME_M15,
                 bars=50000,
             )
@@ -131,11 +140,14 @@ class TradingPlatform:
             symbol_spec = get_live_symbol_specification(config.symbol)
             logger.info(
                 "Loaded %s risk specification: tick_size=%s "
-                "tick_value_per_lot=%s lot_step=%s minimum_stop=%s",
+                "tick_value_per_lot=%s lot_step=%s minimum_lot=%s "
+                "maximum_lot=%s minimum_stop=%s",
                 symbol_spec.symbol,
                 symbol_spec.tick_size,
                 symbol_spec.tick_value_per_lot,
                 symbol_spec.lot_step,
+                symbol_spec.minimum_lot,
+                symbol_spec.maximum_lot,
                 symbol_spec.minimum_stop_distance,
             )
 
@@ -162,6 +174,8 @@ class TradingPlatform:
                     pip_value=symbol_spec.tick_value_per_lot,
                     tick_size=symbol_spec.tick_size,
                     lot_step=symbol_spec.lot_step,
+                    minimum_lot=symbol_spec.minimum_lot,
+                    maximum_lot=symbol_spec.maximum_lot,
                     warmup=True,
                 )
 
@@ -218,6 +232,8 @@ class TradingPlatform:
                         pip_value=symbol_spec.tick_value_per_lot,
                         tick_size=symbol_spec.tick_size,
                         lot_step=symbol_spec.lot_step,
+                        minimum_lot=symbol_spec.minimum_lot,
+                        maximum_lot=symbol_spec.maximum_lot,
                     )
                     time.sleep(config.poll_interval_seconds)
 

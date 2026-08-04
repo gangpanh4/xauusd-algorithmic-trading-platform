@@ -1382,6 +1382,8 @@ class BacktestingEngine:
             risk_percent=self.config.risk_percent,
             use_virtual_balance=self.config.use_virtual_balance,
             virtual_balance=self.config.virtual_balance,
+            minimum_position_size=self.config.minimum_lot,
+            maximum_position_size=self.config.maximum_lot,
             maximum_open_positions=maximum_open_positions,
             allow_multiple_positions=False,
             spread_points=self.config.spread_points,

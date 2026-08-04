@@ -51,6 +51,8 @@ def main() -> None:
                 tick_size=symbol_spec.tick_size,
                 tick_value_per_lot=symbol_spec.tick_value_per_lot,
                 lot_step=symbol_spec.lot_step,
+                minimum_lot=symbol_spec.minimum_lot,
+                maximum_lot=symbol_spec.maximum_lot,
             )
         else:
             # Compatibility for isolated entrypoint tests and non-production
@@ -75,6 +77,8 @@ def main() -> None:
             print(f"Tick size       : {symbol_spec.tick_size}")
             print(f"Tick value/lot  : {symbol_spec.tick_value_per_lot}")
             print(f"Lot step        : {symbol_spec.lot_step}")
+            print(f"Minimum lot     : {symbol_spec.minimum_lot}")
+            print(f"Maximum lot     : {symbol_spec.maximum_lot}")
             print(
                 "Minimum stop    : "
                 f"{symbol_spec.minimum_stop_distance}"

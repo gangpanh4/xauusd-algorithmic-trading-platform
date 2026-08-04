@@ -242,6 +242,8 @@ class LiveTradingEngine:
         pip_value: float,
         tick_size: float = TradingPipeline.DEFAULT_TICK_SIZE,
         lot_step: float = TradingPipeline.DEFAULT_LOT_STEP,
+        minimum_lot: float | None = None,
+        maximum_lot: float | None = None,
         warmup: bool = False,
     ) -> LiveTradingResult:
         """Process the same synchronized MTF evidence used by backtesting."""
@@ -271,6 +273,8 @@ class LiveTradingEngine:
             pip_value=pip_value,
             tick_size=tick_size,
             lot_step=lot_step,
+            minimum_lot=minimum_lot,
+            maximum_lot=maximum_lot,
         )
         return self._finalize_observation(
             observation_bar=observation_bar,

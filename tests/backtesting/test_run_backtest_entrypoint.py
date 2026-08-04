@@ -143,3 +143,57 @@ def test_run_backtest_shuts_down_mt5_when_composite_run_fails(
         raise AssertionError("expected composite failure")
 
     assert calls == ["shutdown"]
+
+
+def test_run_backtest_propagates_broker_volume_limits(
+    monkeypatch,
+) -> None:
+    captured: list[object] = []
+
+    mt5_stub = ModuleType("MetaTrader5")
+    mt5_stub.TIMEFRAME_M15 = 15
+    mt5_stub.initialize = lambda: True
+    mt5_stub.shutdown = lambda: None
+    mt5_stub.last_error = lambda: (0, "OK")
+    mt5_stub.symbol_info = lambda symbol: object()
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mt5_stub)
+
+    symbol_spec = SimpleNamespace(
+        symbol="XAUUSD",
+        minimum_stop_distance=0.01,
+        tick_size=0.01,
+        tick_value_per_lot=0.1,
+        lot_step=0.01,
+        minimum_lot=0.01,
+        maximum_lot=25.0,
+    )
+
+    specification_module = importlib.import_module(
+        "core.mt5_execution.symbol_specification"
+    )
+    monkeypatch.setattr(
+        specification_module,
+        "get_live_symbol_specification",
+        lambda symbol: symbol_spec,
+    )
+
+    class RunnerStub:
+        def __init__(self, config) -> None:
+            captured.append(config)
+
+        def run_with_strategy_comparison(self, **kwargs):
+            return SimpleNamespace(result=_result())
+
+        def generate_composite_reports(self, output) -> None:
+            pass
+
+    runner_module = importlib.import_module("core.backtesting.runner")
+    monkeypatch.setattr(runner_module, "BacktestRunner", RunnerStub)
+
+    sys.modules.pop("run_backtest", None)
+    module = importlib.import_module("run_backtest")
+    module.main()
+
+    config = captured[0]
+    assert config.minimum_lot == 0.01
+    assert config.maximum_lot == 25.0

@@ -130,3 +130,42 @@ def test_live_trading_engine_contract() -> None:
         assert trade_plan.stop_loss == 0.0
         assert trade_plan.take_profit == 0.0
         assert trade_plan.position_size == 0.0
+
+
+def test_multi_timeframe_forwards_broker_volume_limits() -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    bar = _market_bar()
+    snapshot = {
+        timeframe: [bar]
+        for timeframe in (
+            __import__("core.multi_timeframe.enums", fromlist=["Timeframe"]).Timeframe.M5,
+            __import__("core.multi_timeframe.enums", fromlist=["Timeframe"]).Timeframe.M15,
+            __import__("core.multi_timeframe.enums", fromlist=["Timeframe"]).Timeframe.H1,
+            __import__("core.multi_timeframe.enums", fromlist=["Timeframe"]).Timeframe.H4,
+        )
+    }
+    mtf_result = SimpleNamespace(
+        m5=SimpleNamespace(market_structure=SimpleNamespace())
+    )
+    engine.pipeline.multi_timeframe.process = Mock(return_value=mtf_result)
+    engine.pipeline.confluence_engine.evaluate_multi_timeframe = Mock(
+        return_value=None
+    )
+    pipeline_result = _approved_pipeline_result()
+    engine.pipeline.process_bar = Mock(return_value=pipeline_result)
+
+    engine.process_multi_timeframe(
+        snapshot,
+        account_balance=1000.0,
+        stop_loss_distance=0.01,
+        pip_value=0.1,
+        tick_size=0.01,
+        lot_step=0.01,
+        minimum_lot=0.01,
+        maximum_lot=25.0,
+        warmup=True,
+    )
+
+    kwargs = engine.pipeline.process_bar.call_args.kwargs
+    assert kwargs["minimum_lot"] == 0.01
+    assert kwargs["maximum_lot"] == 25.0

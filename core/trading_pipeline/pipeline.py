@@ -109,6 +109,8 @@ class TradingPipeline:
         pip_value: float,
         tick_size: float = DEFAULT_TICK_SIZE,
         lot_step: float = DEFAULT_LOT_STEP,
+        minimum_lot: float | None = None,
+        maximum_lot: float | None = None,
     ) -> PipelineResult:
         """Process synchronized timeframe data through the compatibility path.
 
@@ -139,6 +141,8 @@ class TradingPipeline:
             pip_value=pip_value,
             tick_size=tick_size,
             lot_step=lot_step,
+            minimum_lot=minimum_lot,
+            maximum_lot=maximum_lot,
         )
 
     def process_bar(
@@ -153,6 +157,8 @@ class TradingPipeline:
         pip_value: float,
         tick_size: float = DEFAULT_TICK_SIZE,
         lot_step: float = DEFAULT_LOT_STEP,
+        minimum_lot: float | None = None,
+        maximum_lot: float | None = None,
     ) -> PipelineResult:
         """Process one completed market bar through the trading pipeline.
 
@@ -283,6 +289,8 @@ class TradingPipeline:
             safety_buffer_distance=safety_buffer_distance,
             tick_size=tick_size,
             lot_step=lot_step,
+            minimum_lot=minimum_lot,
+            maximum_lot=maximum_lot,
             probability=probability.probability,
             confidence=probability.confidence,
             feature_count=feature_vector.size,

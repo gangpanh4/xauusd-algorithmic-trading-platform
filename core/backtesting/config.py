@@ -63,6 +63,10 @@ class BacktestConfig:
 
     lot_step: float = 0.01
 
+    minimum_lot: float = 0.01
+
+    maximum_lot: float = 10.0
+
     # ===========================
     # Trading Costs
     # ===========================

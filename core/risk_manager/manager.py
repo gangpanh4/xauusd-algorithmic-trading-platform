@@ -46,6 +46,8 @@ class RiskManager:
         regime: str | None = None,
         tick_size: float = 1.0,
         lot_step: float = PositionSizer.LOT_STEP,
+        minimum_lot: float | None = None,
+        maximum_lot: float | None = None,
     ) -> TradePlan:
         """Convert a trading signal into a broker-independent ``TradePlan``.
 
@@ -128,6 +130,8 @@ class RiskManager:
                 pip_value=pip_value,
                 tick_size=tick_size,
                 lot_step=lot_step,
+                minimum_lot=minimum_lot,
+                maximum_lot=maximum_lot,
             )
             effective_stop_distance, stop_components = (
                 self._resolve_stop_loss_distance(
@@ -153,6 +157,8 @@ class RiskManager:
                 pip_value=pip_value,
                 tick_size=tick_size,
                 lot_step=lot_step,
+                minimum_lot=minimum_lot,
+                maximum_lot=maximum_lot,
                 total_risk_per_lot=risk_per_lot["total"],
             )
 
@@ -229,6 +235,16 @@ class RiskManager:
                     "tick_size": tick_size,
                     "tick_value_per_lot": pip_value,
                     "lot_step": lot_step,
+                    "minimum_lot": (
+                        self.config.minimum_position_size
+                        if minimum_lot is None
+                        else minimum_lot
+                    ),
+                    "maximum_lot": (
+                        self.config.maximum_position_size
+                        if maximum_lot is None
+                        else maximum_lot
+                    ),
                     "requested_stop_distance": stop_loss_distance,
                     "effective_stop_distance": effective_stop_distance,
                     "volatility_stop_distance": (
@@ -346,11 +362,29 @@ class RiskManager:
         pip_value: float,
         tick_size: float,
         lot_step: float,
+        minimum_lot: float | None,
+        maximum_lot: float | None,
         total_risk_per_lot: float | None = None,
     ) -> float:
+        resolved_minimum_lot = (
+            self.config.minimum_position_size
+            if minimum_lot is None
+            else minimum_lot
+        )
+        resolved_maximum_lot = (
+            self.config.maximum_position_size
+            if maximum_lot is None
+            else maximum_lot
+        )
+        self._validate_volume_limits(
+            minimum_lot=resolved_minimum_lot,
+            maximum_lot=resolved_maximum_lot,
+            lot_step=lot_step,
+        )
+
         common_limits = {
-            "minimum_lot": self.config.minimum_position_size,
-            "maximum_lot": self.config.maximum_position_size,
+            "minimum_lot": resolved_minimum_lot,
+            "maximum_lot": resolved_maximum_lot,
             "lot_step": lot_step,
         }
 
@@ -388,7 +422,7 @@ class RiskManager:
             self._require_positive_finite(risk_amount, "risk_amount")
             raw_lot = risk_amount / total_risk_per_lot
 
-            if raw_lot < self.config.minimum_position_size:
+            if raw_lot < resolved_minimum_lot:
                 raise ValueError(
                     "Calculated position size is below the broker minimum; "
                     "the trade must be rejected rather than rounded up."
@@ -396,8 +430,8 @@ class RiskManager:
 
             return PositionSizer.apply_broker_limits(
                 raw_lot,
-                minimum=self.config.minimum_position_size,
-                maximum=self.config.maximum_position_size,
+                minimum=resolved_minimum_lot,
+                maximum=resolved_maximum_lot,
                 step=lot_step,
             )
 
@@ -586,6 +620,8 @@ class RiskManager:
         pip_value: float,
         tick_size: float,
         lot_step: float,
+        minimum_lot: float | None,
+        maximum_lot: float | None,
     ) -> None:
         self._require_positive_finite(entry_price, "entry_price")
         self._require_positive_finite(
@@ -595,6 +631,34 @@ class RiskManager:
         self._require_positive_finite(pip_value, "pip_value")
         self._require_positive_finite(tick_size, "tick_size")
         self._require_positive_finite(lot_step, "lot_step")
+        if minimum_lot is not None or maximum_lot is not None:
+            self._validate_volume_limits(
+                minimum_lot=(
+                    self.config.minimum_position_size
+                    if minimum_lot is None
+                    else minimum_lot
+                ),
+                maximum_lot=(
+                    self.config.maximum_position_size
+                    if maximum_lot is None
+                    else maximum_lot
+                ),
+                lot_step=lot_step,
+            )
+
+    @classmethod
+    def _validate_volume_limits(
+        cls,
+        *,
+        minimum_lot: float,
+        maximum_lot: float,
+        lot_step: float,
+    ) -> None:
+        cls._require_positive_finite(minimum_lot, "minimum_lot")
+        cls._require_positive_finite(maximum_lot, "maximum_lot")
+        cls._require_positive_finite(lot_step, "lot_step")
+        if minimum_lot > maximum_lot:
+            raise ValueError("minimum_lot cannot exceed maximum_lot")
 
     def _validate_configured_risk(self, risk_fraction: float) -> None:
         self._require_positive_finite(risk_fraction, "configured risk")

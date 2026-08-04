@@ -189,3 +189,54 @@ def test_cost_aware_sizing_floors_to_lot_step_without_exceeding_limit():
     assert plan.metadata["total_monetary_risk"] == pytest.approx(95.46)
     assert plan.metadata["total_monetary_risk"] <= 100.0
     assert plan.risk_percent <= 1.0
+
+
+def test_runtime_broker_minimum_rejects_smaller_risk_size():
+    plan = RiskManager(
+        RiskManagerConfig(
+            lot_sizing_mode=LotSizingMode.RISK_PERCENT,
+            risk_percent=1.0,
+            minimum_position_size=0.01,
+            maximum_position_size=10.0,
+        )
+    ).evaluate_signal(
+        signal=_buy_signal(),
+        entry_price=3300.0,
+        account_balance=1000.0,
+        stop_loss_distance=1000.0,
+        pip_value=1.0,
+        tick_size=1.0,
+        lot_step=0.01,
+        minimum_lot=0.10,
+        maximum_lot=25.0,
+    )
+
+    assert plan.decision is RiskDecision.REJECT
+    assert plan.position_size == 0.0
+    assert "below the broker minimum" in plan.reason
+
+
+def test_runtime_broker_maximum_caps_position_size():
+    plan = RiskManager(
+        RiskManagerConfig(
+            lot_sizing_mode=LotSizingMode.RISK_PERCENT,
+            risk_percent=1.0,
+            minimum_position_size=0.01,
+            maximum_position_size=10.0,
+        )
+    ).evaluate_signal(
+        signal=_buy_signal(),
+        entry_price=3300.0,
+        account_balance=100_000.0,
+        stop_loss_distance=10.0,
+        pip_value=1.0,
+        tick_size=1.0,
+        lot_step=0.01,
+        minimum_lot=0.01,
+        maximum_lot=2.0,
+    )
+
+    assert plan.decision is RiskDecision.APPROVE
+    assert plan.position_size == pytest.approx(2.0)
+    assert plan.metadata["minimum_lot"] == pytest.approx(0.01)
+    assert plan.metadata["maximum_lot"] == pytest.approx(2.0)
