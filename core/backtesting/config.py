@@ -52,6 +52,18 @@ class BacktestConfig:
     risk_percent: float = 1.0
 
     # ===========================
+    # Execution Economics
+    # ===========================
+
+    stop_loss_distance: float = 2.5
+
+    tick_size: float = 0.01
+
+    tick_value_per_lot: float = 1.0
+
+    lot_step: float = 0.01
+
+    # ===========================
     # Trading Costs
     # ===========================
 

@@ -110,6 +110,10 @@ class BacktestRunner:
 
         self.engine = BacktestingEngine(
             config,
+            stop_loss_distance=config.stop_loss_distance,
+            tick_size=config.tick_size,
+            tick_value_per_lot=config.tick_value_per_lot,
+            lot_step=config.lot_step,
         )
 
         self.exporter = BacktestExporter(
