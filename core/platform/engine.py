@@ -14,6 +14,9 @@ from core.data.market_data import MarketDataService
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.live_trading.multi_timeframe_buffer import LiveMultiTimeframeBuffer
+from core.live_trading.shadow_observation_report import (
+    ShadowObservationReporter,
+)
 from core.mt5_execution.account import get_account_info
 from core.mt5_execution.symbol_specification import (
     get_live_symbol_specification,
@@ -254,7 +257,20 @@ class TradingPlatform:
             logger.info("Live Trading Engine stopped.")
 
     def run_research(self) -> None:
+        """Validate and summarize persisted live-shadow observations."""
+
+        if not self._initialized:
+            raise RuntimeError("Platform has not been initialized.")
+
         logger.info("Running Research Mode...")
+        config = LiveTradingConfig()
+        reporter = ShadowObservationReporter(
+            input_path=config.shadow_observation_path,
+            output_directory=config.shadow_summary_directory,
+        )
+        csv_path, json_path = reporter.export()
+        logger.info("Shadow summary CSV exported to %s", csv_path)
+        logger.info("Shadow summary JSON exported to %s", json_path)
 
     def shutdown(self) -> None:
         if not self._initialized:

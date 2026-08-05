@@ -46,6 +46,10 @@ class LiveTradingConfig:
         "runtime/live_shadow_observations.jsonl"
     )
 
+    shadow_summary_directory: Path = Path(
+        "output/live_shadow"
+    )
+
     partial_fill_state_path: Path = Path(
         "runtime/live_partial_fill_state.json"
     )

@@ -1,0 +1,329 @@
+"""Validation and summary reporting for live shadow observations."""
+
+from __future__ import annotations
+
+import csv
+import json
+from collections import Counter
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Final
+
+
+class ShadowObservationValidationError(ValueError):
+    """Raised when shadow evidence is malformed or unsafe."""
+
+
+class ShadowObservationReporter:
+    """Validate append-only shadow JSONL and export deterministic summaries."""
+
+    EXPECTED_INTERVAL_MINUTES: Final[float] = 5.0
+    REQUIRED_FIELDS: Final[frozenset[str]] = frozenset(
+        {
+            "timestamp",
+            "symbol",
+            "live_execution_enabled",
+            "shadow_only",
+            "trade_executed",
+            "signal_present",
+            "trade_plan_present",
+            "direction",
+            "decision",
+            "entry_price",
+            "stop_loss",
+            "take_profit",
+            "position_size",
+            "risk_reward_ratio",
+            "reason",
+        }
+    )
+    _CSV_COLUMNS: Final[tuple[str, ...]] = (
+        "Total Observations",
+        "First Timestamp UTC",
+        "Last Timestamp UTC",
+        "Elapsed Minutes",
+        "Expected Interval Minutes",
+        "Five Minute Intervals",
+        "Gap Count",
+        "Maximum Gap Minutes",
+        "Duplicate Timestamp Count",
+        "Out Of Order Count",
+        "Parse Error Count",
+        "Schema Error Count",
+        "Safety Violation Count",
+        "Approved Count",
+        "Rejected Count",
+        "Skipped Count",
+        "Hold Count",
+        "Buy Count",
+        "Sell Count",
+        "Validation Passed",
+    )
+
+    def __init__(
+        self,
+        *,
+        input_path: str | Path,
+        output_directory: str | Path,
+    ) -> None:
+        self.input_path = Path(input_path)
+        self.output_directory = Path(output_directory)
+
+    def export(self) -> tuple[Path, Path]:
+        """Validate the immutable input and export JSON plus one-row CSV."""
+
+        summary = self.calculate()
+        self.output_directory.mkdir(parents=True, exist_ok=True)
+
+        json_path = (
+            self.output_directory / "shadow_observation_summary.json"
+        )
+        json_path.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        csv_path = (
+            self.output_directory / "shadow_observation_summary.csv"
+        )
+        with csv_path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=list(self._CSV_COLUMNS),
+                extrasaction="raise",
+            )
+            writer.writeheader()
+            writer.writerow(self._csv_row(summary))
+
+        return csv_path, json_path
+
+    def calculate(self) -> dict[str, Any]:
+        """Return a strict validation and summary payload."""
+
+        if not self.input_path.exists():
+            raise FileNotFoundError(
+                f"Shadow observation file does not exist: {self.input_path}"
+            )
+        if not self.input_path.is_file():
+            raise ShadowObservationValidationError(
+                "Shadow observation input must be a regular file."
+            )
+
+        rows: list[Mapping[str, Any]] = []
+        parse_errors: list[dict[str, Any]] = []
+        schema_errors: list[dict[str, Any]] = []
+
+        with self.input_path.open(encoding="utf-8") as file:
+            for line_number, raw_line in enumerate(file, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    parse_errors.append(
+                        {
+                            "line": line_number,
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+                if not isinstance(value, Mapping):
+                    schema_errors.append(
+                        {
+                            "line": line_number,
+                            "error": "JSON value must be an object.",
+                        }
+                    )
+                    continue
+
+                missing = sorted(self.REQUIRED_FIELDS - set(value))
+                if missing:
+                    schema_errors.append(
+                        {
+                            "line": line_number,
+                            "error": "Missing required fields.",
+                            "missing_fields": missing,
+                        }
+                    )
+                    continue
+                rows.append(value)
+
+        if parse_errors or schema_errors:
+            raise ShadowObservationValidationError(
+                "Shadow observation file contains parse or schema errors."
+            )
+        if not rows:
+            raise ShadowObservationValidationError(
+                "Shadow observation file contains no observations."
+            )
+
+        timestamps: list[datetime] = []
+        duplicate_count = 0
+        out_of_order_count = 0
+        seen: set[datetime] = set()
+        previous: datetime | None = None
+        safety_violations: list[dict[str, Any]] = []
+        semantic_violations: list[dict[str, Any]] = []
+
+        decisions: Counter[str] = Counter()
+        directions: Counter[str] = Counter()
+
+        for index, row in enumerate(rows, start=1):
+            timestamp = self._parse_timestamp(row["timestamp"], index)
+            if timestamp in seen:
+                duplicate_count += 1
+            seen.add(timestamp)
+            if previous is not None and timestamp <= previous:
+                out_of_order_count += 1
+            previous = timestamp
+            timestamps.append(timestamp)
+
+            decision = str(row["decision"])
+            direction = str(row["direction"])
+            decisions[decision] += 1
+            directions[direction] += 1
+
+            if (
+                row["live_execution_enabled"] is not False
+                or row["shadow_only"] is not True
+                or row["trade_executed"] is not False
+            ):
+                safety_violations.append(
+                    {
+                        "line": index,
+                        "timestamp": timestamp.isoformat(),
+                    }
+                )
+
+            if decision == "SKIP":
+                numeric_fields = (
+                    "entry_price",
+                    "stop_loss",
+                    "take_profit",
+                    "position_size",
+                )
+                if any(float(row[field]) != 0.0 for field in numeric_fields):
+                    semantic_violations.append(
+                        {
+                            "line": index,
+                            "timestamp": timestamp.isoformat(),
+                            "error": (
+                                "SKIP observation must have zero entry, "
+                                "stop, target, and position size."
+                            ),
+                        }
+                    )
+
+        interval_minutes = [
+            (current - prior).total_seconds() / 60.0
+            for prior, current in zip(timestamps, timestamps[1:])
+        ]
+        gap_values = [
+            value
+            for value in interval_minutes
+            if value > self.EXPECTED_INTERVAL_MINUTES
+        ]
+        five_minute_intervals = sum(
+            value == self.EXPECTED_INTERVAL_MINUTES
+            for value in interval_minutes
+        )
+
+        validation_passed = not (
+            duplicate_count
+            or out_of_order_count
+            or safety_violations
+            or semantic_violations
+        )
+        if not validation_passed:
+            raise ShadowObservationValidationError(
+                "Shadow observation safety or chronology validation failed."
+            )
+
+        first = timestamps[0]
+        last = timestamps[-1]
+        return {
+            "input_path": str(self.input_path),
+            "total_observations": len(rows),
+            "first_timestamp_utc": first.isoformat(),
+            "last_timestamp_utc": last.isoformat(),
+            "elapsed_minutes": (
+                (last - first).total_seconds() / 60.0
+            ),
+            "expected_interval_minutes": self.EXPECTED_INTERVAL_MINUTES,
+            "five_minute_intervals": five_minute_intervals,
+            "gap_count": len(gap_values),
+            "gap_minutes": gap_values,
+            "maximum_gap_minutes": max(gap_values, default=0.0),
+            "duplicate_timestamp_count": duplicate_count,
+            "out_of_order_count": out_of_order_count,
+            "parse_error_count": 0,
+            "schema_error_count": 0,
+            "safety_violation_count": len(safety_violations),
+            "semantic_violation_count": len(semantic_violations),
+            "decision_counts": dict(sorted(decisions.items())),
+            "direction_counts": dict(sorted(directions.items())),
+            "observational_only": True,
+            "trade_authority": False,
+            "signal_authority": False,
+            "approval_authority": False,
+            "position_sizing_authority": False,
+            "active_pipeline_modified": False,
+            "source_file_modified": False,
+            "validation_passed": True,
+        }
+
+    @staticmethod
+    def _parse_timestamp(value: Any, line_number: int) -> datetime:
+        if not isinstance(value, str):
+            raise ShadowObservationValidationError(
+                f"Timestamp on line {line_number} must be a string."
+            )
+        try:
+            timestamp = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ShadowObservationValidationError(
+                f"Invalid timestamp on line {line_number}."
+            ) from exc
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ShadowObservationValidationError(
+                f"Timestamp on line {line_number} must be timezone-aware."
+            )
+        return timestamp.astimezone(UTC)
+
+    @classmethod
+    def _csv_row(
+        cls,
+        summary: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        decisions = summary["decision_counts"]
+        directions = summary["direction_counts"]
+        return {
+            "Total Observations": summary["total_observations"],
+            "First Timestamp UTC": summary["first_timestamp_utc"],
+            "Last Timestamp UTC": summary["last_timestamp_utc"],
+            "Elapsed Minutes": summary["elapsed_minutes"],
+            "Expected Interval Minutes": (
+                summary["expected_interval_minutes"]
+            ),
+            "Five Minute Intervals": summary["five_minute_intervals"],
+            "Gap Count": summary["gap_count"],
+            "Maximum Gap Minutes": summary["maximum_gap_minutes"],
+            "Duplicate Timestamp Count": (
+                summary["duplicate_timestamp_count"]
+            ),
+            "Out Of Order Count": summary["out_of_order_count"],
+            "Parse Error Count": summary["parse_error_count"],
+            "Schema Error Count": summary["schema_error_count"],
+            "Safety Violation Count": (
+                summary["safety_violation_count"]
+            ),
+            "Approved Count": decisions.get("APPROVE", 0),
+            "Rejected Count": decisions.get("REJECT", 0),
+            "Skipped Count": decisions.get("SKIP", 0),
+            "Hold Count": directions.get("HOLD", 0),
+            "Buy Count": directions.get("BUY", 0),
+            "Sell Count": directions.get("SELL", 0),
+            "Validation Passed": summary["validation_passed"],
+        }
