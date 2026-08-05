@@ -547,8 +547,11 @@ class LiveTradingEngine:
             self.state.shadow_session_started_at = datetime.now(UTC)
             session_started_at = self.state.shadow_session_started_at
 
+        recorded_at = datetime.now(UTC)
+
         payload = {
             "timestamp": timestamp.astimezone(UTC).isoformat(),
+            "recorded_at": recorded_at.isoformat(),
             "session_id": self.state.shadow_session_id,
             "session_started_at": (
                 session_started_at.astimezone(UTC).isoformat()

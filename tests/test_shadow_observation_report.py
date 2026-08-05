@@ -16,6 +16,7 @@ def _row(
     *,
     session_id: str | None = None,
     session_started_at: datetime | None = None,
+    recorded_at: datetime | None = None,
 ) -> dict[str, object]:
     row: dict[str, object] = {
         "timestamp": timestamp.isoformat(),
@@ -38,6 +39,8 @@ def _row(
         row["session_id"] = session_id
     if session_started_at is not None:
         row["session_started_at"] = session_started_at.isoformat()
+    if recorded_at is not None:
+        row["recorded_at"] = recorded_at.isoformat()
     return row
 
 
@@ -145,16 +148,19 @@ def test_explicit_sessions_are_grouped_and_counted(tmp_path) -> None:
                 start,
                 session_id="session-a",
                 session_started_at=start - timedelta(minutes=1),
+                recorded_at=start + timedelta(minutes=1),
             ),
             _row(
                 start + timedelta(minutes=5),
                 session_id="session-a",
                 session_started_at=start - timedelta(minutes=1),
+                recorded_at=start + timedelta(minutes=6),
             ),
             _row(
                 second_start,
                 session_id="session-b",
                 session_started_at=second_start - timedelta(minutes=1),
+                recorded_at=second_start + timedelta(minutes=1),
             ),
         ],
     )
@@ -191,16 +197,46 @@ def test_partial_session_metadata_fails_closed(tmp_path) -> None:
         reporter.calculate()
 
 
-def test_session_start_after_observation_fails_closed(tmp_path) -> None:
+def test_session_can_start_after_candle_but_before_recording(
+    tmp_path,
+) -> None:
     source = tmp_path / "shadow.jsonl"
-    timestamp = datetime(2026, 8, 5, 4, 10, tzinfo=UTC)
+    timestamp = datetime(2026, 8, 5, 10, 25, tzinfo=UTC)
+    session_started = timestamp + timedelta(minutes=1)
+    recorded_at = timestamp + timedelta(minutes=5)
     _write(
         source,
         [
             _row(
                 timestamp,
                 session_id="session-a",
-                session_started_at=timestamp + timedelta(minutes=1),
+                session_started_at=session_started,
+                recorded_at=recorded_at,
+            )
+        ],
+    )
+
+    summary = ShadowObservationReporter(
+        input_path=source,
+        output_directory=tmp_path / "output",
+    ).calculate()
+
+    assert summary["validation_passed"] is True
+    assert summary["explicit_session_count"] == 1
+
+
+def test_session_start_after_recording_fails_closed(tmp_path) -> None:
+    source = tmp_path / "shadow.jsonl"
+    timestamp = datetime(2026, 8, 5, 10, 25, tzinfo=UTC)
+    recorded_at = timestamp + timedelta(minutes=5)
+    _write(
+        source,
+        [
+            _row(
+                timestamp,
+                session_id="session-a",
+                session_started_at=recorded_at + timedelta(seconds=1),
+                recorded_at=recorded_at,
             )
         ],
     )

@@ -38,6 +38,15 @@ class LiveTradingConfig:
 
     history_window_bars: int = 500
 
+    # This broker's MT5 terminal currently encodes market timestamps three
+    # hours ahead of actual UTC. MarketDataService subtracts this offset at
+    # the ingestion boundary before constructing UTC MarketBar objects.
+    mt5_server_utc_offset_hours: float = 3.0
+
+    # Fail closed when the normalized broker tick differs materially from
+    # the system UTC clock.
+    mt5_clock_max_skew_seconds: float = 120.0
+
     live_execution_enabled: bool = False
 
     shadow_recording_enabled: bool = False

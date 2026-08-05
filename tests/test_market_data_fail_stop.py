@@ -185,3 +185,119 @@ def test_historical_duplicate_timestamp_fails_closed(
         match="strictly increasing",
     ):
         service.get_historical_bars(2)
+
+
+def test_broker_server_offset_normalizes_latest_bar_to_actual_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MarketDataService(
+        symbol="XAUUSD",
+        timeframe=5,
+        server_utc_offset_hours=3.0,
+    )
+    actual_utc = datetime(2026, 8, 5, 10, 10, tzinfo=UTC)
+    broker_encoded = actual_utc.replace(hour=13)
+    rates = (
+        {
+            "time": int(broker_encoded.timestamp()),
+            "open": 3300.0,
+            "high": 3305.0,
+            "low": 3298.0,
+            "close": 3303.0,
+            "tick_volume": 1000,
+        },
+    )
+    monkeypatch.setattr(
+        market_data.mt5,
+        "copy_rates_from_pos",
+        lambda *args: rates,
+    )
+
+    bar = service.get_latest_closed_bar()
+
+    assert bar is not None
+    assert bar.timestamp == actual_utc
+
+
+def test_clock_alignment_accepts_correct_configured_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MarketDataService(
+        symbol="XAUUSD",
+        timeframe=5,
+        server_utc_offset_hours=3.0,
+        max_clock_skew_seconds=2.0,
+    )
+    reference = datetime(2026, 8, 5, 10, 16, 26, tzinfo=UTC)
+    broker_encoded = reference.replace(hour=13)
+    monkeypatch.setattr(
+        market_data.mt5,
+        "symbol_info_tick",
+        lambda symbol: type(
+            "Tick",
+            (),
+            {"time": int(broker_encoded.timestamp())},
+        )(),
+    )
+
+    normalized = service.validate_clock_alignment(
+        reference_utc=reference,
+    )
+
+    assert normalized == reference
+
+
+def test_clock_alignment_fails_closed_for_wrong_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MarketDataService(
+        symbol="XAUUSD",
+        timeframe=5,
+        server_utc_offset_hours=0.0,
+        max_clock_skew_seconds=120.0,
+    )
+    reference = datetime(2026, 8, 5, 10, 16, 26, tzinfo=UTC)
+    broker_encoded = reference.replace(hour=13)
+    monkeypatch.setattr(
+        market_data.mt5,
+        "symbol_info_tick",
+        lambda symbol: type(
+            "Tick",
+            (),
+            {"time": int(broker_encoded.timestamp())},
+        )(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="outside the allowed UTC skew",
+    ):
+        service.validate_clock_alignment(
+            reference_utc=reference,
+        )
+
+
+def test_clock_alignment_fails_when_tick_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MarketDataService(
+        symbol="XAUUSD",
+        timeframe=5,
+        server_utc_offset_hours=3.0,
+    )
+    monkeypatch.setattr(
+        market_data.mt5,
+        "symbol_info_tick",
+        lambda symbol: None,
+    )
+    monkeypatch.setattr(
+        market_data.mt5,
+        "last_error",
+        lambda: (-10004, "No IPC connection"),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Unable to retrieve latest tick",
+    ):
+        service.validate_clock_alignment()

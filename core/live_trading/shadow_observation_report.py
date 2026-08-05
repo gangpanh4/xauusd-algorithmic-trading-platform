@@ -195,8 +195,10 @@ class ShadowObservationReporter:
 
             raw_session_id = row.get("session_id")
             raw_session_started_at = row.get("session_started_at")
+            raw_recorded_at = row.get("recorded_at")
             has_session_id = raw_session_id is not None
             has_session_start = raw_session_started_at is not None
+            has_recorded_at = raw_recorded_at is not None
 
             if has_session_id != has_session_start:
                 semantic_violations.append(
@@ -210,8 +212,43 @@ class ShadowObservationReporter:
                     }
                 )
             elif not has_session_id:
-                legacy_observation_count += 1
+                if has_recorded_at:
+                    semantic_violations.append(
+                        {
+                            "line": index,
+                            "timestamp": timestamp.isoformat(),
+                            "error": (
+                                "recorded_at requires explicit session metadata."
+                            ),
+                        }
+                    )
+                else:
+                    legacy_observation_count += 1
             else:
+                if not has_recorded_at:
+                    semantic_violations.append(
+                        {
+                            "line": index,
+                            "timestamp": timestamp.isoformat(),
+                            "error": (
+                                "Session-aware observations require recorded_at."
+                            ),
+                        }
+                    )
+                    continue
+
+                recorded_at = self._parse_timestamp(raw_recorded_at, index)
+                if timestamp > recorded_at:
+                    semantic_violations.append(
+                        {
+                            "line": index,
+                            "timestamp": timestamp.isoformat(),
+                            "error": (
+                                "Observation timestamp cannot be later than recorded_at."
+                            ),
+                        }
+                    )
+
                 if (
                     not isinstance(raw_session_id, str)
                     or not raw_session_id.strip()
@@ -229,14 +266,13 @@ class ShadowObservationReporter:
                         raw_session_started_at,
                         index,
                     )
-                    if started_at > timestamp:
+                    if started_at > recorded_at:
                         semantic_violations.append(
                             {
                                 "line": index,
                                 "timestamp": timestamp.isoformat(),
                                 "error": (
-                                    "session_started_at cannot be later than "
-                                    "the observation timestamp."
+                                    "session_started_at cannot be later than recorded_at."
                                 ),
                             }
                         )

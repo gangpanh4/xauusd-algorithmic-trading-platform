@@ -94,18 +94,42 @@ class TradingPlatform:
             Timeframe.M5: MarketDataService(
                 symbol=config.symbol,
                 timeframe=mt5.TIMEFRAME_M5,
+                server_utc_offset_hours=(
+                    config.mt5_server_utc_offset_hours
+                ),
+                max_clock_skew_seconds=(
+                    config.mt5_clock_max_skew_seconds
+                ),
             ),
             Timeframe.M15: MarketDataService(
                 symbol=config.symbol,
                 timeframe=mt5.TIMEFRAME_M15,
+                server_utc_offset_hours=(
+                    config.mt5_server_utc_offset_hours
+                ),
+                max_clock_skew_seconds=(
+                    config.mt5_clock_max_skew_seconds
+                ),
             ),
             Timeframe.H1: MarketDataService(
                 symbol=config.symbol,
                 timeframe=mt5.TIMEFRAME_H1,
+                server_utc_offset_hours=(
+                    config.mt5_server_utc_offset_hours
+                ),
+                max_clock_skew_seconds=(
+                    config.mt5_clock_max_skew_seconds
+                ),
             ),
             Timeframe.H4: MarketDataService(
                 symbol=config.symbol,
                 timeframe=mt5.TIMEFRAME_H4,
+                server_utc_offset_hours=(
+                    config.mt5_server_utc_offset_hours
+                ),
+                max_clock_skew_seconds=(
+                    config.mt5_clock_max_skew_seconds
+                ),
             ),
         }
         buffer = LiveMultiTimeframeBuffer(
@@ -120,6 +144,19 @@ class TradingPlatform:
                     f"MT5 initialization failed: {mt5.last_error()}"
                 )
             mt5_started = True
+
+            normalized_tick_time = services[
+                Timeframe.M5
+            ].validate_clock_alignment()
+            logger.info(
+                "Validated MT5 clock normalization: "
+                "server_utc_offset_hours=%s normalized_tick_utc=%s "
+                "maximum_skew_seconds=%s",
+                config.mt5_server_utc_offset_hours,
+                normalized_tick_time,
+                config.mt5_clock_max_skew_seconds,
+            )
+
             engine.start()
             engine.synchronize_open_positions()
             engine.synchronize_active_orders()

@@ -235,6 +235,7 @@ def test_analysis_only_engine_records_append_only_shadow_observation(
     ]
     assert len(rows) == 1
     assert rows[0]["timestamp"] == bar.timestamp.isoformat()
+    assert datetime.fromisoformat(rows[0]["recorded_at"]) >= bar.timestamp
     assert rows[0]["session_id"] == engine.state.shadow_session_id
     assert rows[0]["session_id"]
     assert rows[0]["session_started_at"] == (
