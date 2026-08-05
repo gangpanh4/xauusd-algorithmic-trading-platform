@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -169,3 +170,101 @@ def test_multi_timeframe_forwards_broker_volume_limits() -> None:
     kwargs = engine.pipeline.process_bar.call_args.kwargs
     assert kwargs["minimum_lot"] == 0.01
     assert kwargs["maximum_lot"] == 25.0
+
+
+def test_duplicate_timestamp_is_rejected_before_pipeline_mutation() -> None:
+    engine = LiveTradingEngine(LiveTradingConfig())
+    bar = _market_bar()
+    engine.pipeline.process_bar = Mock(
+        return_value=_approved_pipeline_result()
+    )
+
+    engine.process_bar(
+        bar,
+        account_balance=1000.0,
+        stop_loss_distance=2.0,
+        pip_value=1.0,
+        warmup=True,
+    )
+
+    with pytest.raises(ValueError, match="increase strictly"):
+        engine.process_bar(
+            bar,
+            account_balance=1000.0,
+            stop_loss_distance=2.0,
+            pip_value=1.0,
+            warmup=True,
+        )
+
+    assert engine.pipeline.process_bar.call_count == 1
+
+
+def test_analysis_only_engine_records_append_only_shadow_observation(
+    tmp_path,
+) -> None:
+    path = tmp_path / "shadow.jsonl"
+    engine = LiveTradingEngine(
+        LiveTradingConfig(
+            shadow_recording_enabled=True,
+            shadow_observation_path=path,
+        )
+    )
+    pipeline_result = _approved_pipeline_result()
+    pipeline_result.trade_plan.risk_reward_ratio = 2.0
+    pipeline_result.trade_plan.reason = "approved test"
+    engine.pipeline.process_bar = Mock(return_value=pipeline_result)
+    engine.adapter.adapt = Mock()
+    engine.executor.execute_order = Mock()
+
+    bar = _market_bar()
+    result = engine.process_bar(
+        bar,
+        account_balance=1000.0,
+        stop_loss_distance=2.0,
+        pip_value=1.0,
+    )
+
+    assert result.trade_executed is False
+    assert engine.state.shadow_observations_recorded == 1
+    engine.adapter.adapt.assert_not_called()
+    engine.executor.execute_order.assert_not_called()
+
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["timestamp"] == bar.timestamp.isoformat()
+    assert rows[0]["symbol"] == "XAUUSD"
+    assert rows[0]["live_execution_enabled"] is False
+    assert rows[0]["shadow_only"] is True
+    assert rows[0]["decision"] == "APPROVE"
+    assert rows[0]["entry_price"] == pytest.approx(4003.0)
+    assert rows[0]["stop_loss"] == pytest.approx(4001.0)
+    assert rows[0]["take_profit"] == pytest.approx(4007.0)
+    assert rows[0]["position_size"] == pytest.approx(0.01)
+    assert rows[0]["trade_executed"] is False
+
+
+def test_warmup_does_not_write_shadow_observation(tmp_path) -> None:
+    path = tmp_path / "shadow.jsonl"
+    engine = LiveTradingEngine(
+        LiveTradingConfig(
+            shadow_recording_enabled=True,
+            shadow_observation_path=path,
+        )
+    )
+    engine.pipeline.process_bar = Mock(
+        return_value=_approved_pipeline_result()
+    )
+
+    engine.process_bar(
+        _market_bar(),
+        account_balance=1000.0,
+        stop_loss_distance=2.0,
+        pip_value=1.0,
+        warmup=True,
+    )
+
+    assert engine.state.shadow_observations_recorded == 0
+    assert not path.exists()

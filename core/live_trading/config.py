@@ -40,6 +40,12 @@ class LiveTradingConfig:
 
     live_execution_enabled: bool = False
 
+    shadow_recording_enabled: bool = False
+
+    shadow_observation_path: Path = Path(
+        "runtime/live_shadow_observations.jsonl"
+    )
+
     partial_fill_state_path: Path = Path(
         "runtime/live_partial_fill_state.json"
     )

@@ -80,7 +80,10 @@ class TradingPlatform:
             raise RuntimeError("Platform has not been initialized.")
 
         logger.info("Starting Live Trading Platform...")
-        config = LiveTradingConfig()
+        config = LiveTradingConfig(
+            live_execution_enabled=False,
+            shadow_recording_enabled=True,
+        )
         engine = LiveTradingEngine(config)
         mt5_started = False
 
@@ -179,7 +182,11 @@ class TradingPlatform:
                     warmup=True,
                 )
 
-            logger.info("Warm-up completed. Waiting for completed M5 bars.")
+            logger.info(
+                "Warm-up completed. Waiting for completed M5 bars. "
+                "Shadow observations will be appended to %s.",
+                config.shadow_observation_path,
+            )
 
             try:
                 while True:

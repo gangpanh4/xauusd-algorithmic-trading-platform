@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from math import isclose, isfinite
+import json
 import logging
 
 from core.data.models import MarketBar
@@ -221,6 +222,8 @@ class LiveTradingEngine:
     ) -> LiveTradingResult:
         """Process one completed bar through the legacy single-timeframe path."""
 
+        self._require_new_observation_timestamp(bar.timestamp)
+
         pipeline_result = self.pipeline.process_bar(
             bar,
             account_balance=account_balance,
@@ -262,6 +265,9 @@ class LiveTradingEngine:
             mtf_result,
         )
         observation_bar = m5_bars[-1]
+        self._require_new_observation_timestamp(
+            observation_bar.timestamp
+        )
 
         pipeline_result = self.pipeline.process_bar(
             observation_bar,
@@ -292,12 +298,6 @@ class LiveTradingEngine:
         """Apply chronology, diagnostics, and optional execution."""
 
         timestamp = observation_bar.timestamp.astimezone(UTC)
-        previous = self.state.last_processed_timestamp
-        if previous is not None and timestamp <= previous:
-            raise ValueError(
-                "Live observation timestamps must increase strictly."
-            )
-
         self.state.last_processed_timestamp = timestamp
         self.state.processed_bars += 1
 
@@ -309,6 +309,11 @@ class LiveTradingEngine:
                 execution_result=None,
                 trade_executed=False,
             )
+
+        self._record_shadow_observation(
+            timestamp=timestamp,
+            pipeline_result=pipeline_result,
+        )
 
         signal = pipeline_result.signal
         trade_plan = pipeline_result.trade_plan
@@ -485,6 +490,80 @@ class LiveTradingEngine:
             execution_result=execution_result,
             trade_executed=True,
         )
+
+    def _require_new_observation_timestamp(
+        self,
+        timestamp: datetime,
+    ) -> None:
+        """Reject duplicate or out-of-order evidence before pipeline mutation."""
+
+        if not isinstance(timestamp, datetime):
+            raise TypeError("observation timestamp must be a datetime")
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError(
+                "observation timestamp must be timezone-aware"
+            )
+
+        normalized = timestamp.astimezone(UTC)
+        previous = self.state.last_processed_timestamp
+        if previous is not None and normalized <= previous:
+            raise ValueError(
+                "Live observation timestamps must increase strictly."
+            )
+
+    def _record_shadow_observation(
+        self,
+        *,
+        timestamp: datetime,
+        pipeline_result: PipelineResult,
+    ) -> None:
+        """Append one non-authoritative live observation as JSONL."""
+
+        if not self.config.shadow_recording_enabled:
+            return
+
+        signal = pipeline_result.signal
+        trade_plan = pipeline_result.trade_plan
+        direction = getattr(signal, "direction", None)
+        direction_name = getattr(direction, "name", None)
+        if direction_name is None and direction is not None:
+            direction_name = str(direction)
+
+        decision = getattr(trade_plan, "decision", None)
+        decision_name = getattr(decision, "name", None)
+        if decision_name is None and decision is not None:
+            decision_name = str(decision)
+
+        payload = {
+            "timestamp": timestamp.astimezone(UTC).isoformat(),
+            "symbol": self.config.symbol,
+            "live_execution_enabled": (
+                self.config.live_execution_enabled
+            ),
+            "shadow_only": not self.config.live_execution_enabled,
+            "signal_present": signal is not None,
+            "trade_plan_present": trade_plan is not None,
+            "direction": direction_name,
+            "decision": decision_name,
+            "entry_price": getattr(trade_plan, "entry_price", None),
+            "stop_loss": getattr(trade_plan, "stop_loss", None),
+            "take_profit": getattr(trade_plan, "take_profit", None),
+            "position_size": getattr(trade_plan, "position_size", None),
+            "risk_reward_ratio": getattr(
+                trade_plan,
+                "risk_reward_ratio",
+                None,
+            ),
+            "reason": getattr(trade_plan, "reason", None),
+            "trade_executed": False,
+        }
+
+        path = self.config.shadow_observation_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(payload, sort_keys=True) + "\n")
+
+        self.state.shadow_observations_recorded += 1
 
     def _reconcile_partial_fill(
         self,
