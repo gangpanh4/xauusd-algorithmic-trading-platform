@@ -52,6 +52,9 @@ class ShadowObservationReporter:
         "Parse Error Count",
         "Schema Error Count",
         "Safety Violation Count",
+        "Explicit Session Count",
+        "Legacy Observation Count",
+        "Session Transition Count",
         "Approved Count",
         "Rejected Count",
         "Skipped Count",
@@ -169,6 +172,11 @@ class ShadowObservationReporter:
 
         decisions: Counter[str] = Counter()
         directions: Counter[str] = Counter()
+        session_rows: dict[str, list[datetime]] = {}
+        session_started_at: dict[str, datetime] = {}
+        legacy_observation_count = 0
+        session_transition_count = 0
+        previous_session_id: str | None = None
 
         for index, row in enumerate(rows, start=1):
             timestamp = self._parse_timestamp(row["timestamp"], index)
@@ -184,6 +192,74 @@ class ShadowObservationReporter:
             direction = str(row["direction"])
             decisions[decision] += 1
             directions[direction] += 1
+
+            raw_session_id = row.get("session_id")
+            raw_session_started_at = row.get("session_started_at")
+            has_session_id = raw_session_id is not None
+            has_session_start = raw_session_started_at is not None
+
+            if has_session_id != has_session_start:
+                semantic_violations.append(
+                    {
+                        "line": index,
+                        "timestamp": timestamp.isoformat(),
+                        "error": (
+                            "session_id and session_started_at must either "
+                            "both be present or both be absent."
+                        ),
+                    }
+                )
+            elif not has_session_id:
+                legacy_observation_count += 1
+            else:
+                if (
+                    not isinstance(raw_session_id, str)
+                    or not raw_session_id.strip()
+                ):
+                    semantic_violations.append(
+                        {
+                            "line": index,
+                            "timestamp": timestamp.isoformat(),
+                            "error": "session_id must be a non-empty string.",
+                        }
+                    )
+                else:
+                    session_id = raw_session_id.strip()
+                    started_at = self._parse_timestamp(
+                        raw_session_started_at,
+                        index,
+                    )
+                    if started_at > timestamp:
+                        semantic_violations.append(
+                            {
+                                "line": index,
+                                "timestamp": timestamp.isoformat(),
+                                "error": (
+                                    "session_started_at cannot be later than "
+                                    "the observation timestamp."
+                                ),
+                            }
+                        )
+                    prior_start = session_started_at.get(session_id)
+                    if prior_start is not None and prior_start != started_at:
+                        semantic_violations.append(
+                            {
+                                "line": index,
+                                "timestamp": timestamp.isoformat(),
+                                "error": (
+                                    "A session_id must use one stable "
+                                    "session_started_at value."
+                                ),
+                            }
+                        )
+                    session_started_at.setdefault(session_id, started_at)
+                    session_rows.setdefault(session_id, []).append(timestamp)
+                    if (
+                        previous_session_id is not None
+                        and session_id != previous_session_id
+                    ):
+                        session_transition_count += 1
+                    previous_session_id = session_id
 
             if (
                 row["live_execution_enabled"] is not False
@@ -243,6 +319,21 @@ class ShadowObservationReporter:
 
         first = timestamps[0]
         last = timestamps[-1]
+        sessions = [
+            {
+                "session_id": session_id,
+                "session_started_at": (
+                    session_started_at[session_id].isoformat()
+                ),
+                "observation_count": len(values),
+                "first_observation_utc": values[0].isoformat(),
+                "last_observation_utc": values[-1].isoformat(),
+            }
+            for session_id, values in sorted(
+                session_rows.items(),
+                key=lambda item: item[1][0],
+            )
+        ]
         return {
             "input_path": str(self.input_path),
             "total_observations": len(rows),
@@ -262,6 +353,10 @@ class ShadowObservationReporter:
             "schema_error_count": 0,
             "safety_violation_count": len(safety_violations),
             "semantic_violation_count": len(semantic_violations),
+            "explicit_session_count": len(sessions),
+            "legacy_observation_count": legacy_observation_count,
+            "session_transition_count": session_transition_count,
+            "sessions": sessions,
             "decision_counts": dict(sorted(decisions.items())),
             "direction_counts": dict(sorted(directions.items())),
             "observational_only": True,
@@ -318,6 +413,13 @@ class ShadowObservationReporter:
             "Schema Error Count": summary["schema_error_count"],
             "Safety Violation Count": (
                 summary["safety_violation_count"]
+            ),
+            "Explicit Session Count": summary["explicit_session_count"],
+            "Legacy Observation Count": (
+                summary["legacy_observation_count"]
+            ),
+            "Session Transition Count": (
+                summary["session_transition_count"]
             ),
             "Approved Count": decisions.get("APPROVE", 0),
             "Rejected Count": decisions.get("REJECT", 0),

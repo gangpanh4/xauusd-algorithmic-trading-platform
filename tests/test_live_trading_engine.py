@@ -235,6 +235,11 @@ def test_analysis_only_engine_records_append_only_shadow_observation(
     ]
     assert len(rows) == 1
     assert rows[0]["timestamp"] == bar.timestamp.isoformat()
+    assert rows[0]["session_id"] == engine.state.shadow_session_id
+    assert rows[0]["session_id"]
+    assert rows[0]["session_started_at"] == (
+        engine.state.shadow_session_started_at.isoformat()
+    )
     assert rows[0]["symbol"] == "XAUUSD"
     assert rows[0]["live_execution_enabled"] is False
     assert rows[0]["shadow_only"] is True
@@ -268,3 +273,58 @@ def test_warmup_does_not_write_shadow_observation(tmp_path) -> None:
 
     assert engine.state.shadow_observations_recorded == 0
     assert not path.exists()
+
+
+def test_restart_creates_new_shadow_session_metadata(tmp_path) -> None:
+    path = tmp_path / "shadow.jsonl"
+    config = LiveTradingConfig(
+        shadow_recording_enabled=True,
+        shadow_observation_path=path,
+    )
+    engine = LiveTradingEngine(config)
+    engine.pipeline.process_bar = Mock(
+        return_value=_approved_pipeline_result()
+    )
+
+    engine.start()
+    first_session_id = engine.state.shadow_session_id
+    first_started_at = engine.state.shadow_session_started_at
+    first_bar = _market_bar()
+    engine.process_bar(
+        first_bar,
+        account_balance=1000.0,
+        stop_loss_distance=2.0,
+        pip_value=1.0,
+    )
+    engine.stop()
+
+    engine.start()
+    second_session_id = engine.state.shadow_session_id
+    second_started_at = engine.state.shadow_session_started_at
+    second_bar = MarketBar(
+        timestamp=first_bar.timestamp.replace(
+            minute=(first_bar.timestamp.minute + 5) % 60
+        ),
+        open=4000.0,
+        high=4005.0,
+        low=3998.0,
+        close=4003.0,
+        volume=1000,
+    )
+    engine.process_bar(
+        second_bar,
+        account_balance=1000.0,
+        stop_loss_distance=2.0,
+        pip_value=1.0,
+    )
+
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 2
+    assert first_session_id != second_session_id
+    assert first_started_at is not None
+    assert second_started_at is not None
+    assert rows[0]["session_id"] == first_session_id
+    assert rows[1]["session_id"] == second_session_id

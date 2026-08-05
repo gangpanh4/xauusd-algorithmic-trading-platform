@@ -11,8 +11,13 @@ from core.live_trading.shadow_observation_report import (
 )
 
 
-def _row(timestamp: datetime) -> dict[str, object]:
-    return {
+def _row(
+    timestamp: datetime,
+    *,
+    session_id: str | None = None,
+    session_started_at: datetime | None = None,
+) -> dict[str, object]:
+    row: dict[str, object] = {
         "timestamp": timestamp.isoformat(),
         "symbol": "XAUUSD",
         "live_execution_enabled": False,
@@ -29,6 +34,11 @@ def _row(timestamp: datetime) -> dict[str, object]:
         "risk_reward_ratio": 0.0,
         "reason": "No trading opportunity.",
     }
+    if session_id is not None:
+        row["session_id"] = session_id
+    if session_started_at is not None:
+        row["session_started_at"] = session_started_at.isoformat()
+    return row
 
 
 def _write(path, rows) -> None:
@@ -65,6 +75,8 @@ def test_exports_valid_append_only_shadow_summary(tmp_path) -> None:
     assert summary["decision_counts"] == {"SKIP": 3}
     assert summary["direction_counts"] == {"HOLD": 3}
     assert summary["validation_passed"] is True
+    assert summary["explicit_session_count"] == 0
+    assert summary["legacy_observation_count"] == 3
     assert summary["active_pipeline_modified"] is False
     assert summary["source_file_modified"] is False
 
@@ -109,6 +121,89 @@ def test_skip_with_nonzero_trade_values_fails_closed(tmp_path) -> None:
     row = _row(datetime(2026, 8, 5, 4, 10, tzinfo=UTC))
     row["position_size"] = 0.01
     _write(source, [row])
+
+    reporter = ShadowObservationReporter(
+        input_path=source,
+        output_directory=tmp_path / "output",
+    )
+
+    with pytest.raises(
+        ShadowObservationValidationError,
+        match="safety",
+    ):
+        reporter.calculate()
+
+
+def test_explicit_sessions_are_grouped_and_counted(tmp_path) -> None:
+    source = tmp_path / "shadow.jsonl"
+    start = datetime(2026, 8, 5, 4, 10, tzinfo=UTC)
+    second_start = start + timedelta(minutes=20)
+    _write(
+        source,
+        [
+            _row(
+                start,
+                session_id="session-a",
+                session_started_at=start - timedelta(minutes=1),
+            ),
+            _row(
+                start + timedelta(minutes=5),
+                session_id="session-a",
+                session_started_at=start - timedelta(minutes=1),
+            ),
+            _row(
+                second_start,
+                session_id="session-b",
+                session_started_at=second_start - timedelta(minutes=1),
+            ),
+        ],
+    )
+
+    summary = ShadowObservationReporter(
+        input_path=source,
+        output_directory=tmp_path / "output",
+    ).calculate()
+
+    assert summary["explicit_session_count"] == 2
+    assert summary["legacy_observation_count"] == 0
+    assert summary["session_transition_count"] == 1
+    assert [item["observation_count"] for item in summary["sessions"]] == [
+        2,
+        1,
+    ]
+
+
+def test_partial_session_metadata_fails_closed(tmp_path) -> None:
+    source = tmp_path / "shadow.jsonl"
+    row = _row(datetime(2026, 8, 5, 4, 10, tzinfo=UTC))
+    row["session_id"] = "session-a"
+    _write(source, [row])
+
+    reporter = ShadowObservationReporter(
+        input_path=source,
+        output_directory=tmp_path / "output",
+    )
+
+    with pytest.raises(
+        ShadowObservationValidationError,
+        match="safety",
+    ):
+        reporter.calculate()
+
+
+def test_session_start_after_observation_fails_closed(tmp_path) -> None:
+    source = tmp_path / "shadow.jsonl"
+    timestamp = datetime(2026, 8, 5, 4, 10, tzinfo=UTC)
+    _write(
+        source,
+        [
+            _row(
+                timestamp,
+                session_id="session-a",
+                session_started_at=timestamp + timedelta(minutes=1),
+            )
+        ],
+    )
 
     reporter = ShadowObservationReporter(
         input_path=source,

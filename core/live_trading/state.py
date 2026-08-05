@@ -19,6 +19,8 @@ class LiveTradingState:
     executed_trades: int = 0
     skipped_trades: int = 0
     shadow_observations_recorded: int = 0
+    shadow_session_id: str = ""
+    shadow_session_started_at: datetime | None = None
     last_ticket: int | None = None
     active_order_count: int = 0
     last_error: str = ""
@@ -41,6 +43,8 @@ class LiveTradingState:
         self.executed_trades = 0
         self.skipped_trades = 0
         self.shadow_observations_recorded = 0
+        self.shadow_session_id = ""
+        self.shadow_session_started_at = None
         self.last_ticket = None
         self.active_order_count = 0
         self.last_error = ""

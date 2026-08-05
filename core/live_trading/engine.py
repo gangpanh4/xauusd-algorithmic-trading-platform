@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from math import isclose, isfinite
 import json
 import logging
+from uuid import uuid4
 
 from core.data.models import MarketBar
 from core.execution_adapter.adapter import ExecutionAdapter
@@ -53,6 +54,8 @@ class LiveTradingEngine:
         """Start in analysis-only or live-execution mode."""
 
         self.state.reset()
+        self.state.shadow_session_id = str(uuid4())
+        self.state.shadow_session_started_at = datetime.now(UTC)
 
         if self.config.live_execution_enabled:
             self._restore_partial_fill_state()
@@ -534,8 +537,22 @@ class LiveTradingEngine:
         if decision_name is None and decision is not None:
             decision_name = str(decision)
 
+        session_started_at = self.state.shadow_session_started_at
+        if not self.state.shadow_session_id or session_started_at is None:
+            # Preserve compatibility with direct analysis/test callers that
+            # process observations without explicitly starting the engine.
+            # The normal platform path still creates a fresh session in
+            # start(), including on every restart.
+            self.state.shadow_session_id = str(uuid4())
+            self.state.shadow_session_started_at = datetime.now(UTC)
+            session_started_at = self.state.shadow_session_started_at
+
         payload = {
             "timestamp": timestamp.astimezone(UTC).isoformat(),
+            "session_id": self.state.shadow_session_id,
+            "session_started_at": (
+                session_started_at.astimezone(UTC).isoformat()
+            ),
             "symbol": self.config.symbol,
             "live_execution_enabled": (
                 self.config.live_execution_enabled
