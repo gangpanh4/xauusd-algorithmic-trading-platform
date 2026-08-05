@@ -101,15 +101,28 @@ class MarketDataService:
             )
 
         bars: list[MarketBar] = []
+        previous_timestamp: datetime | None = None
 
-        for rate in reversed(rates):
+        # MT5 returns copied rates oldest-to-newest. Preserve that order for
+        # downstream completed-bar consumers.
+        for rate in rates:
+            timestamp = datetime.fromtimestamp(
+                rate["time"],
+                tz=UTC,
+            )
+
+            if (
+                previous_timestamp is not None
+                and timestamp <= previous_timestamp
+            ):
+                raise RuntimeError(
+                    "Historical MT5 bars must be strictly increasing "
+                    "without duplicate timestamps."
+                )
 
             bars.append(
                 MarketBar(
-                    timestamp=datetime.fromtimestamp(
-                        rate["time"],
-                        tz=UTC,
-                    ),
+                    timestamp=timestamp,
                     open=rate["open"],
                     high=rate["high"],
                     low=rate["low"],
@@ -117,5 +130,6 @@ class MarketDataService:
                     tick_volume=rate["tick_volume"],
                 )
             )
+            previous_timestamp = timestamp
 
         return bars
