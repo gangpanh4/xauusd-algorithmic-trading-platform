@@ -24,6 +24,9 @@ class LiveTradingState:
     last_ticket: int | None = None
     active_order_count: int = 0
     last_error: str = ""
+    execution_intent_reconciliation_status: str = ""
+    execution_intent_reconciliation_reason: str = ""
+    execution_intent_reconciliation_ticket: int | None = None
     last_processed_timestamp: datetime | None = None
     last_deal_reconciliation_time: datetime | None = None
     processed_deal_tickets: set[int] = field(default_factory=set)
@@ -48,6 +51,9 @@ class LiveTradingState:
         self.last_ticket = None
         self.active_order_count = 0
         self.last_error = ""
+        self.execution_intent_reconciliation_status = ""
+        self.execution_intent_reconciliation_reason = ""
+        self.execution_intent_reconciliation_ticket = None
         self.last_processed_timestamp = None
         self.last_deal_reconciliation_time = None
         self.processed_deal_tickets.clear()

@@ -13,14 +13,21 @@ from uuid import uuid4
 from core.data.models import MarketBar
 from core.execution_adapter.adapter import ExecutionAdapter
 from core.execution_adapter.config import ExecutionAdapterConfig
-from core.mt5_execution.active_orders import get_active_order_count
-from core.mt5_execution.deal_history import get_realized_deals
+from core.mt5_execution.active_orders import (
+    get_active_order_count,
+    get_active_orders,
+)
+from core.mt5_execution.deal_history import (
+    get_execution_deals,
+    get_realized_deals,
+)
 from core.mt5_execution.executor import MT5Executor
 from core.mt5_execution.models import (
     OrderRequest,
     OrderResult,
     OrderStatus,
 )
+from core.mt5_execution.order_history import get_historical_orders
 from core.mt5_execution.positions import get_open_positions
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
@@ -31,6 +38,12 @@ from core.trading_pipeline.models import (
 from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
+from .execution_intent_reconciliation import (
+    ExecutionIntentReconciliationDisposition,
+    ExecutionIntentReconciliationError,
+    ExecutionIntentReconciliationResult,
+    reconcile_execution_intent,
+)
 from .execution_intent_store import (
     ExecutionIntentStateError,
     ExecutionIntentStore,
@@ -107,6 +120,12 @@ class LiveTradingEngine:
             logger.error(self.state.last_error)
             raise RuntimeError(self.state.last_error)
 
+        try:
+            self.reconcile_execution_intent()
+        except Exception:
+            self.executor.detach()
+            raise
+
         self.state.running = True
 
     def stop(self) -> None:
@@ -121,6 +140,102 @@ class LiveTradingEngine:
         # execution. Stop only detaches executor state; the platform performs
         # the single terminal shutdown in its finally block.
         self.executor.detach()
+
+    def reconcile_execution_intent(
+        self,
+        *,
+        as_of: datetime | None = None,
+    ) -> ExecutionIntentReconciliationResult | None:
+        """Reconcile persisted execution identity before any new submission."""
+
+        intent = self.execution_intent_store.load()
+        if intent is None:
+            self.state.execution_intent_reconciliation_status = "NO_INTENT"
+            self.state.execution_intent_reconciliation_reason = (
+                "No persisted execution intent exists."
+            )
+            self.state.execution_intent_reconciliation_ticket = None
+            return None
+
+        end = datetime.now(UTC) if as_of is None else as_of.astimezone(UTC)
+        start = intent.observation_timestamp.astimezone(UTC) - timedelta(
+            minutes=5
+        )
+
+        try:
+            active_orders = get_active_orders(intent.symbol)
+            historical_orders = get_historical_orders(
+                date_from=start,
+                date_to=end,
+                symbol=intent.symbol,
+            )
+            execution_deals = get_execution_deals(
+                date_from=start,
+                date_to=end,
+                symbol=intent.symbol,
+            )
+            open_positions = get_open_positions(intent.symbol)
+            result = reconcile_execution_intent(
+                intent=intent,
+                active_orders=active_orders,
+                historical_orders=historical_orders,
+                execution_deals=execution_deals,
+                open_positions=open_positions,
+                as_of=end,
+            )
+        except (
+            ExecutionIntentReconciliationError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            self.state.active_order_count = max(
+                1,
+                self.state.active_order_count,
+            )
+            self.state.execution_intent_reconciliation_status = "FAILED_CLOSED"
+            self.state.execution_intent_reconciliation_reason = str(exc)
+            self.state.execution_intent_reconciliation_ticket = intent.ticket
+            self.state.last_error = str(exc)
+            logger.error("Execution-intent reconciliation failed: %s", exc)
+            raise RuntimeError(
+                "Execution-intent reconciliation failed closed."
+            ) from exc
+
+        if result.intent != intent:
+            self.execution_intent_store.save(result.intent)
+
+        self.state.execution_intent_reconciliation_status = (
+            result.disposition.value
+        )
+        self.state.execution_intent_reconciliation_reason = result.reason
+        self.state.execution_intent_reconciliation_ticket = (
+            result.matching_order_ticket
+        )
+        self.state.last_ticket = result.matching_order_ticket
+
+        if result.intent.unresolved:
+            self.state.active_order_count = max(
+                1,
+                len(active_orders),
+                self.state.active_order_count,
+            )
+            self.state.last_error = result.reason
+        else:
+            self.state.active_order_count = len(active_orders)
+            self.state.last_error = ""
+
+        if result.disposition is (
+            ExecutionIntentReconciliationDisposition.UNRESOLVED_NO_EVIDENCE
+        ):
+            logger.warning(result.reason)
+        else:
+            logger.info(
+                "Execution-intent reconciliation: %s (%s)",
+                result.disposition.value,
+                result.reason,
+            )
+        return result
 
     def synchronize_open_positions(self) -> int:
         """Synchronize risk exposure from authoritative broker positions.
