@@ -292,6 +292,22 @@ class LiveParityEvidence:
 
 
 def append_parity_evidence(path: Path, evidence: LiveParityEvidence) -> None:
+    """Append one complete JSONL record and recover from a truncated tail.
+
+    A process interruption can leave the previous JSON object without its final
+    newline. On restart, insert a separator before the next complete record so
+    the reporter can classify the truncated row independently and still parse
+    all later evidence.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
+    needs_separator = False
+    if path.exists() and path.stat().st_size > 0:
+        with path.open("rb") as existing:
+            existing.seek(-1, 2)
+            needs_separator = existing.read(1) != b"\n"
+
     with path.open("a", encoding="utf-8") as file:
+        if needs_separator:
+            file.write("\n")
         file.write(json.dumps(evidence.to_payload(), sort_keys=True) + "\n")
