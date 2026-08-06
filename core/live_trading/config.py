@@ -83,3 +83,11 @@ class LiveTradingConfig:
     execution_intent_state_path: Path = Path(
         "runtime/live_execution_intent.json"
     )
+
+    execution_reconciliation_audit_path: Path = Path(
+        "runtime/live_execution_reconciliation.jsonl"
+    )
+
+    execution_reconciliation_report_directory: Path = Path(
+        "output/live_execution_reconciliation"
+    )

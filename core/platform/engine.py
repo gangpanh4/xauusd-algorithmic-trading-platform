@@ -13,6 +13,9 @@ from core.backtesting.runner import BacktestRunner
 from core.data.market_data import MarketDataService
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
+from core.live_trading.execution_reconciliation_report import (
+    ExecutionReconciliationReporter,
+)
 from core.live_trading.multi_timeframe_buffer import LiveMultiTimeframeBuffer
 from core.live_trading.parity_report import LiveParityReporter
 from core.live_trading.shadow_observation_report import (
@@ -323,6 +326,30 @@ class TradingPlatform:
             logger.info(
                 "No live parity evidence found at %s.",
                 config.parity_evidence_path,
+            )
+
+        if config.execution_reconciliation_audit_path.exists():
+            reconciliation_reporter = ExecutionReconciliationReporter(
+                input_path=config.execution_reconciliation_audit_path,
+                output_directory=(
+                    config.execution_reconciliation_report_directory
+                ),
+            )
+            reconciliation_csv, reconciliation_json = (
+                reconciliation_reporter.export()
+            )
+            logger.info(
+                "Execution reconciliation CSV exported to %s",
+                reconciliation_csv,
+            )
+            logger.info(
+                "Execution reconciliation JSON exported to %s",
+                reconciliation_json,
+            )
+        else:
+            logger.info(
+                "No execution reconciliation audit found at %s.",
+                config.execution_reconciliation_audit_path,
             )
 
     def shutdown(self) -> None:

@@ -56,6 +56,10 @@ from .execution_readiness import (
     ExecutionReadinessResult,
     assess_execution_readiness,
 )
+from .execution_reconciliation_audit import (
+    append_execution_reconciliation_audit,
+    build_execution_reconciliation_audit,
+)
 from .models import LiveTradingResult
 from .parity_evidence import (
     LiveParityEvidence,
@@ -189,6 +193,32 @@ class LiveTradingEngine:
             TypeError,
             ValueError,
         ) as exc:
+            failure_audit = build_execution_reconciliation_audit(
+                intent_before=intent,
+                intent_after=intent,
+                disposition="FAILED_CLOSED",
+                matching_order_ticket=intent.ticket,
+                matching_deal_tickets=(),
+                active_order_match_count=len(
+                    locals().get("active_orders", ())
+                ),
+                historical_order_match_count=len(
+                    locals().get("historical_orders", ())
+                ),
+                execution_deal_match_count=len(
+                    locals().get("execution_deals", ())
+                ),
+                open_position_match_count=len(
+                    locals().get("open_positions", ())
+                ),
+                startup_allowed=False,
+                live_execution_enabled=self.config.live_execution_enabled,
+                failure_reason=str(exc),
+            )
+            append_execution_reconciliation_audit(
+                self.config.execution_reconciliation_audit_path,
+                failure_audit,
+            )
             self.state.active_order_count = max(
                 1,
                 self.state.active_order_count,
@@ -204,6 +234,26 @@ class LiveTradingEngine:
 
         if result.intent != intent:
             self.execution_intent_store.save(result.intent)
+
+        startup_allowed = not result.intent.unresolved
+        audit = build_execution_reconciliation_audit(
+            intent_before=intent,
+            intent_after=result.intent,
+            disposition=result.disposition.value,
+            matching_order_ticket=result.matching_order_ticket,
+            matching_deal_tickets=result.matching_deal_tickets,
+            active_order_match_count=len(active_orders),
+            historical_order_match_count=len(historical_orders),
+            execution_deal_match_count=len(execution_deals),
+            open_position_match_count=len(open_positions),
+            startup_allowed=startup_allowed,
+            live_execution_enabled=self.config.live_execution_enabled,
+            failure_reason="" if startup_allowed else result.reason,
+        )
+        append_execution_reconciliation_audit(
+            self.config.execution_reconciliation_audit_path,
+            audit,
+        )
 
         self.state.execution_intent_reconciliation_status = (
             result.disposition.value
