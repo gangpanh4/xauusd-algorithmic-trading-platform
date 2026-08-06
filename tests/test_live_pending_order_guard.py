@@ -10,7 +10,12 @@ import pytest
 import core.live_trading.engine as live_engine_module
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
-from core.mt5_execution.models import OrderResult, OrderStatus
+from core.mt5_execution.models import (
+    OrderRequest,
+    OrderResult,
+    OrderSide,
+    OrderStatus,
+)
 from core.regime_detector.models import MarketBar
 from core.risk_manager.models import RiskDecision
 
@@ -66,6 +71,7 @@ def _config(path: Path, *, enabled: bool = False) -> LiveTradingConfig:
     return LiveTradingConfig(
         live_execution_enabled=enabled,
         partial_fill_state_path=path,
+        execution_intent_state_path=path.with_name("execution_intent.json"),
     )
 
 
@@ -76,7 +82,14 @@ def _enabled_engine(path: Path) -> LiveTradingEngine:
     engine.executor.is_connected = Mock(return_value=True)
     engine.adapter.adapt = Mock(
         return_value=SimpleNamespace(
-            order_request=SimpleNamespace(volume=0.01),
+            order_request=OrderRequest(
+                symbol="XAUUSD",
+                side=OrderSide.BUY,
+                volume=0.01,
+                entry_price=4003.0,
+                stop_loss=4001.0,
+                take_profit=4007.0,
+            ),
         )
     )
     return engine

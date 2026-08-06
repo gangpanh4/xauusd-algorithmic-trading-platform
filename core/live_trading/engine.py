@@ -16,7 +16,7 @@ from core.execution_adapter.config import ExecutionAdapterConfig
 from core.mt5_execution.active_orders import get_active_order_count
 from core.mt5_execution.deal_history import get_realized_deals
 from core.mt5_execution.executor import MT5Executor
-from core.mt5_execution.models import OrderStatus
+from core.mt5_execution.models import OrderResult, OrderStatus
 from core.mt5_execution.positions import get_open_positions
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
@@ -27,6 +27,13 @@ from core.trading_pipeline.models import (
 from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
+from .execution_intent_store import (
+    ExecutionIntentStateError,
+    ExecutionIntentStore,
+    PersistedExecutionIntent,
+    apply_execution_result,
+    build_execution_intent,
+)
 from .execution_readiness import (
     ExecutionReadinessInputs,
     ExecutionReadinessResult,
@@ -60,6 +67,9 @@ class LiveTradingEngine:
         )
         self.partial_fill_store = PartialFillStateStore(
             config.partial_fill_state_path
+        )
+        self.execution_intent_store = ExecutionIntentStore(
+            config.execution_intent_state_path
         )
 
     def assess_demo_execution_readiness(
@@ -434,8 +444,16 @@ class LiveTradingEngine:
             raise RuntimeError(self.state.last_error)
 
         execution_request = self.adapter.adapt(pipeline_result)
+        execution_intent = self._prepare_execution_intent(
+            observation_timestamp=timestamp,
+            request=execution_request.order_request,
+        )
         execution_result = self.executor.execute_order(
             execution_request.order_request,
+        )
+        self._record_execution_intent_result(
+            execution_intent,
+            execution_result,
         )
 
         if execution_result.status is OrderStatus.PENDING:
@@ -538,6 +556,42 @@ class LiveTradingEngine:
             pipeline_result=pipeline_result,
             execution_result=execution_result,
             trade_executed=True,
+        )
+
+    def _prepare_execution_intent(
+        self,
+        *,
+        observation_timestamp: datetime,
+        request: object,
+    ) -> PersistedExecutionIntent:
+        """Persist intent before broker submission and reject duplicates."""
+
+        intent = build_execution_intent(
+            observation_timestamp=observation_timestamp,
+            request=request,
+        )
+        existing = self.execution_intent_store.load()
+        if existing is not None:
+            if existing.intent_key == intent.intent_key:
+                raise ExecutionIntentStateError(
+                    "Duplicate execution intent is already persisted."
+                )
+            if existing.unresolved:
+                raise ExecutionIntentStateError(
+                    "A prior execution intent remains unresolved."
+                )
+        self.execution_intent_store.save(intent)
+        return intent
+
+    def _record_execution_intent_result(
+        self,
+        intent: PersistedExecutionIntent,
+        result: OrderResult,
+    ) -> None:
+        """Persist broker acknowledgement before later state mutation."""
+
+        self.execution_intent_store.save(
+            apply_execution_result(intent, result)
         )
 
     def _require_new_observation_timestamp(

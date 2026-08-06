@@ -79,3 +79,7 @@ class LiveTradingConfig:
     partial_fill_state_path: Path = Path(
         "runtime/live_partial_fill_state.json"
     )
+
+    execution_intent_state_path: Path = Path(
+        "runtime/live_execution_intent.json"
+    )
