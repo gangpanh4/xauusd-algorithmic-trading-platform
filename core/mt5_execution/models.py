@@ -97,3 +97,56 @@ class PositionInfo:
     stop_loss: float
     take_profit: float
     profit: float
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveOrderInfo:
+    """Authoritative active broker-order provenance."""
+
+    ticket: int
+    symbol: str
+    side: OrderSide
+    volume_initial: float
+    volume_current: float
+    price_open: float
+    stop_loss: float
+    take_profit: float
+    magic_number: int
+    comment: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalOrderInfo:
+    """Authoritative broker order-history provenance."""
+
+    ticket: int
+    symbol: str
+    side: OrderSide
+    volume_initial: float
+    volume_current: float
+    price_open: float
+    stop_loss: float
+    take_profit: float
+    magic_number: int
+    comment: str
+    created_at: datetime
+    completed_at: datetime
+    state: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionDealInfo:
+    """Authoritative opening or execution deal provenance."""
+
+    ticket: int
+    order_ticket: int
+    position_id: int
+    timestamp: datetime
+    symbol: str
+    side: OrderSide
+    volume: float
+    price: float
+    entry: int
+    magic_number: int
+    comment: str

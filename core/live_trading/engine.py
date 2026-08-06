@@ -16,7 +16,11 @@ from core.execution_adapter.config import ExecutionAdapterConfig
 from core.mt5_execution.active_orders import get_active_order_count
 from core.mt5_execution.deal_history import get_realized_deals
 from core.mt5_execution.executor import MT5Executor
-from core.mt5_execution.models import OrderResult, OrderStatus
+from core.mt5_execution.models import (
+    OrderRequest,
+    OrderResult,
+    OrderStatus,
+)
 from core.mt5_execution.positions import get_open_positions
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
@@ -448,9 +452,16 @@ class LiveTradingEngine:
             observation_timestamp=timestamp,
             request=execution_request.order_request,
         )
-        execution_result = self.executor.execute_order(
-            execution_request.order_request,
+        broker_request = OrderRequest(
+            symbol=execution_request.order_request.symbol,
+            side=execution_request.order_request.side,
+            volume=execution_request.order_request.volume,
+            entry_price=execution_request.order_request.entry_price,
+            stop_loss=execution_request.order_request.stop_loss,
+            take_profit=execution_request.order_request.take_profit,
+            comment=execution_intent.broker_comment,
         )
+        execution_result = self.executor.execute_order(broker_request)
         self._record_execution_intent_result(
             execution_intent,
             execution_result,
@@ -569,6 +580,7 @@ class LiveTradingEngine:
         intent = build_execution_intent(
             observation_timestamp=observation_timestamp,
             request=request,
+            magic_number=self.config.execution.magic_number,
         )
         existing = self.execution_intent_store.load()
         if existing is not None:

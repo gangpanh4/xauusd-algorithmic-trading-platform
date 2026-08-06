@@ -15,7 +15,7 @@ from typing import Any
 
 from core.mt5_execution.models import OrderRequest, OrderResult, OrderStatus
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _EXPECTED_KEYS = {
     "version",
     "intent_key",
@@ -30,6 +30,8 @@ _EXPECTED_KEYS = {
     "ticket",
     "created_at",
     "updated_at",
+    "magic_number",
+    "broker_comment",
 }
 
 
@@ -72,6 +74,8 @@ class PersistedExecutionIntent:
     ticket: int | None
     created_at: datetime
     updated_at: datetime
+    magic_number: int
+    broker_comment: str
 
     @property
     def unresolved(self) -> bool:
@@ -83,6 +87,7 @@ def build_execution_intent(
     observation_timestamp: datetime,
     request: OrderRequest,
     created_at: datetime | None = None,
+    magic_number: int = 0,
 ) -> PersistedExecutionIntent:
     """Build a deterministic intent key before any broker submission."""
 
@@ -92,11 +97,16 @@ def build_execution_intent(
         "created_at",
     )
     side = request.side.value
+    validated_magic = _non_negative_int(magic_number, "magic_number")
     numeric = {
         "volume": _finite(request.volume, "volume", positive=True),
         "entry_price": _finite(request.entry_price, "entry_price"),
         "stop_loss": _finite(request.stop_loss, "stop_loss", positive=True),
-        "take_profit": _finite(request.take_profit, "take_profit", positive=True),
+        "take_profit": _finite(
+            request.take_profit,
+            "take_profit",
+            positive=True,
+        ),
     }
     if not isinstance(request.symbol, str) or not request.symbol.strip():
         raise ExecutionIntentStateError("Execution-intent symbol is invalid.")
@@ -106,13 +116,17 @@ def build_execution_intent(
             "symbol": request.symbol,
             "observation_timestamp": timestamp.isoformat(),
             "side": side,
+            "magic_number": validated_magic,
             **numeric,
         },
         sort_keys=True,
         separators=(",", ":"),
     )
+    intent_key = sha256(canonical.encode("utf-8")).hexdigest()
+    broker_comment = f"xau:{intent_key[:16]}"
+
     return PersistedExecutionIntent(
-        intent_key=sha256(canonical.encode("utf-8")).hexdigest(),
+        intent_key=intent_key,
         symbol=request.symbol,
         observation_timestamp=timestamp,
         side=side,
@@ -124,6 +138,8 @@ def build_execution_intent(
         ticket=None,
         created_at=now,
         updated_at=now,
+        magic_number=validated_magic,
+        broker_comment=broker_comment,
     )
 
 
@@ -190,6 +206,8 @@ class ExecutionIntentStore:
             "ticket": validated.ticket,
             "created_at": validated.created_at.isoformat(),
             "updated_at": validated.updated_at.isoformat(),
+            "magic_number": validated.magic_number,
+            "broker_comment": validated.broker_comment,
         }
         serialized = json.dumps(
             payload,
@@ -263,6 +281,8 @@ class ExecutionIntentStore:
                 ticket=payload["ticket"],
                 created_at=datetime.fromisoformat(payload["created_at"]),
                 updated_at=datetime.fromisoformat(payload["updated_at"]),
+                magic_number=payload["magic_number"],
+                broker_comment=payload["broker_comment"],
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ExecutionIntentStateError(
@@ -281,7 +301,10 @@ class ExecutionIntentStore:
         if (
             not isinstance(intent.intent_key, str)
             or len(intent.intent_key) != 64
-            or any(char not in "0123456789abcdef" for char in intent.intent_key)
+            or any(
+                char not in "0123456789abcdef"
+                for char in intent.intent_key
+            )
         ):
             raise ExecutionIntentStateError(
                 "Execution-intent key is invalid."
@@ -305,6 +328,17 @@ class ExecutionIntentStore:
             raise ExecutionIntentStateError(
                 "Execution-intent ticket is invalid."
             )
+
+        validated_magic = _non_negative_int(
+            intent.magic_number,
+            "magic_number",
+        )
+        expected_comment = f"xau:{intent.intent_key[:16]}"
+        if intent.broker_comment != expected_comment:
+            raise ExecutionIntentStateError(
+                "Execution-intent broker comment is invalid."
+            )
+
         observation = _aware_utc(
             intent.observation_timestamp,
             "observation_timestamp",
@@ -320,10 +354,19 @@ class ExecutionIntentStore:
             observation_timestamp=observation,
             volume=_finite(intent.volume, "volume", positive=True),
             entry_price=_finite(intent.entry_price, "entry_price"),
-            stop_loss=_finite(intent.stop_loss, "stop_loss", positive=True),
-            take_profit=_finite(intent.take_profit, "take_profit", positive=True),
+            stop_loss=_finite(
+                intent.stop_loss,
+                "stop_loss",
+                positive=True,
+            ),
+            take_profit=_finite(
+                intent.take_profit,
+                "take_profit",
+                positive=True,
+            ),
             created_at=created,
             updated_at=updated,
+            magic_number=validated_magic,
         )
 
 
@@ -337,7 +380,12 @@ def _aware_utc(value: datetime, name: str) -> datetime:
     return value.astimezone(UTC)
 
 
-def _finite(value: float, name: str, *, positive: bool = False) -> float:
+def _finite(
+    value: float,
+    name: str,
+    *,
+    positive: bool = False,
+) -> float:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -350,3 +398,11 @@ def _finite(value: float, name: str, *, positive: bool = False) -> float:
             f"{name} must be greater than zero."
         )
     return numeric
+
+
+def _non_negative_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ExecutionIntentStateError(f"{name} must be an integer.")
+    if value < 0:
+        raise ExecutionIntentStateError(f"{name} cannot be negative.")
+    return value

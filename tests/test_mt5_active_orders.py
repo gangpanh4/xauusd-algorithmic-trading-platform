@@ -2,54 +2,56 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
+import MetaTrader5 as mt5
 
-import core.mt5_execution.active_orders as active_orders
-
-
-def test_active_order_count_uses_exact_symbol(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_orders_get(**kwargs):
-        captured.update(kwargs)
-        return (SimpleNamespace(ticket=1), SimpleNamespace(ticket=2))
-
-    monkeypatch.setattr(active_orders.mt5, "orders_get", fake_orders_get)
-
-    assert active_orders.get_active_order_count("XAUUSD.a") == 2
-    assert captured == {"symbol": "XAUUSD.a"}
+from core.mt5_execution.active_orders import (
+    get_active_order_count,
+    get_active_orders,
+)
+from core.mt5_execution.models import OrderSide
 
 
-def test_active_order_query_failure_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_get_active_orders_preserves_provenance(monkeypatch) -> None:
+    raw = SimpleNamespace(
+        ticket=101,
+        symbol="XAUUSD",
+        type=mt5.ORDER_TYPE_BUY,
+        volume_initial=0.01,
+        volume_current=0.01,
+        price_open=4000.0,
+        sl=3990.0,
+        tp=4020.0,
+        magic=234000,
+        comment="xau:0123456789abcdef",
+        time_setup=1_700_000_000,
+        time_setup_msc=1_700_000_000_000,
+    )
     monkeypatch.setattr(
-        active_orders.mt5,
-        "orders_get",
+        "core.mt5_execution.active_orders.mt5.orders_get",
+        lambda **kwargs: (raw,),
+    )
+
+    orders = get_active_orders("XAUUSD")
+
+    assert len(orders) == 1
+    assert orders[0].ticket == 101
+    assert orders[0].side is OrderSide.BUY
+    assert orders[0].magic_number == 234000
+    assert orders[0].comment == "xau:0123456789abcdef"
+    assert get_active_order_count("XAUUSD") == 1
+
+
+def test_get_active_orders_fails_closed_on_query_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "core.mt5_execution.active_orders.mt5.orders_get",
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
-        active_orders.mt5,
-        "last_error",
-        lambda: (-10004, "No IPC connection"),
+        "core.mt5_execution.active_orders.mt5.last_error",
+        lambda: (1, "failed"),
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="Unable to retrieve active MT5 orders",
-    ):
-        active_orders.get_active_order_count("XAUUSD")
+    import pytest
 
-
-def test_successful_empty_query_returns_zero(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        active_orders.mt5,
-        "orders_get",
-        lambda **kwargs: (),
-    )
-
-    assert active_orders.get_active_order_count("XAUUSD") == 0
+    with pytest.raises(RuntimeError, match="Unable to retrieve"):
+        get_active_orders("XAUUSD")

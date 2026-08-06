@@ -1,4 +1,4 @@
-"""MT5 active-order reconciliation."""
+"""Validated MT5 order-history access for execution provenance."""
 
 from __future__ import annotations
 
@@ -8,32 +8,41 @@ from typing import Any
 
 import MetaTrader5 as mt5
 
-from .models import ActiveOrderInfo, OrderSide
+from .models import HistoricalOrderInfo, OrderSide
 
 
-def get_active_orders(symbol: str) -> list[ActiveOrderInfo]:
-    """Return authoritative active broker orders for one symbol."""
+def get_historical_orders(
+    *,
+    date_from: datetime,
+    date_to: datetime,
+    symbol: str,
+) -> list[HistoricalOrderInfo]:
+    """Return authoritative order history for one exact symbol."""
 
-    _validate_symbol(symbol)
-    orders = mt5.orders_get(symbol=symbol)
+    start = _aware_utc(date_from, "date_from")
+    end = _aware_utc(date_to, "date_to")
+    if end < start:
+        raise ValueError("date_to must not be earlier than date_from")
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise ValueError("symbol must be a non-empty string")
+
+    orders = mt5.history_orders_get(start, end, group=symbol)
     if orders is None:
         raise RuntimeError(
-            f"Unable to retrieve active MT5 orders: {mt5.last_error()}"
+            f"Unable to retrieve MT5 order history: {mt5.last_error()}"
         )
 
-    converted = [_to_active_order(order) for order in orders]
-    converted.sort(key=lambda item: (item.created_at, item.ticket))
+    converted = [
+        _to_historical_order(order)
+        for order in orders
+        if getattr(order, "symbol", None) == symbol
+    ]
+    converted.sort(key=lambda item: (item.completed_at, item.ticket))
     return converted
 
 
-def get_active_order_count(symbol: str) -> int:
-    """Return the authoritative number of active broker orders for a symbol."""
-
-    return len(get_active_orders(symbol))
-
-
-def _to_active_order(raw: Any) -> ActiveOrderInfo:
-    return ActiveOrderInfo(
+def _to_historical_order(raw: Any) -> HistoricalOrderInfo:
+    return HistoricalOrderInfo(
         ticket=_positive_int(raw.ticket, "ticket"),
         symbol=_non_empty_string(raw.symbol, "symbol"),
         side=_order_side(raw.type),
@@ -53,7 +62,9 @@ def _to_active_order(raw: Any) -> ActiveOrderInfo:
         take_profit=_non_negative_float(getattr(raw, "tp", 0.0), "tp"),
         magic_number=_non_negative_int(getattr(raw, "magic", 0), "magic"),
         comment=str(getattr(raw, "comment", "")),
-        created_at=_mt5_timestamp(raw, "time_setup_msc", "time_setup"),
+        created_at=_timestamp(raw, "time_setup_msc", "time_setup"),
+        completed_at=_timestamp(raw, "time_done_msc", "time_done"),
+        state=int(raw.state),
     )
 
 
@@ -62,10 +73,10 @@ def _order_side(value: object) -> OrderSide:
         return OrderSide.BUY
     if value == mt5.ORDER_TYPE_SELL:
         return OrderSide.SELL
-    raise ValueError(f"Unsupported active-order type: {value!r}")
+    raise ValueError(f"Unsupported historical-order type: {value!r}")
 
 
-def _mt5_timestamp(raw: Any, msc_name: str, seconds_name: str) -> datetime:
+def _timestamp(raw: Any, msc_name: str, seconds_name: str) -> datetime:
     milliseconds = getattr(raw, msc_name, None)
     if (
         isinstance(milliseconds, (int, float))
@@ -84,12 +95,15 @@ def _mt5_timestamp(raw: Any, msc_name: str, seconds_name: str) -> datetime:
     ):
         return datetime.fromtimestamp(float(seconds), tz=UTC)
 
-    raise ValueError("Active-order timestamp is invalid.")
+    raise ValueError("Historical-order timestamp is invalid.")
 
 
-def _validate_symbol(symbol: str) -> None:
-    if not isinstance(symbol, str) or not symbol.strip():
-        raise ValueError("symbol must be a non-empty string")
+def _aware_utc(value: datetime, name: str) -> datetime:
+    if not isinstance(value, datetime):
+        raise TypeError(f"{name} must be a datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
+    return value.astimezone(UTC)
 
 
 def _non_empty_string(value: object, name: str) -> str:
