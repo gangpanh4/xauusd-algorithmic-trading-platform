@@ -44,6 +44,35 @@ def _row(
     return row
 
 
+def _with_pipeline_audit(row: dict[str, object]) -> dict[str, object]:
+    row.update(
+        {
+            "pipeline_disposition": "REJECTED",
+            "pipeline_stage_reached": "RISK",
+            "pipeline_rejection_stage": "PROBABILITY",
+            "pipeline_reason_code": "PROBABILITY_REJECTED",
+            "pipeline_reason": "Probability policy rejected the observation.",
+            "regime_confirmed": True,
+            "bos_present": False,
+            "choch_present": False,
+            "liquidity_present": False,
+            "feature_count": 6,
+            "probability_calculated": True,
+            "probability_accepted": False,
+            "probability_value": 0.4,
+            "trade_quality_calculated": True,
+            "trade_quality_approved": False,
+            "trade_quality_score": 0.5,
+            "confluence_available": True,
+            "confluence_approved": False,
+            "confluence_score": 0.45,
+            "signal_generated": False,
+            "risk_approved": False,
+        }
+    )
+    return row
+
+
 def _write(path, rows) -> None:
     path.write_text(
         "".join(json.dumps(row) + "\n" for row in rows),
@@ -82,6 +111,8 @@ def test_exports_valid_append_only_shadow_summary(tmp_path) -> None:
     assert summary["legacy_observation_count"] == 3
     assert summary["active_pipeline_modified"] is False
     assert summary["source_file_modified"] is False
+    assert summary["pipeline_audit_count"] == 0
+    assert summary["legacy_pipeline_audit_count"] == 3
 
 
 def test_duplicate_timestamp_fails_closed(tmp_path) -> None:
@@ -240,6 +271,59 @@ def test_session_start_after_recording_fails_closed(tmp_path) -> None:
             )
         ],
     )
+
+    reporter = ShadowObservationReporter(
+        input_path=source,
+        output_directory=tmp_path / "output",
+    )
+
+    with pytest.raises(
+        ShadowObservationValidationError,
+        match="safety",
+    ):
+        reporter.calculate()
+
+
+def test_complete_pipeline_audit_is_validated_and_counted(tmp_path) -> None:
+    source = tmp_path / "shadow.jsonl"
+    timestamp = datetime(2026, 8, 5, 10, 25, tzinfo=UTC)
+    _write(source, [_with_pipeline_audit(_row(timestamp))])
+
+    summary = ShadowObservationReporter(
+        input_path=source,
+        output_directory=tmp_path / "output",
+    ).calculate()
+
+    assert summary["pipeline_audit_count"] == 1
+    assert summary["legacy_pipeline_audit_count"] == 0
+    assert summary["validation_passed"] is True
+
+
+def test_partial_pipeline_audit_fails_closed(tmp_path) -> None:
+    source = tmp_path / "shadow.jsonl"
+    row = _row(datetime(2026, 8, 5, 10, 25, tzinfo=UTC))
+    row["pipeline_disposition"] = "REJECTED"
+    _write(source, [row])
+
+    reporter = ShadowObservationReporter(
+        input_path=source,
+        output_directory=tmp_path / "output",
+    )
+
+    with pytest.raises(
+        ShadowObservationValidationError,
+        match="safety",
+    ):
+        reporter.calculate()
+
+
+def test_invalid_pipeline_audit_fails_closed(tmp_path) -> None:
+    source = tmp_path / "shadow.jsonl"
+    row = _with_pipeline_audit(
+        _row(datetime(2026, 8, 5, 10, 25, tzinfo=UTC))
+    )
+    row["probability_value"] = 1.5
+    _write(source, [row])
 
     reporter = ShadowObservationReporter(
         input_path=source,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -11,6 +11,11 @@ from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.regime_detector.models import MarketBar
 from core.risk_manager.models import RiskDecision
+from core.trading_pipeline.models import (
+    PipelineDisposition,
+    PipelineObservationAudit,
+    PipelineStage,
+)
 
 
 def _market_bar() -> MarketBar:
@@ -213,10 +218,29 @@ def test_analysis_only_engine_records_append_only_shadow_observation(
     pipeline_result.trade_plan.risk_reward_ratio = 2.0
     pipeline_result.trade_plan.reason = "approved test"
     engine.pipeline.process_bar = Mock(return_value=pipeline_result)
+    bar = _market_bar()
+    engine.pipeline._last_observation_audit = PipelineObservationAudit(
+        timestamp=bar.timestamp,
+        disposition=PipelineDisposition.ACCEPTED,
+        stage_reached=PipelineStage.APPROVED,
+        regime_confirmed=True,
+        bos_present=True,
+        feature_count=6,
+        probability_calculated=True,
+        probability_accepted=True,
+        probability_value=0.75,
+        trade_quality_calculated=True,
+        trade_quality_approved=True,
+        trade_quality_score=0.8,
+        confluence_available=True,
+        confluence_approved=True,
+        confluence_score=0.7,
+        signal_generated=True,
+        risk_approved=True,
+    )
     engine.adapter.adapt = Mock()
     engine.executor.execute_order = Mock()
 
-    bar = _market_bar()
     result = engine.process_bar(
         bar,
         account_balance=1000.0,
@@ -250,6 +274,18 @@ def test_analysis_only_engine_records_append_only_shadow_observation(
     assert rows[0]["take_profit"] == pytest.approx(4007.0)
     assert rows[0]["position_size"] == pytest.approx(0.01)
     assert rows[0]["trade_executed"] is False
+    assert rows[0]["pipeline_disposition"] == "ACCEPTED"
+    assert rows[0]["pipeline_stage_reached"] == "APPROVED"
+    assert rows[0]["pipeline_rejection_stage"] is None
+    assert rows[0]["pipeline_reason_code"] is None
+    assert rows[0]["regime_confirmed"] is True
+    assert rows[0]["bos_present"] is True
+    assert rows[0]["feature_count"] == 6
+    assert rows[0]["probability_value"] == pytest.approx(0.75)
+    assert rows[0]["trade_quality_score"] == pytest.approx(0.8)
+    assert rows[0]["confluence_score"] == pytest.approx(0.7)
+    assert rows[0]["signal_generated"] is True
+    assert rows[0]["risk_approved"] is True
 
 
 def test_warmup_does_not_write_shadow_observation(tmp_path) -> None:

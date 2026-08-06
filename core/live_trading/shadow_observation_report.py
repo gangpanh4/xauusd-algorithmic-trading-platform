@@ -7,6 +7,7 @@ import json
 from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Final
 
@@ -36,6 +37,31 @@ class ShadowObservationReporter:
             "position_size",
             "risk_reward_ratio",
             "reason",
+        }
+    )
+    PIPELINE_AUDIT_FIELDS: Final[frozenset[str]] = frozenset(
+        {
+            "pipeline_disposition",
+            "pipeline_stage_reached",
+            "pipeline_rejection_stage",
+            "pipeline_reason_code",
+            "pipeline_reason",
+            "regime_confirmed",
+            "bos_present",
+            "choch_present",
+            "liquidity_present",
+            "feature_count",
+            "probability_calculated",
+            "probability_accepted",
+            "probability_value",
+            "trade_quality_calculated",
+            "trade_quality_approved",
+            "trade_quality_score",
+            "confluence_available",
+            "confluence_approved",
+            "confluence_score",
+            "signal_generated",
+            "risk_approved",
         }
     )
     _CSV_COLUMNS: Final[tuple[str, ...]] = (
@@ -177,6 +203,8 @@ class ShadowObservationReporter:
         legacy_observation_count = 0
         session_transition_count = 0
         previous_session_id: str | None = None
+        pipeline_audit_count = 0
+        legacy_pipeline_audit_count = 0
 
         for index, row in enumerate(rows, start=1):
             timestamp = self._parse_timestamp(row["timestamp"], index)
@@ -192,6 +220,26 @@ class ShadowObservationReporter:
             direction = str(row["direction"])
             decisions[decision] += 1
             directions[direction] += 1
+
+            present_audit_fields = self.PIPELINE_AUDIT_FIELDS.intersection(row)
+            if not present_audit_fields:
+                legacy_pipeline_audit_count += 1
+            elif present_audit_fields != self.PIPELINE_AUDIT_FIELDS:
+                semantic_violations.append(
+                    {
+                        "line": index,
+                        "timestamp": timestamp.isoformat(),
+                        "error": "Pipeline audit fields must be complete.",
+                    }
+                )
+            else:
+                pipeline_audit_count += 1
+                self._validate_pipeline_audit(
+                    row=row,
+                    line_number=index,
+                    timestamp=timestamp,
+                    semantic_violations=semantic_violations,
+                )
 
             raw_session_id = row.get("session_id")
             raw_session_started_at = row.get("session_started_at")
@@ -330,7 +378,7 @@ class ShadowObservationReporter:
 
         interval_minutes = [
             (current - prior).total_seconds() / 60.0
-            for prior, current in zip(timestamps, timestamps[1:])
+            for prior, current in pairwise(timestamps)
         ]
         gap_values = [
             value
@@ -392,6 +440,8 @@ class ShadowObservationReporter:
             "explicit_session_count": len(sessions),
             "legacy_observation_count": legacy_observation_count,
             "session_transition_count": session_transition_count,
+            "pipeline_audit_count": pipeline_audit_count,
+            "legacy_pipeline_audit_count": legacy_pipeline_audit_count,
             "sessions": sessions,
             "decision_counts": dict(sorted(decisions.items())),
             "direction_counts": dict(sorted(directions.items())),
@@ -404,6 +454,106 @@ class ShadowObservationReporter:
             "source_file_modified": False,
             "validation_passed": True,
         }
+
+    @classmethod
+    def _validate_pipeline_audit(
+        cls,
+        *,
+        row: Mapping[str, Any],
+        line_number: int,
+        timestamp: datetime,
+        semantic_violations: list[dict[str, Any]],
+    ) -> None:
+        """Validate one complete scalar pipeline-audit projection."""
+
+        dispositions = {"ACCEPTED", "REJECTED", "SKIPPED", "ERROR"}
+        stages = {
+            "OBSERVATION", "REGIME", "MARKET_STRUCTURE", "FEATURES",
+            "PROBABILITY", "TRADE_QUALITY", "CONFLUENCE", "SIGNAL",
+            "RISK", "APPROVED",
+        }
+        errors: list[str] = []
+        disposition = row["pipeline_disposition"]
+        stage_reached = row["pipeline_stage_reached"]
+        rejection_stage = row["pipeline_rejection_stage"]
+        reason_code = row["pipeline_reason_code"]
+        reason = row["pipeline_reason"]
+
+        if disposition not in dispositions:
+            errors.append("pipeline_disposition is invalid")
+        if stage_reached not in stages:
+            errors.append("pipeline_stage_reached is invalid")
+        if rejection_stage is not None and rejection_stage not in stages:
+            errors.append("pipeline_rejection_stage is invalid")
+        if reason_code is not None and (
+            not isinstance(reason_code, str) or not reason_code.strip()
+        ):
+            errors.append("pipeline_reason_code must be non-empty or null")
+        if reason is not None and (
+            not isinstance(reason, str) or not reason.strip()
+        ):
+            errors.append("pipeline_reason must be non-empty or null")
+
+        boolean_fields = (
+            "regime_confirmed", "bos_present", "choch_present",
+            "liquidity_present", "probability_calculated",
+            "probability_accepted", "trade_quality_calculated",
+            "trade_quality_approved", "confluence_available",
+            "confluence_approved", "signal_generated", "risk_approved",
+        )
+        if any(not isinstance(row[field], bool) for field in boolean_fields):
+            errors.append("pipeline audit flags must be booleans")
+
+        feature_count = row["feature_count"]
+        if (
+            isinstance(feature_count, bool)
+            or not isinstance(feature_count, int)
+            or feature_count < 0
+        ):
+            errors.append("feature_count must be a non-negative integer")
+
+        for field in (
+            "probability_value",
+            "trade_quality_score",
+            "confluence_score",
+        ):
+            value = row[field]
+            if value is None:
+                continue
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not 0.0 <= float(value) <= 1.0
+            ):
+                errors.append(f"{field} must be between 0 and 1 or null")
+
+        if disposition == "ACCEPTED":
+            if stage_reached != "APPROVED" or not row["risk_approved"]:
+                errors.append(
+                    "accepted audit must reach approval with risk approved"
+                )
+            if (
+                rejection_stage is not None
+                or reason_code is not None
+                or reason is not None
+            ):
+                errors.append(
+                    "accepted audit cannot contain rejection metadata"
+                )
+        elif disposition == "REJECTED":
+            if rejection_stage is None or reason_code is None:
+                errors.append("rejected audit requires rejection metadata")
+        elif rejection_stage is not None:
+            errors.append("only rejected audit may define rejection stage")
+
+        if errors:
+            semantic_violations.append(
+                {
+                    "line": line_number,
+                    "timestamp": timestamp.isoformat(),
+                    "error": "; ".join(errors),
+                }
+            )
 
     @staticmethod
     def _parse_timestamp(value: Any, line_number: int) -> datetime:

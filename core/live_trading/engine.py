@@ -2,25 +2,28 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from math import isclose, isfinite
-import json
-import logging
 from uuid import uuid4
 
 from core.data.models import MarketBar
 from core.execution_adapter.adapter import ExecutionAdapter
 from core.execution_adapter.config import ExecutionAdapterConfig
+from core.mt5_execution.active_orders import get_active_order_count
 from core.mt5_execution.deal_history import get_realized_deals
 from core.mt5_execution.executor import MT5Executor
-from core.mt5_execution.active_orders import get_active_order_count
 from core.mt5_execution.models import OrderStatus
 from core.mt5_execution.positions import get_open_positions
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
-from core.trading_pipeline.models import PipelineResult
+from core.trading_pipeline.models import (
+    PipelineObservationAudit,
+    PipelineResult,
+)
 from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
@@ -578,12 +581,63 @@ class LiveTradingEngine:
             "trade_executed": False,
         }
 
+        audit = self.pipeline.last_observation_audit
+        if audit is not None:
+            payload.update(
+                self._pipeline_audit_payload(
+                    audit=audit,
+                    timestamp=timestamp,
+                )
+            )
+
         path = self.config.shadow_observation_path
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(payload, sort_keys=True) + "\n")
 
         self.state.shadow_observations_recorded += 1
+
+    @staticmethod
+    def _pipeline_audit_payload(
+        *,
+        audit: PipelineObservationAudit,
+        timestamp: datetime,
+    ) -> dict[str, object]:
+        """Serialize the authoritative pipeline audit without recomputation."""
+
+        normalized_timestamp = timestamp.astimezone(UTC)
+        if audit.timestamp != normalized_timestamp:
+            raise ValueError(
+                "Pipeline audit timestamp must match the live observation."
+            )
+
+        return {
+            "pipeline_disposition": audit.disposition.value,
+            "pipeline_stage_reached": audit.stage_reached.value,
+            "pipeline_rejection_stage": (
+                audit.rejection_stage.value
+                if audit.rejection_stage is not None
+                else None
+            ),
+            "pipeline_reason_code": audit.reason_code,
+            "pipeline_reason": audit.reason,
+            "regime_confirmed": audit.regime_confirmed,
+            "bos_present": audit.bos_present,
+            "choch_present": audit.choch_present,
+            "liquidity_present": audit.liquidity_present,
+            "feature_count": audit.feature_count,
+            "probability_calculated": audit.probability_calculated,
+            "probability_accepted": audit.probability_accepted,
+            "probability_value": audit.probability_value,
+            "trade_quality_calculated": audit.trade_quality_calculated,
+            "trade_quality_approved": audit.trade_quality_approved,
+            "trade_quality_score": audit.trade_quality_score,
+            "confluence_available": audit.confluence_available,
+            "confluence_approved": audit.confluence_approved,
+            "confluence_score": audit.confluence_score,
+            "signal_generated": audit.signal_generated,
+            "risk_approved": audit.risk_approved,
+        }
 
     def _reconcile_partial_fill(
         self,
