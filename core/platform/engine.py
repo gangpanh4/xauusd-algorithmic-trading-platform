@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 import logging
 import time
+from datetime import timedelta
 
 import MetaTrader5 as mt5
 
@@ -14,6 +14,7 @@ from core.data.market_data import MarketDataService
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.live_trading.multi_timeframe_buffer import LiveMultiTimeframeBuffer
+from core.live_trading.parity_report import LiveParityReporter
 from core.live_trading.shadow_observation_report import (
     ShadowObservationReporter,
 )
@@ -86,6 +87,7 @@ class TradingPlatform:
         config = LiveTradingConfig(
             live_execution_enabled=False,
             shadow_recording_enabled=True,
+            parity_recording_enabled=True,
         )
         engine = LiveTradingEngine(config)
         mt5_started = False
@@ -308,6 +310,20 @@ class TradingPlatform:
         csv_path, json_path = reporter.export()
         logger.info("Shadow summary CSV exported to %s", csv_path)
         logger.info("Shadow summary JSON exported to %s", json_path)
+
+        if config.parity_evidence_path.exists():
+            parity_reporter = LiveParityReporter(
+                input_path=config.parity_evidence_path,
+                output_directory=config.parity_report_directory,
+            )
+            parity_csv, parity_json = parity_reporter.export()
+            logger.info("Live parity CSV exported to %s", parity_csv)
+            logger.info("Live parity JSON exported to %s", parity_json)
+        else:
+            logger.info(
+                "No live parity evidence found at %s.",
+                config.parity_evidence_path,
+            )
 
     def shutdown(self) -> None:
         if not self._initialized:

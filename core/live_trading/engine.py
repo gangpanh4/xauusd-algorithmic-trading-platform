@@ -28,6 +28,10 @@ from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
 from .models import LiveTradingResult
+from .parity_evidence import (
+    LiveParityEvidence,
+    append_parity_evidence,
+)
 from .partial_fill_store import (
     PartialFillStateError,
     PartialFillStateStore,
@@ -240,6 +244,7 @@ class LiveTradingEngine:
             observation_bar=bar,
             pipeline_result=pipeline_result,
             warmup=warmup,
+            parity_context=None,
         )
 
     def process_multi_timeframe(
@@ -292,6 +297,16 @@ class LiveTradingEngine:
             observation_bar=observation_bar,
             pipeline_result=pipeline_result,
             warmup=warmup,
+            parity_context=(
+                bars_by_timeframe,
+                account_balance,
+                stop_loss_distance,
+                pip_value,
+                tick_size,
+                lot_step,
+                minimum_lot,
+                maximum_lot,
+            ),
         )
 
     def _finalize_observation(
@@ -300,6 +315,16 @@ class LiveTradingEngine:
         observation_bar: MarketBar,
         pipeline_result: PipelineResult,
         warmup: bool,
+        parity_context: tuple[
+            Mapping[Timeframe, Sequence[MarketBar]],
+            float,
+            float,
+            float,
+            float,
+            float,
+            float | None,
+            float | None,
+        ] | None,
     ) -> LiveTradingResult:
         """Apply chronology, diagnostics, and optional execution."""
 
@@ -320,6 +345,11 @@ class LiveTradingEngine:
             timestamp=timestamp,
             pipeline_result=pipeline_result,
         )
+        if parity_context is not None:
+            self._record_parity_evidence(
+                timestamp=timestamp,
+                parity_context=parity_context,
+            )
 
         signal = pipeline_result.signal
         trade_plan = pipeline_result.trade_plan
@@ -516,6 +546,72 @@ class LiveTradingEngine:
             raise ValueError(
                 "Live observation timestamps must increase strictly."
             )
+
+    def _record_parity_evidence(
+        self,
+        *,
+        timestamp: datetime,
+        parity_context: tuple[
+            Mapping[Timeframe, Sequence[MarketBar]],
+            float,
+            float,
+            float,
+            float,
+            float,
+            float | None,
+            float | None,
+        ],
+    ) -> None:
+        """Persist exact synchronized inputs for research-only replay."""
+
+        if not self.config.parity_recording_enabled:
+            return
+        if self.config.live_execution_enabled:
+            raise RuntimeError(
+                "Parity evidence recording requires analysis-only mode."
+            )
+
+        audit = self.pipeline.last_observation_audit
+        if audit is None:
+            raise RuntimeError(
+                "Parity evidence requires an authoritative pipeline audit."
+            )
+
+        (
+            bars_by_timeframe,
+            account_balance,
+            stop_loss_distance,
+            pip_value,
+            tick_size,
+            lot_step,
+            minimum_lot,
+            maximum_lot,
+        ) = parity_context
+        histories = {
+            timeframe: tuple(bars_by_timeframe.get(timeframe, ()))
+            for timeframe in Timeframe
+        }
+        evidence = LiveParityEvidence(
+            captured_at=datetime.now(UTC),
+            observation_timestamp=timestamp,
+            symbol=self.config.symbol,
+            bars_by_timeframe=histories,
+            account_balance=account_balance,
+            stop_loss_distance=stop_loss_distance,
+            pip_value=pip_value,
+            tick_size=tick_size,
+            lot_step=lot_step,
+            minimum_lot=minimum_lot,
+            maximum_lot=maximum_lot,
+            expected_audit=audit,
+            live_execution_enabled=False,
+            shadow_only=True,
+            trade_executed=False,
+        )
+        append_parity_evidence(
+            self.config.parity_evidence_path,
+            evidence,
+        )
 
     def _record_shadow_observation(
         self,

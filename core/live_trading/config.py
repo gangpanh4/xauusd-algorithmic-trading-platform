@@ -10,7 +10,6 @@ from pathlib import Path
 from core.mt5_execution.config import (
     MT5ExecutionConfig,
 )
-
 from core.trading_pipeline.config import (
     TradingPipelineConfig,
 )
@@ -26,8 +25,8 @@ class LiveTradingConfig:
         default_factory=TradingPipelineConfig,
     )
 
-    execution: MT5ExecutionConfig = (
-        MT5ExecutionConfig()
+    execution: MT5ExecutionConfig = field(
+        default_factory=MT5ExecutionConfig,
     )
 
     symbol: str = "XAUUSD"
@@ -57,6 +56,16 @@ class LiveTradingConfig:
 
     shadow_summary_directory: Path = Path(
         "output/live_shadow"
+    )
+
+    parity_recording_enabled: bool = False
+
+    parity_evidence_path: Path = Path(
+        "runtime/live_parity_evidence.jsonl"
+    )
+
+    parity_report_directory: Path = Path(
+        "output/live_parity"
     )
 
     partial_fill_state_path: Path = Path(

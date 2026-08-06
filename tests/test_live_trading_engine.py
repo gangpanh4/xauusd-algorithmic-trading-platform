@@ -365,3 +365,61 @@ def test_restart_creates_new_shadow_session_metadata(tmp_path) -> None:
     assert second_started_at is not None
     assert rows[0]["session_id"] == first_session_id
     assert rows[1]["session_id"] == second_session_id
+
+
+def test_multi_timeframe_records_analysis_only_parity_evidence(tmp_path) -> None:
+    from core.multi_timeframe.enums import Timeframe
+
+    path = tmp_path / "parity.jsonl"
+    engine = LiveTradingEngine(
+        LiveTradingConfig(
+            parity_recording_enabled=True,
+            parity_evidence_path=path,
+        )
+    )
+    bar = _market_bar()
+    snapshot = {timeframe: [bar] for timeframe in Timeframe}
+    mtf_result = SimpleNamespace(
+        m5=SimpleNamespace(market_structure=SimpleNamespace())
+    )
+    engine.pipeline.multi_timeframe.process = Mock(return_value=mtf_result)
+    engine.pipeline.confluence_engine.evaluate_multi_timeframe = Mock(
+        return_value=None
+    )
+    pipeline_result = _approved_pipeline_result()
+    engine.pipeline.process_bar = Mock(return_value=pipeline_result)
+    engine.pipeline._last_observation_audit = PipelineObservationAudit(
+        timestamp=bar.timestamp,
+        disposition=PipelineDisposition.ACCEPTED,
+        stage_reached=PipelineStage.APPROVED,
+        regime_confirmed=True,
+        probability_calculated=True,
+        probability_accepted=True,
+        probability_value=0.75,
+        trade_quality_calculated=True,
+        trade_quality_approved=True,
+        trade_quality_score=0.8,
+        signal_generated=True,
+        risk_approved=True,
+    )
+
+    result = engine.process_multi_timeframe(
+        snapshot,
+        account_balance=10_000.0,
+        stop_loss_distance=0.01,
+        pip_value=0.1,
+        tick_size=0.01,
+        lot_step=0.01,
+        minimum_lot=0.01,
+        maximum_lot=100.0,
+    )
+
+    assert result.trade_executed is False
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["observation_timestamp"] == bar.timestamp.isoformat()
+    assert payload["live_execution_enabled"] is False
+    assert payload["shadow_only"] is True
+    assert payload["trade_executed"] is False
+    assert set(payload["bars_by_timeframe"]) == {
+        timeframe.value for timeframe in Timeframe
+    }
