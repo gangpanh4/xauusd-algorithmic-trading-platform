@@ -27,6 +27,11 @@ from core.trading_pipeline.models import (
 from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
+from .execution_readiness import (
+    ExecutionReadinessInputs,
+    ExecutionReadinessResult,
+    assess_execution_readiness,
+)
 from .models import LiveTradingResult
 from .parity_evidence import (
     LiveParityEvidence,
@@ -56,6 +61,14 @@ class LiveTradingEngine:
         self.partial_fill_store = PartialFillStateStore(
             config.partial_fill_state_path
         )
+
+    def assess_demo_execution_readiness(
+        self,
+        inputs: ExecutionReadinessInputs,
+    ) -> ExecutionReadinessResult:
+        """Return readiness diagnostics without submitting or authorizing orders."""
+
+        return assess_execution_readiness(self.config, inputs)
 
     def start(self) -> None:
         """Start in analysis-only or live-execution mode."""

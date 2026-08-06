@@ -48,6 +48,14 @@ class LiveTradingConfig:
 
     live_execution_enabled: bool = False
 
+    # Readiness-only controls. These fields do not authorize order submission.
+    demo_execution_approved: bool = False
+    execution_kill_switch_enabled: bool = True
+    approved_account_login: int | None = None
+    approved_account_server: str | None = None
+    maximum_order_submissions_per_session: int = 1
+    maximum_consecutive_execution_failures: int = 1
+
     shadow_recording_enabled: bool = False
 
     shadow_observation_path: Path = Path(

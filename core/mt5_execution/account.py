@@ -10,16 +10,12 @@ from .models import AccountInfo
 
 
 def get_account_info() -> AccountInfo:
-    """
-    Retrieve account information from MT5.
-    """
+    """Retrieve authoritative account information from MT5."""
 
     account = mt5.account_info()
 
     if account is None:
-        raise RuntimeError(
-            "Unable to retrieve MT5 account information."
-        )
+        raise RuntimeError("Unable to retrieve MT5 account information.")
 
     return AccountInfo(
         login=account.login,
@@ -30,4 +26,5 @@ def get_account_info() -> AccountInfo:
         free_margin=account.margin_free,
         leverage=account.leverage,
         currency=account.currency,
+        trade_mode=int(getattr(account, "trade_mode", -1)),
     )
