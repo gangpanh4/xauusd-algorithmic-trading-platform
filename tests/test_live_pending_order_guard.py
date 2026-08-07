@@ -11,6 +11,7 @@ import core.live_trading.engine as live_engine_module
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.mt5_execution.models import (
+    AccountInfo,
     OrderRequest,
     OrderResult,
     OrderSide,
@@ -70,13 +71,54 @@ def _partial_result(*, volume: float = 0.004) -> OrderResult:
 def _config(path: Path, *, enabled: bool = False) -> LiveTradingConfig:
     return LiveTradingConfig(
         live_execution_enabled=enabled,
+        demo_execution_approved=enabled,
+        execution_kill_switch_enabled=not enabled,
+        approved_account_login=123456 if enabled else None,
+        approved_account_server="MetaQuotes-Demo" if enabled else None,
+        demo_authorization_path=path.with_name("demo_authorization.json"),
         partial_fill_state_path=path,
         execution_intent_state_path=path.with_name("execution_intent.json"),
     )
 
 
 def _enabled_engine(path: Path) -> LiveTradingEngine:
-    engine = LiveTradingEngine(_config(path, enabled=True))
+    config = _config(path, enabled=True)
+    now = datetime.now(UTC)
+    config.demo_authorization_path.write_text(
+        __import__("json").dumps(
+            {
+                "schema_version": 1,
+                "authorization_id": "pending-order-guard-test",
+                "issued_at": (now - timedelta(minutes=1)).isoformat(),
+                "expires_at": (now + timedelta(minutes=4)).isoformat(),
+                "account_login": 123456,
+                "account_server": "MetaQuotes-Demo",
+                "symbol": "XAUUSD",
+                "maximum_volume": 0.01,
+                "maximum_submissions": 1,
+                "demo_only": True,
+                "one_shot": True,
+                "acknowledgement": "I AUTHORIZE ONE DEMO ORDER",
+                "consumed_at": None,
+                "consumed_intent_key": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    live_engine_module.get_account_info = Mock(
+        return_value=AccountInfo(
+            login=123456,
+            server="MetaQuotes-Demo",
+            balance=10_000.0,
+            equity=10_000.0,
+            margin=0.0,
+            free_margin=10_000.0,
+            leverage=100,
+            currency="USD",
+            trade_mode=0,
+        )
+    )
+    engine = LiveTradingEngine(config)
     engine.state.running = True
     engine.pipeline.process_bar = Mock(return_value=_approved())
     engine.executor.is_connected = Mock(return_value=True)
@@ -106,7 +148,7 @@ def _set_partial_state(engine: LiveTradingEngine) -> None:
 
 def test_pending_result_blocks_future_execution(tmp_path: Path) -> None:
     engine = _enabled_engine(tmp_path / "partial.json")
-    engine.executor.execute_order = Mock(return_value=_pending_result())
+    engine.executor.execute_order = Mock(side_effect=lambda request: _pending_result())
 
     result = engine.process_bar(
         _bar(),
@@ -188,7 +230,7 @@ def test_partial_fill_records_actual_and_remaining_volume(
     engine = _enabled_engine(state_path)
     engine.pipeline.register_position_opened = Mock()
     engine.executor.execute_order = Mock(
-        return_value=_partial_result(volume=0.004)
+        side_effect=lambda request: _partial_result(volume=0.004)
     )
 
     result = engine.process_bar(

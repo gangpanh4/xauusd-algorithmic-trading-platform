@@ -13,6 +13,7 @@ from uuid import uuid4
 from core.data.models import MarketBar
 from core.execution_adapter.adapter import ExecutionAdapter
 from core.execution_adapter.config import ExecutionAdapterConfig
+from core.mt5_execution.account import get_account_info
 from core.mt5_execution.active_orders import (
     get_active_order_count,
     get_active_orders,
@@ -38,6 +39,12 @@ from core.trading_pipeline.models import (
 from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
+from .demo_execution_authorization import (
+    DemoExecutionAuthorizationError,
+    consume_demo_execution_authorization,
+    load_demo_execution_authorization,
+    validate_demo_execution_authorization,
+)
 from .execution_intent_reconciliation import (
     ExecutionIntentReconciliationDisposition,
     ExecutionIntentReconciliationError,
@@ -613,10 +620,43 @@ class LiveTradingEngine:
             raise RuntimeError(self.state.last_error)
 
         execution_request = self.adapter.adapt(pipeline_result)
+
+        try:
+            account = get_account_info()
+            authorization = load_demo_execution_authorization(
+                self.config.demo_authorization_path
+            )
+            validate_demo_execution_authorization(
+                authorization,
+                config=self.config,
+                account=account,
+                request=execution_request.order_request,
+                now=datetime.now(UTC),
+            )
+        except (DemoExecutionAuthorizationError, RuntimeError) as exc:
+            self.state.skipped_trades += 1
+            self.state.last_error = (
+                "Demo execution authorization blocked submission: "
+                f"{exc}"
+            )
+            logger.error(self.state.last_error)
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=None,
+                trade_executed=False,
+            )
+
         execution_intent = self._prepare_execution_intent(
             observation_timestamp=timestamp,
             request=execution_request.order_request,
         )
+        consume_demo_execution_authorization(
+            self.config.demo_authorization_path,
+            authorization,
+            intent_key=execution_intent.intent_key,
+            consumed_at=datetime.now(UTC),
+        )
+
         broker_request = OrderRequest(
             symbol=execution_request.order_request.symbol,
             side=execution_request.order_request.side,

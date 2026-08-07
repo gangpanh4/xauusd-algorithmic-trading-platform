@@ -56,6 +56,11 @@ class LiveTradingConfig:
     maximum_order_submissions_per_session: int = 1
     maximum_consecutive_execution_failures: int = 1
 
+    demo_authorization_path: Path = Path(
+        "runtime/demo_execution_authorization.json"
+    )
+    demo_authorization_max_lifetime_seconds: int = 900
+
     shadow_recording_enabled: bool = False
 
     shadow_observation_path: Path = Path(
