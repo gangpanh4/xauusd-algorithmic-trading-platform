@@ -205,3 +205,121 @@ def test_wrong_comment_is_not_identity() -> None:
     assert result.disposition is (
         ExecutionIntentReconciliationDisposition.UNRESOLVED_NO_EVIDENCE
     )
+
+
+def test_legacy_rejected_ticket_without_evidence_becomes_unresolved() -> None:
+    legacy = replace(
+        _intent(),
+        status=ExecutionIntentStatus.REJECTED,
+        ticket=101,
+    )
+
+    result = reconcile_execution_intent(
+        intent=legacy,
+        active_orders=(),
+        historical_orders=(),
+        execution_deals=(),
+        open_positions=(),
+        as_of=NOW + timedelta(minutes=1),
+    )
+
+    assert result.intent.status is ExecutionIntentStatus.PENDING
+    assert result.intent.unresolved is True
+    assert result.intent.ticket == 101
+    assert result.disposition is (
+        ExecutionIntentReconciliationDisposition.UNRESOLVED_NO_EVIDENCE
+    )
+    assert "automatic resubmission remains blocked" in result.reason
+
+
+def test_legacy_rejected_ticket_reconciles_to_full_fill() -> None:
+    legacy = replace(
+        _intent(),
+        status=ExecutionIntentStatus.REJECTED,
+        ticket=101,
+    )
+
+    result = reconcile_execution_intent(
+        intent=legacy,
+        active_orders=(),
+        historical_orders=(_historical(legacy),),
+        execution_deals=(_deal(legacy),),
+        open_positions=(),
+        as_of=NOW + timedelta(minutes=1),
+    )
+
+    assert result.intent.status is ExecutionIntentStatus.FILLED
+    assert result.intent.ticket == 101
+    assert result.disposition is (
+        ExecutionIntentReconciliationDisposition.FILLED_CONFIRMED
+    )
+
+
+def test_legacy_rejected_ticket_reconciles_to_partial_fill() -> None:
+    legacy = replace(
+        _intent(),
+        status=ExecutionIntentStatus.REJECTED,
+        ticket=101,
+    )
+
+    result = reconcile_execution_intent(
+        intent=legacy,
+        active_orders=(),
+        historical_orders=(_historical(legacy),),
+        execution_deals=(_deal(legacy, volume=0.004),),
+        open_positions=(),
+        as_of=NOW + timedelta(minutes=1),
+    )
+
+    assert result.intent.status is ExecutionIntentStatus.PARTIALLY_FILLED
+    assert result.intent.unresolved is True
+    assert result.intent.ticket == 101
+    assert result.disposition is (
+        ExecutionIntentReconciliationDisposition.PARTIAL_FILL_CONFIRMED
+    )
+
+
+def test_legacy_rejected_ticket_reconciles_to_confirmed_rejection() -> None:
+    legacy = replace(
+        _intent(),
+        status=ExecutionIntentStatus.REJECTED,
+        ticket=101,
+    )
+
+    result = reconcile_execution_intent(
+        intent=legacy,
+        active_orders=(),
+        historical_orders=(_historical(legacy, state=5),),
+        execution_deals=(),
+        open_positions=(),
+        as_of=NOW + timedelta(minutes=1),
+    )
+
+    assert result.intent.status is ExecutionIntentStatus.REJECTED
+    assert result.intent.unresolved is False
+    assert result.intent.ticket == 101
+    assert result.disposition is (
+        ExecutionIntentReconciliationDisposition.REJECTED_CONFIRMED
+    )
+
+
+def test_ticketless_rejection_remains_terminal() -> None:
+    rejected = replace(
+        _intent(),
+        status=ExecutionIntentStatus.REJECTED,
+        ticket=None,
+    )
+
+    result = reconcile_execution_intent(
+        intent=rejected,
+        active_orders=(),
+        historical_orders=(),
+        execution_deals=(),
+        open_positions=(),
+        as_of=NOW + timedelta(minutes=1),
+    )
+
+    assert result.intent == rejected
+    assert result.disposition is (
+        ExecutionIntentReconciliationDisposition.ALREADY_RESOLVED
+    )
