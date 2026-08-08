@@ -7,9 +7,9 @@ Handles all MetaTrader 5 communication:
   • Fetch account info
   • Query live open positions (Fix #1)
   • Duplicate position check (Fix #2)
-  • Modify SL only, for trailing stop management (Feature #1)
+  • Preserve simulated SL changes for legacy offline workflows
   • Fetch closed deal history by magic number (Features #4, #6)
-  • Place / modify orders when LIVE_TRADING=True
+  • Fail closed for all connected legacy broker mutations
 """
 
 import logging
@@ -28,6 +28,10 @@ try:
 except ImportError:
     MT5_AVAILABLE = False
     logger.warning("MetaTrader5 package not installed. Running in DEMO/backtest mode.")
+
+
+class LegacyBrokerMutationQuarantinedError(RuntimeError):
+    """Raised when quarantined legacy code attempts a broker mutation."""
 
 
 class MT5Connector:
@@ -278,9 +282,13 @@ class MT5Connector:
         Modify only the stop loss of an existing position (trailing stop).
         TP is re-sent unchanged since MT5's TRADE_ACTION_SLTP requires both.
         """
-        if not self.connected or not MT5_AVAILABLE:
+        if not self.connected:
             logger.info(f"[SIMULATED SL MODIFY] ticket={ticket} {symbol} new_sl={new_sl:.2f}")
             return {"retcode": 0, "simulated": True}
+
+        raise LegacyBrokerMutationQuarantinedError(
+            "Connected legacy stop-loss modification is quarantined."
+        )
 
         request = {
             "action":   mt5.TRADE_ACTION_SLTP,
@@ -369,7 +377,7 @@ class MT5Connector:
         Place a live market order on MT5.
         Guarded by has_open_position() in main.py before this is called.
         """
-        if not self.connected or not MT5_AVAILABLE:
+        if not self.connected:
             with self._lock:
                 ticket = self._sim_next_ticket
                 self._sim_next_ticket += 1
@@ -398,6 +406,10 @@ class MT5Connector:
                 f"ticket=#{ticket}"
             )
             return {"retcode": 10009, "order": ticket, "simulated": True}
+
+        raise LegacyBrokerMutationQuarantinedError(
+            "Connected legacy order placement is quarantined."
+        )
 
         order_type = (mt5.ORDER_TYPE_BUY if action == "BUY"
                       else mt5.ORDER_TYPE_SELL)

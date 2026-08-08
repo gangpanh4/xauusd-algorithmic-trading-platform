@@ -1,12 +1,17 @@
 # ============================================================
-#  XAUUSD AI Trading Signal Generator — Configuration
-#  Upgrade path: set LIVE_TRADING=True to activate auto-bot
+#  Quarantined legacy signal-generator configuration
+#  The current platform does not import or depend on this module.
 # ============================================================
 
+import os
+
 # ── MetaTrader 5 Connection ──────────────────────────────────
-MT5_LOGIN    = 5052148432           # Your MT5 account number
-MT5_PASSWORD = "S_3wGkTj"          # Your MT5 password
-MT5_SERVER   = "MetaQuotes-Demo"          # e.g. "ICMarkets-Demo"
+# Backward compatibility for offline/legacy consumers only. These values are
+# intentionally absent unless an operator explicitly supplies the quarantined
+# legacy environment variables.
+MT5_LOGIN    = int(os.getenv("XAUUSD_LEGACY_MT5_LOGIN", "0"))
+MT5_PASSWORD = os.getenv("XAUUSD_LEGACY_MT5_PASSWORD", "")
+MT5_SERVER   = os.getenv("XAUUSD_LEGACY_MT5_SERVER", "")
 
 # ── Symbol & Timeframe ───────────────────────────────────────
 SYMBOL     = "XAUUSD"
@@ -87,8 +92,8 @@ LOG_FILE     = "logs/signal_bot.log"
 SIGNAL_LOG   = "output/signals.json"
 LOG_LEVEL    = "DEBUG"
 
-# ── Live Trading Gate (set True to enable auto-execution) ────
-LIVE_TRADING = True
+# ── Legacy Live Trading Gate (permanently fail-closed by default) ──
+LIVE_TRADING = False
 MAGIC_NUMBER = 20240101   # Unique ID for this bot's orders
 
 # ── Telegram Alerts (optional) ───────────────────────────────
@@ -97,7 +102,7 @@ TELEGRAM_TOKEN   = ""
 TELEGRAM_CHAT_ID = ""
 
 # ── Feature #1: ATR Trailing Stop ─────────────────────────────
-TRAILING_STOP_ENABLED   = True
+TRAILING_STOP_ENABLED   = False
 TRAIL_CHECK_SECONDS     = 10     # How often the trail manager loop runs
 TRAIL_BREAKEVEN_R       = 1.0    # Move SL to breakeven once price reaches +1R
 TRAIL_ACTIVATE_R        = 2.0    # Start ATR trailing once price reaches +2R
