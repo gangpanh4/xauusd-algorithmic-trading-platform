@@ -253,15 +253,21 @@ def send_order(
     if result is None:
         return OrderResult(
             timestamp=datetime.now(UTC),
-            status=OrderStatus.REJECTED,
+            status=OrderStatus.PENDING,
             ticket=None,
             executed_price=0.0,
-            message=f"Order submission unavailable: {mt5.last_error()}",
+            message=(
+                "Order submission returned no broker acknowledgement; "
+                "broker reconciliation is required. "
+                f"MT5 error: {mt5.last_error()}"
+            ),
         )
 
     retcode = int(getattr(result, "retcode", -1))
     status = _map_trade_retcode(retcode)
-    ticket = getattr(result, "order", None)
+    ticket = _normalize_broker_order_ticket(
+        getattr(result, "order", None)
+    )
     price = float(getattr(result, "price", 0.0))
     comment = str(getattr(result, "comment", "No broker comment."))
 
@@ -281,12 +287,13 @@ def send_order(
     if not acknowledgement_valid:
         return OrderResult(
             timestamp=datetime.now(UTC),
-            status=OrderStatus.REJECTED,
+            status=OrderStatus.PENDING,
             ticket=ticket,
             executed_price=price,
             message=(
-                f"{_retcode_name(retcode)} [{retcode}] invalid execution "
-                f"acknowledgement: {acknowledgement_message}"
+                f"{_retcode_name(retcode)} [{retcode}] returned an ambiguous "
+                "execution acknowledgement: "
+                f"{acknowledgement_message} Broker reconciliation is required."
             ),
             retcode=retcode,
             executed_volume=(
@@ -356,11 +363,21 @@ def _validate_execution_acknowledgement(
     ):
         return (
             False,
-            "PARTIALLY_FILLED requires executed volume below requested "
-            "volume.",
+            (
+                "PARTIALLY_FILLED requires executed volume below requested "
+                "volume."
+            ),
         )
 
     return True, "Partial execution acknowledgement is valid."
+
+
+def _normalize_broker_order_ticket(value: object) -> int | None:
+    """Return a persistable positive broker order ticket when available."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
 
 
 def _map_trade_retcode(retcode: int) -> OrderStatus:

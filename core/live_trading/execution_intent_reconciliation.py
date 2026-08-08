@@ -68,15 +68,26 @@ def reconcile_execution_intent(
     """Reconcile an intent without submitting, modifying, or cancelling orders."""
 
     cutoff = _aware_utc(as_of, "as_of")
+    legacy_ambiguous_rejection = (
+        intent.status is ExecutionIntentStatus.REJECTED
+        and intent.ticket is not None
+    )
     if not intent.unresolved:
-        return ExecutionIntentReconciliationResult(
-            intent=intent,
-            disposition=(
-                ExecutionIntentReconciliationDisposition.ALREADY_RESOLVED
-            ),
-            reason="Persisted execution intent is already terminal.",
-            matching_order_ticket=intent.ticket,
-        )
+        if not legacy_ambiguous_rejection:
+            return ExecutionIntentReconciliationResult(
+                intent=intent,
+                disposition=(
+                    ExecutionIntentReconciliationDisposition.ALREADY_RESOLVED
+                ),
+                reason="Persisted execution intent is already terminal.",
+                matching_order_ticket=intent.ticket,
+            )
+
+        # Schema-v2 records written before ambiguous acknowledgement handling
+        # may contain REJECTED plus a broker order ticket after a fill-like
+        # retcode. The durable record does not retain enough acknowledgement
+        # detail to prove that no mutation occurred, so it must be reconciled.
+        intent = replace(intent, status=ExecutionIntentStatus.PENDING)
 
     active_matches = tuple(
         order
@@ -130,15 +141,22 @@ def reconcile_execution_intent(
         )
 
     if not history_matches and not deal_matches:
+        reason = (
+            "Legacy rejected execution intent contains a broker ticket but no "
+            "authoritative matching evidence; automatic resubmission remains "
+            "blocked."
+            if legacy_ambiguous_rejection
+            else (
+                "No authoritative broker evidence matched the persisted intent; "
+                "automatic resubmission remains blocked."
+            )
+        )
         return ExecutionIntentReconciliationResult(
             intent=intent,
             disposition=(
                 ExecutionIntentReconciliationDisposition.UNRESOLVED_NO_EVIDENCE
             ),
-            reason=(
-                "No authoritative broker evidence matched the persisted intent; "
-                "automatic resubmission remains blocked."
-            ),
+            reason=reason,
             matching_order_ticket=intent.ticket,
         )
 
