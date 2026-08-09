@@ -15,7 +15,6 @@ from core.risk_manager.models import RiskDecision, TradePlan
 from core.signal_generator.models import SignalDirection, TradingSignal
 from core.trading_pipeline.market_context import MarketContext
 
-
 BASE_TIME = datetime(2025, 1, 1, tzinfo=UTC)
 
 
@@ -175,9 +174,10 @@ def test_equity_remains_unrealized_while_incremental_trade_is_open() -> None:
         10_000.0,
         10_000.0,
         10_000.0,
+        10_000.0,
     ]
     assert result.total_trades == 1
-    assert result.trades[0].exit_time == bars[3].timestamp
+    assert result.trades[0].exit_time == bars[2].timestamp
     assert engine.state.current_equity == pytest.approx(
         10_000.0 + result.trades[0].net_profit
     )
@@ -195,7 +195,8 @@ def test_open_trade_is_finalized_at_last_processed_bar() -> None:
 
     assert result.total_trades == 1
     assert result.trades[0].exit_reason is ExitReason.END_OF_DATA
-    assert result.trades[0].exit_time == bars[-1].timestamp
+    # Only M15 bars completed by the final M5 boundary are simulation-visible.
+    assert result.trades[0].exit_time == bars[-2].timestamp
     assert pipeline.opened == 1
     assert pipeline.closed == 1
 

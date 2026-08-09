@@ -148,6 +148,7 @@ def test_engine_defers_realized_pnl_until_exit_and_forwards_symbol_inputs() -> N
     assert [call["account_balance"] for call in pipeline.process_calls] == [
         10_000.0,
         10_000.0,
+        10_000.0,
     ]
     assert pipeline.process_calls[0]["stop_loss_distance"] == 3.0
     assert pipeline.process_calls[0]["pip_value"] == 1.25

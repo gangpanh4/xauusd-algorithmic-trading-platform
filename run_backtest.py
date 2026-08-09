@@ -18,7 +18,8 @@ from core.mt5_execution.symbol_specification import (
     get_live_symbol_specification,
 )
 
-
+# Number of eligible M5 analytical decision bars. The loader obtains separate
+# overlapping source counts for M5, M15, H1, and H4 plus synchronized warm-up.
 HISTORICAL_BARS = 20_000
 
 # Explicit execution-cost assumptions for this historical run.
@@ -142,7 +143,7 @@ def main() -> None:
 
         output = runner.run_with_strategy_comparison(
             symbol=symbol,
-            timeframe=mt5.TIMEFRAME_M15,
+            timeframe=mt5.TIMEFRAME_M5,
             bars=HISTORICAL_BARS,
             end_time=HISTORICAL_END_TIME,
         )

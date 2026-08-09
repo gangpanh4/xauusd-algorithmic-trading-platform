@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from types import MappingProxyType
 
 from core.data.models import MarketBar
 from core.multi_timeframe.enums import Timeframe
+from core.multi_timeframe.history_alignment import (
+    completed_period_buckets,
+    normalize_utc,
+    visible_bars,
+)
 
 
 class LiveMultiTimeframeBuffer:
@@ -19,20 +24,21 @@ class LiveMultiTimeframeBuffer:
         Timeframe.H1,
         Timeframe.H4,
     )
-    _DURATIONS = {
-        Timeframe.M5: timedelta(minutes=5),
-        Timeframe.M15: timedelta(minutes=15),
-        Timeframe.H1: timedelta(hours=1),
-        Timeframe.H4: timedelta(hours=4),
-    }
-
-    def __init__(self, window_bars: int = 500) -> None:
+    def __init__(
+        self,
+        window_bars: int = 500,
+        *,
+        source_capacity_bars: Mapping[Timeframe, int] | None = None,
+    ) -> None:
         if isinstance(window_bars, bool) or not isinstance(window_bars, int):
             raise TypeError("window_bars must be an integer")
         if window_bars < 2:
             raise ValueError("window_bars must be at least 2")
 
         self.window_bars = window_bars
+        self._source_capacity_bars = self._validate_capacities(
+            source_capacity_bars
+        )
         self._bars: dict[Timeframe, list[MarketBar]] = {
             timeframe: [] for timeframe in self._BASE_TIMEFRAMES
         }
@@ -64,7 +70,8 @@ class LiveMultiTimeframeBuffer:
         self._require_base_timeframe(timeframe)
         validated = list(bars)
         self._validate_chronology(validated)
-        self._bars[timeframe] = validated[-self.window_bars :]
+        capacity = self._source_capacity_bars[timeframe]
+        self._bars[timeframe] = validated[-capacity:]
 
     def append(self, timeframe: Timeframe, bar: MarketBar) -> bool:
         """Append one completed bar, returning False for an exact duplicate."""
@@ -88,8 +95,9 @@ class LiveMultiTimeframeBuffer:
                 )
 
         history.append(bar)
-        if len(history) > self.window_bars:
-            del history[: len(history) - self.window_bars]
+        capacity = self._source_capacity_bars[timeframe]
+        if len(history) > capacity:
+            del history[: len(history) - capacity]
         return True
 
     def snapshot(
@@ -102,32 +110,26 @@ class LiveMultiTimeframeBuffer:
         visible: dict[Timeframe, tuple[MarketBar, ...]] = {}
 
         for timeframe in self._BASE_TIMEFRAMES:
-            duration = self._DURATIONS[timeframe]
-            values = tuple(
-                bar
-                for bar in self._bars[timeframe]
-                if bar.timestamp.astimezone(UTC) + duration <= boundary
+            values = visible_bars(
+                self._bars[timeframe],
+                timeframe=timeframe,
+                boundary=boundary,
+                window_bars=self.window_bars,
             )
-            if not values:
+            if len(values) < self.window_bars:
                 return None
-            visible[timeframe] = values[-self.window_bars :]
+            visible[timeframe] = values
 
         h4_values = visible[Timeframe.H4]
-        daily = tuple(
-            self._aggregate_completed(
-                h4_values,
-                boundary=boundary,
-                period=timedelta(days=1),
-                weekly=False,
-            )
+        daily = self._aggregate_completed(
+            h4_values,
+            boundary=boundary,
+            weekly=False,
         )
-        weekly = tuple(
-            self._aggregate_completed(
-                h4_values,
-                boundary=boundary,
-                period=timedelta(days=7),
-                weekly=True,
-            )
+        weekly = self._aggregate_completed(
+            h4_values,
+            boundary=boundary,
+            weekly=True,
         )
         if not daily or not weekly:
             return None
@@ -143,37 +145,14 @@ class LiveMultiTimeframeBuffer:
             }
         )
 
-    @classmethod
+    @staticmethod
     def _aggregate_completed(
-        cls,
         bars: Sequence[MarketBar],
         *,
         boundary: datetime,
-        period: timedelta,
         weekly: bool,
-    ) -> list[MarketBar]:
-        buckets: dict[datetime, list[MarketBar]] = {}
-        for bar in bars:
-            timestamp = bar.timestamp.astimezone(UTC)
-            day = datetime(
-                timestamp.year,
-                timestamp.month,
-                timestamp.day,
-                tzinfo=UTC,
-            )
-            start = (
-                day - timedelta(days=timestamp.weekday())
-                if weekly
-                else day
-            )
-            buckets.setdefault(start, []).append(bar)
-
-        aggregated: list[MarketBar] = []
-        for start in sorted(buckets):
-            if start + period > boundary:
-                continue
-            values = buckets[start]
-            aggregated.append(
+    ) -> tuple[MarketBar, ...]:
+        return tuple(
                 MarketBar(
                     timestamp=start,
                     open=float(values[0].open),
@@ -182,8 +161,12 @@ class LiveMultiTimeframeBuffer:
                     close=float(values[-1].close),
                     tick_volume=sum(int(item.tick_volume) for item in values),
                 )
+            for start, values in completed_period_buckets(
+                bars,
+                boundary=boundary,
+                weekly=weekly,
             )
-        return aggregated
+        )
 
     @classmethod
     def _validate_chronology(cls, bars: Sequence[MarketBar]) -> None:
@@ -213,8 +196,32 @@ class LiveMultiTimeframeBuffer:
 
     @staticmethod
     def _normalize_boundary(boundary: datetime) -> datetime:
-        if not isinstance(boundary, datetime):
-            raise TypeError("boundary must be a datetime")
-        if boundary.tzinfo is None or boundary.utcoffset() is None:
-            raise ValueError("boundary must be timezone-aware")
-        return boundary.astimezone(UTC)
+        return normalize_utc(boundary, "boundary")
+
+    def _validate_capacities(
+        self,
+        values: Mapping[Timeframe, int] | None,
+    ) -> Mapping[Timeframe, int]:
+        if values is None:
+            return MappingProxyType(
+                {timeframe: self.window_bars for timeframe in self._BASE_TIMEFRAMES}
+            )
+        if not isinstance(values, Mapping):
+            raise TypeError("source_capacity_bars must be a mapping or None")
+        missing = set(self._BASE_TIMEFRAMES).difference(values)
+        unexpected = set(values).difference(self._BASE_TIMEFRAMES)
+        if missing or unexpected:
+            raise ValueError(
+                "source_capacity_bars must contain exactly M5, M15, H1, and H4"
+            )
+        validated: dict[Timeframe, int] = {}
+        for timeframe in self._BASE_TIMEFRAMES:
+            capacity = values[timeframe]
+            if isinstance(capacity, bool) or not isinstance(capacity, int):
+                raise TypeError("source capacities must be integers")
+            if capacity < self.window_bars:
+                raise ValueError(
+                    "source capacities must be at least window_bars"
+                )
+            validated[timeframe] = capacity
+        return MappingProxyType(validated)

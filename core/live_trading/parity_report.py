@@ -146,32 +146,36 @@ class LiveParityReporter:
         for timeframe in (Timeframe.M5, Timeframe.M15, Timeframe.H1, Timeframe.H4):
             buffer.load(timeframe, evidence.bars_by_timeframe[timeframe])
 
+        target_processed = False
         for m5_bar in evidence.bars_by_timeframe[Timeframe.M5]:
             boundary = m5_bar.timestamp + timedelta(minutes=5)
             snapshot = buffer.snapshot(boundary)
             is_target = m5_bar.timestamp == evidence.observation_timestamp
             if snapshot is None:
-                engine.process_bar(
-                    m5_bar,
-                    account_balance=evidence.account_balance,
-                    stop_loss_distance=evidence.stop_loss_distance,
-                    pip_value=evidence.pip_value,
-                    warmup=not is_target,
-                )
-            else:
-                engine.process_multi_timeframe(
-                    snapshot,
-                    account_balance=evidence.account_balance,
-                    stop_loss_distance=evidence.stop_loss_distance,
-                    pip_value=evidence.pip_value,
-                    tick_size=evidence.tick_size,
-                    lot_step=evidence.lot_step,
-                    minimum_lot=evidence.minimum_lot,
-                    maximum_lot=evidence.maximum_lot,
-                    warmup=not is_target,
-                )
+                if is_target:
+                    raise RuntimeError(
+                        "parity target lacks a complete synchronized M5 snapshot"
+                    )
+                continue
+            engine.process_multi_timeframe(
+                snapshot,
+                account_balance=evidence.account_balance,
+                stop_loss_distance=evidence.stop_loss_distance,
+                pip_value=evidence.pip_value,
+                tick_size=evidence.tick_size,
+                lot_step=evidence.lot_step,
+                minimum_lot=evidence.minimum_lot,
+                maximum_lot=evidence.maximum_lot,
+                warmup=not is_target,
+            )
             if is_target:
+                target_processed = True
                 break
+
+        if not target_processed:
+            raise RuntimeError(
+                "parity target M5 observation was not processed"
+            )
 
         audit = engine.pipeline.last_observation_audit
         if audit is None:

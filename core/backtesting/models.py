@@ -4,6 +4,30 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 
+from core.trading_pipeline.market_context import MarketContext
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestReplayWindow:
+    """Deterministic source and eligibility metadata for one replay."""
+
+    source_start: datetime
+    source_end: datetime
+    first_eligible_m5_timestamp: datetime
+    last_eligible_m5_timestamp: datetime
+    requested_eligible_m5_bars: int
+    analysis_window_bars: int
+    required_warmup_snapshots: int
+    available_warmup_snapshots: int
+    requested_bar_counts: tuple[tuple[str, int], ...]
+
+
+@dataclass(slots=True)
+class BacktestReplayContext(MarketContext):
+    """Backtest-owned extension of analytical histories with replay policy."""
+
+    replay_window: BacktestReplayWindow
+
 
 class TradeOutcome(Enum):
     WIN = "WIN"

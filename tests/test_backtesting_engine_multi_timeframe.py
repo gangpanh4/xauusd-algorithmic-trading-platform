@@ -10,7 +10,6 @@ from core.multi_timeframe.enums import Timeframe
 from core.regime_detector.models import MarketBar
 from core.trading_pipeline.market_context import MarketContext
 
-
 BASE = datetime(2026, 1, 5, tzinfo=UTC)  # Monday
 
 
@@ -79,12 +78,11 @@ class LegacyPipeline:
 
 
 def context_for(boundary_open: datetime) -> MarketContext:
-    # Eight days of H4 history are enough for one completed weekly aggregate.
-    h4 = [bar(BASE + timedelta(hours=4 * i)) for i in range(48)]
-    h1 = [bar(BASE + timedelta(hours=i)) for i in range(192)]
-    m15 = [bar(BASE + timedelta(minutes=15 * i)) for i in range(768)]
-    m5 = [bar(BASE + timedelta(minutes=5 * i)) for i in range(2304)]
-    current = next(value for value in m15 if value.timestamp == boundary_open)
+    h4 = [bar(BASE + timedelta(hours=4 * i)) for i in range(96)]
+    h1 = [bar(BASE + timedelta(hours=i)) for i in range(384)]
+    m15 = [bar(BASE + timedelta(minutes=15 * i)) for i in range(1_536)]
+    m5 = [bar(BASE + timedelta(minutes=5 * i)) for i in range(4_608)]
+    current = next(value for value in m5 if value.timestamp == boundary_open)
     return MarketContext(
         current_bar=current,
         m5_bars=m5,
@@ -95,7 +93,7 @@ def context_for(boundary_open: datetime) -> MarketContext:
 
 
 def test_engine_builds_no_lookahead_six_timeframe_snapshot() -> None:
-    observation = BASE + timedelta(days=7, hours=12)
+    observation = BASE + timedelta(days=14, hours=12)
     context = context_for(observation)
     engine = BacktestingEngine(
         BacktestConfig(),
@@ -107,20 +105,18 @@ def test_engine_builds_no_lookahead_six_timeframe_snapshot() -> None:
 
     result, signal_bar = engine._process_observation(
         context=context,
-        m15_index=0,
-        m15_bar=context.current_bar,
+        m5_index=0,
+        m5_bar=context.current_bar,
     )
 
     assert result is pipeline.result
 
-    # Strategy replay now advances through every newly completed M5 snapshot.
-    # The active M15 pipeline consumes the final snapshot at this boundary.
-    mapping = pipeline.multi_timeframe.calls[-1]
+    mapping = pipeline.multi_timeframe.calls[0]
 
     assert set(mapping) == set(Timeframe)
     assert all(len(values) <= 50 for values in mapping.values())
 
-    boundary = observation + timedelta(minutes=15)
+    boundary = observation + timedelta(minutes=5)
     assert mapping[Timeframe.M5][-1].timestamp + timedelta(minutes=5) <= boundary
     assert mapping[Timeframe.H1][-1].timestamp + timedelta(hours=1) <= boundary
     assert mapping[Timeframe.H4][-1].timestamp + timedelta(hours=4) <= boundary
@@ -138,22 +134,24 @@ def test_engine_builds_no_lookahead_six_timeframe_snapshot() -> None:
 
 
 def test_unclosed_higher_timeframe_candles_are_not_visible() -> None:
-    observation = BASE + timedelta(days=7, hours=10, minutes=45)
+    observation = BASE + timedelta(days=14, hours=10, minutes=45)
     context = context_for(observation)
-    engine = BacktestingEngine(BacktestConfig(), progress_interval_bars=None)
+    engine = BacktestingEngine(
+        BacktestConfig(),
+        multi_timeframe_window_bars=50,
+        progress_interval_bars=None,
+    )
     pipeline = FakePipeline()
     engine.pipeline = pipeline
 
     engine._process_observation(
         context=context,
-        m15_index=0,
-        m15_bar=context.current_bar,
+        m5_index=0,
+        m5_bar=context.current_bar,
     )
 
-    # Inspect the final snapshot used at the current M15 boundary, not the
-    # earliest replayed M5 snapshot.
-    mapping = pipeline.multi_timeframe.calls[-1]
-    boundary = observation + timedelta(minutes=15)
+    mapping = pipeline.multi_timeframe.calls[0]
+    boundary = observation + timedelta(minutes=5)
 
     assert all(
         value.timestamp + timedelta(hours=4) <= boundary
@@ -161,7 +159,7 @@ def test_unclosed_higher_timeframe_candles_are_not_visible() -> None:
     )
 
 
-def test_legacy_injected_pipeline_keeps_process_bar_contract() -> None:
+def test_injected_single_timeframe_pipeline_receives_m5_not_m15() -> None:
     observation = BASE + timedelta(hours=1)
     context = context_for(observation)
     engine = BacktestingEngine(BacktestConfig(), progress_interval_bars=None)
@@ -170,8 +168,8 @@ def test_legacy_injected_pipeline_keeps_process_bar_contract() -> None:
 
     result, used_bar = engine._process_observation(
         context=context,
-        m15_index=0,
-        m15_bar=context.current_bar,
+        m5_index=0,
+        m5_bar=context.current_bar,
     )
 
     assert result is pipeline.result

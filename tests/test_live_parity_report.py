@@ -4,6 +4,8 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from core.data.models import MarketBar
 from core.live_trading.parity_evidence import LiveParityEvidence
 from core.live_trading.parity_report import LiveParityReporter
@@ -225,3 +227,15 @@ def test_execution_authority_payload_is_parse_error(tmp_path) -> None:
     assert report["live_execution_enabled"] is False
     assert report["shadow_only"] is True
     assert report["trade_executed"] is False
+
+
+def test_replay_never_falls_back_when_target_snapshot_is_incomplete(
+    tmp_path,
+) -> None:
+    reporter = LiveParityReporter(
+        input_path=tmp_path / "unused.jsonl",
+        output_directory=tmp_path / "output",
+    )
+
+    with pytest.raises(RuntimeError, match="complete synchronized M5"):
+        reporter._replay(_evidence())

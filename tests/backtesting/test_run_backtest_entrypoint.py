@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import importlib
 import sys
+from datetime import UTC, datetime
 from types import ModuleType, SimpleNamespace
 
 from core.backtesting.models import BacktestResult
@@ -29,6 +29,7 @@ def test_run_backtest_uses_bounded_composite_research_path(
     output = SimpleNamespace(result=result)
 
     mt5_stub = ModuleType("MetaTrader5")
+    mt5_stub.TIMEFRAME_M5 = 5
     mt5_stub.TIMEFRAME_M15 = 15
     mt5_stub.initialize = lambda: True
     mt5_stub.shutdown = lambda: calls.append(("shutdown", None))
@@ -92,7 +93,7 @@ def test_run_backtest_uses_bounded_composite_research_path(
         "run_with_strategy_comparison",
         {
             "symbol": "XAUUSD",
-            "timeframe": 15,
+            "timeframe": 5,
             "bars": 20_000,
             "end_time": expected_end_time,
         },
@@ -116,6 +117,7 @@ def test_run_backtest_shuts_down_mt5_when_composite_run_fails(
     calls: list[str] = []
 
     mt5_stub = ModuleType("MetaTrader5")
+    mt5_stub.TIMEFRAME_M5 = 5
     mt5_stub.TIMEFRAME_M15 = 15
     mt5_stub.initialize = lambda: True
     mt5_stub.shutdown = lambda: calls.append("shutdown")
@@ -151,6 +153,7 @@ def test_run_backtest_propagates_broker_volume_limits(
     captured: list[object] = []
 
     mt5_stub = ModuleType("MetaTrader5")
+    mt5_stub.TIMEFRAME_M5 = 5
     mt5_stub.TIMEFRAME_M15 = 15
     mt5_stub.initialize = lambda: True
     mt5_stub.shutdown = lambda: None

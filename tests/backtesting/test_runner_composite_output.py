@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import MetaTrader5 as mt5
 import pytest
 
+from core.backtesting.config import BacktestConfig
 from core.backtesting.models import BacktestResult
 from core.backtesting.run_output import BacktestRunOutput
 from core.backtesting.runner import BacktestRunner
@@ -38,6 +40,7 @@ def _comparison(total_trades: int = 2) -> BacktestStrategyComparison:
 
 def _runner_without_init() -> BacktestRunner:
     runner = object.__new__(BacktestRunner)
+    runner.config = BacktestConfig()
     runner.state = SimpleNamespace(
         processed_bar_count=99,
         executed_trade_count=99,
@@ -49,21 +52,28 @@ def _runner_without_init() -> BacktestRunner:
 
 def test_runner_composite_method_loads_once_and_updates_state() -> None:
     runner = _runner_without_init()
-    context = SimpleNamespace(m15_bars=(object(), object(), object()))
+    context = SimpleNamespace(
+        m5_bars=(object(), object(), object()),
+        m15_bars=(object(),),
+        h1_bars=(object(),),
+        h4_bars=(object(),),
+    )
     result = _result(total_trades=2)
     output = BacktestRunOutput(
         result=result,
         strategy_comparison=_comparison(total_trades=2),
     )
-    load_calls: list[tuple[str, int]] = []
+    load_calls: list[dict[str, object]] = []
     engine_calls: list[object] = []
 
     class Loader:
-        def load(self, *, symbol: str, bars: int) -> object:
-            load_calls.append((symbol, bars))
+        def load(self, **kwargs: object) -> object:
+            load_calls.append(dict(kwargs))
             return context
 
     class Engine:
+        multi_timeframe_window_bars = 500
+
         def run_with_strategy_comparison(
             self,
             received_context: object,
@@ -76,33 +86,41 @@ def test_runner_composite_method_loads_once_and_updates_state() -> None:
 
     received = runner.run_with_strategy_comparison(
         symbol="XAUUSD",
-        timeframe=15,
+        timeframe=mt5.TIMEFRAME_M5,
         bars=500,
     )
 
     assert received is output
-    assert load_calls == [("XAUUSD", 500)]
+    assert load_calls == [
+        {
+            "symbol": "XAUUSD",
+            "bars": 500,
+            "end_time": None,
+            "warmup_bars": 200,
+            "analysis_window_bars": 500,
+        }
+    ]
     assert engine_calls == [context]
     assert runner.state.processed_bar_count == 3
     assert runner.state.executed_trade_count == 2
     assert runner.state.completed is True
 
 
-def test_runner_composite_method_rejects_empty_m15_history() -> None:
+def test_runner_composite_method_rejects_empty_m5_history() -> None:
     runner = _runner_without_init()
     runner.loader = SimpleNamespace(
-        load=lambda **_: SimpleNamespace(m15_bars=()),
+        load=lambda **_: SimpleNamespace(m5_bars=()),
     )
     runner.engine = SimpleNamespace(
         run_with_strategy_comparison=lambda _: pytest.fail(
-            "engine should not run without M15 history"
+            "engine should not run without M5 history"
         )
     )
 
     with pytest.raises(RuntimeError, match="No historical data"):
         runner.run_with_strategy_comparison(
             symbol="XAUUSD",
-            timeframe=15,
+            timeframe=mt5.TIMEFRAME_M5,
             bars=500,
         )
 

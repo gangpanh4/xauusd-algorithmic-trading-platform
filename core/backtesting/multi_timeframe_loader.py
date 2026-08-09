@@ -8,26 +8,37 @@ from math import isfinite
 
 import MetaTrader5 as mt5
 
+from core.multi_timeframe.enums import Timeframe
+from core.multi_timeframe.history_alignment import (
+    bar_close_time,
+    clip_history,
+    completed_period_buckets,
+    normalize_utc,
+    required_bar_count,
+    utc_week_start,
+    visible_bars,
+)
 from core.regime_detector.models import MarketBar
 from core.trading_pipeline.market_context import MarketContext
 
 from .history_loader import HistoryLoader
+from .models import BacktestReplayContext, BacktestReplayWindow
 
 
 class MultiTimeframeLoader:
-    """Load and synchronize completed M5, M15, H1, and H4 candles.
+    """Load deterministic overlapping M5/M15/H1/H4 source histories."""
 
-    ``MarketBar.timestamp`` is treated as the candle *open* timestamp. A bar is
-    visible to a historical observation only after ``timestamp + duration``.
-    This prevents an M15 observation from seeing an H1/H4 candle that has
-    opened but has not yet closed.
-    """
-
-    _DURATIONS: Mapping[str, timedelta] = {
-        "m5": timedelta(minutes=5),
-        "m15": timedelta(minutes=15),
-        "h1": timedelta(hours=1),
-        "h4": timedelta(hours=4),
+    _KEY_TIMEFRAMES: Mapping[str, Timeframe] = {
+        "m5": Timeframe.M5,
+        "m15": Timeframe.M15,
+        "h1": Timeframe.H1,
+        "h4": Timeframe.H4,
+    }
+    _MT5_TIMEFRAMES: Mapping[str, int] = {
+        "m5": mt5.TIMEFRAME_M5,
+        "m15": mt5.TIMEFRAME_M15,
+        "h1": mt5.TIMEFRAME_H1,
+        "h4": mt5.TIMEFRAME_H4,
     }
 
     def __init__(
@@ -46,41 +57,165 @@ class MultiTimeframeLoader:
         bars: int,
         *,
         end_time: datetime | None = None,
-    ) -> MarketContext:
-        """Load a latest or explicitly bounded synchronized snapshot.
-
-        With ``end_time=None`` the existing latest-history path is preserved.
-        An explicit ``end_time`` is a UTC visibility boundary: only candles
-        whose close is on or before that boundary may enter the result.
-        """
+        warmup_bars: int = 200,
+        analysis_window_bars: int = 500,
+    ) -> BacktestReplayContext:
+        """Load one aligned replay where ``bars`` means eligible M5 bars."""
 
         symbol_value = self._validate_symbol(symbol)
-        bar_count = self._validate_bar_count(bars)
-        now = self._normalize_utc(self._clock(), "clock")
+        eligible_count = self._validate_bar_count(bars)
+        warmup_count = self._validate_nonnegative_count(
+            warmup_bars,
+            "warmup_bars",
+        )
+        analysis_count = self._validate_analysis_window(analysis_window_bars)
+        now = normalize_utc(self._clock(), "clock")
         boundary = (
-            self._normalize_utc(end_time, "end_time")
+            normalize_utc(end_time, "end_time")
             if end_time is not None
             else now
         )
         if boundary > now:
             raise ValueError("end_time cannot be in the future")
 
-        histories = self._load_histories(
-            symbol_value,
-            bar_count,
-            end_time=boundary if end_time is not None else None,
+        required_m5 = eligible_count + warmup_count + analysis_count
+        pilot_m5 = self._load_one(
+            symbol=symbol_value,
+            key="m5",
+            bars=required_m5 + 2,
+            end_time=boundary,
         )
-        completed = {
-            name: self._completed_by(name, series, boundary)
-            for name, series in histories.items()
-        }
-        if not completed["m15"]:
-            raise RuntimeError("No completed M15 candles are available.")
+        pilot_m5 = list(
+            visible_bars(
+                pilot_m5,
+                timeframe=Timeframe.M5,
+                boundary=boundary,
+            )
+        )
+        if len(pilot_m5) < required_m5:
+            raise RuntimeError(
+                "Insufficient M5 history for the requested eligible bars, "
+                "analytical window, and synchronized warm-up."
+            )
 
-        observation_bar = completed["m15"][-1]
-        return self.synchronize_at(
-            histories=completed,
-            observation_timestamp=observation_bar.timestamp,
+        pilot_eligible = pilot_m5[-eligible_count:]
+        first_eligible = pilot_eligible[0].timestamp.astimezone(UTC)
+        first_eligible_boundary = bar_close_time(
+            pilot_eligible[0],
+            Timeframe.M5,
+        )
+
+        pilot_h4 = self._load_one(
+            symbol=symbol_value,
+            key="h4",
+            bars=analysis_count + 2,
+            end_time=first_eligible_boundary,
+        )
+        pilot_h4 = list(
+            visible_bars(
+                pilot_h4,
+                timeframe=Timeframe.H4,
+                boundary=first_eligible_boundary,
+            )
+        )
+        if len(pilot_h4) < analysis_count:
+            raise RuntimeError(
+                "Insufficient H4 history at the first eligible M5 boundary."
+            )
+
+        earliest_required_m5 = pilot_m5[-required_m5].timestamp.astimezone(UTC)
+        earliest_required_h4 = pilot_h4[-analysis_count].timestamp.astimezone(UTC)
+        source_start = min(
+            utc_week_start(earliest_required_m5) - timedelta(days=7),
+            utc_week_start(earliest_required_h4) - timedelta(days=7),
+        )
+
+        requested_counts = {
+            key: required_bar_count(
+                start=source_start,
+                end=boundary,
+                timeframe=timeframe,
+            )
+            for key, timeframe in self._KEY_TIMEFRAMES.items()
+        }
+        histories = self._load_histories(
+            symbol=symbol_value,
+            counts=requested_counts,
+            end_time=boundary,
+        )
+        normalized = self._validate_histories(histories)
+        clipped = {
+            key: list(
+                clip_history(
+                    series,
+                    timeframe=self._KEY_TIMEFRAMES[key],
+                    start=source_start,
+                    end=boundary,
+                )
+            )
+            for key, series in normalized.items()
+        }
+        for key, values in clipped.items():
+            if not values:
+                raise RuntimeError(
+                    f"No completed {key.upper()} candles overlap the replay window."
+                )
+
+        final_eligible = clipped["m5"][-eligible_count:]
+        if len(final_eligible) != eligible_count:
+            raise RuntimeError(
+                "Insufficient overlapping M5 history for the requested decisions."
+            )
+        if tuple(bar.timestamp for bar in final_eligible) != tuple(
+            bar.timestamp for bar in pilot_eligible
+        ):
+            raise RuntimeError(
+                "The selected M5 decision series changed during aligned loading."
+            )
+
+        if not self._snapshot_complete(
+            histories=clipped,
+            boundary=first_eligible_boundary,
+            analysis_window_bars=analysis_count,
+        ):
+            raise RuntimeError(
+                "Required M5/M15/H1/H4/D1/W1 history is incomplete at the "
+                "first eligible M5 boundary."
+            )
+
+        available_warmup = sum(
+            self._snapshot_complete(
+                histories=clipped,
+                boundary=bar_close_time(bar, Timeframe.M5),
+                analysis_window_bars=analysis_count,
+            )
+            for bar in clipped["m5"]
+            if bar.timestamp.astimezone(UTC) < first_eligible
+        )
+        if available_warmup < warmup_count:
+            raise RuntimeError(
+                "Insufficient complete synchronized M5 warm-up snapshots: "
+                f"required={warmup_count} available={available_warmup}."
+            )
+
+        replay_window = BacktestReplayWindow(
+            source_start=source_start,
+            source_end=boundary,
+            first_eligible_m5_timestamp=first_eligible,
+            last_eligible_m5_timestamp=final_eligible[-1].timestamp.astimezone(UTC),
+            requested_eligible_m5_bars=eligible_count,
+            analysis_window_bars=analysis_count,
+            required_warmup_snapshots=warmup_count,
+            available_warmup_snapshots=available_warmup,
+            requested_bar_counts=tuple(sorted(requested_counts.items())),
+        )
+        return BacktestReplayContext(
+            current_bar=final_eligible[-1],
+            m5_bars=clipped["m5"],
+            m15_bars=clipped["m15"],
+            h1_bars=clipped["h1"],
+            h4_bars=clipped["h4"],
+            replay_window=replay_window,
         )
 
     def synchronize_at(
@@ -89,52 +224,52 @@ class MultiTimeframeLoader:
         histories: Mapping[str, Sequence[MarketBar]],
         observation_timestamp: datetime,
     ) -> MarketContext:
-        """Build a no-lookahead snapshot for one completed M15 observation.
-
-        ``observation_timestamp`` must identify an existing M15 candle open.
-        The visibility boundary is that candle's close time. Every included bar
-        must have closed on or before that boundary.
-        """
+        """Build a no-lookahead snapshot for one completed M5 observation."""
 
         normalized = self._validate_histories(histories)
-        observation_open = self._normalize_utc(
+        observation_open = normalize_utc(
             observation_timestamp,
             "observation_timestamp",
         )
-        observation_close = observation_open + self._DURATIONS["m15"]
-
-        m15_bar = next(
-            (bar for bar in normalized["m15"] if bar.timestamp == observation_open),
+        m5_bar = next(
+            (
+                bar
+                for bar in normalized["m5"]
+                if bar.timestamp.astimezone(UTC) == observation_open
+            ),
             None,
         )
-        if m15_bar is None:
+        if m5_bar is None:
             raise ValueError(
-                "observation_timestamp must match an existing M15 candle open"
+                "observation_timestamp must match an existing M5 candle open"
             )
-
+        boundary = bar_close_time(m5_bar, Timeframe.M5)
         synchronized = {
-            name: self._completed_by(name, series, observation_close)
-            for name, series in normalized.items()
+            key: list(
+                visible_bars(
+                    series,
+                    timeframe=self._KEY_TIMEFRAMES[key],
+                    boundary=boundary,
+                )
+            )
+            for key, series in normalized.items()
         }
-
-        for name in self._DURATIONS:
-            if not synchronized[name]:
+        for key in self._KEY_TIMEFRAMES:
+            if not synchronized[key]:
                 raise RuntimeError(
-                    f"No completed {name.upper()} candles are available at "
+                    f"No completed {key.upper()} candles are available at "
                     f"{observation_open.isoformat()}."
                 )
-
-        if synchronized["m15"][-1].timestamp != observation_open:
+        if synchronized["m5"][-1].timestamp.astimezone(UTC) != observation_open:
             raise RuntimeError(
-                "M15 synchronization included a candle after the observation"
+                "M5 synchronization included a candle after the observation"
             )
-
         return MarketContext(
-            current_bar=m15_bar,
-            m5_bars=list(synchronized["m5"]),
-            m15_bars=list(synchronized["m15"]),
-            h1_bars=list(synchronized["h1"]),
-            h4_bars=list(synchronized["h4"]),
+            current_bar=m5_bar,
+            m5_bars=synchronized["m5"],
+            m15_bars=synchronized["m15"],
+            h1_bars=synchronized["h1"],
+            h4_bars=synchronized["h4"],
         )
 
     def iter_synchronized(
@@ -144,65 +279,100 @@ class MultiTimeframeLoader:
         start_timestamp: datetime | None = None,
         end_timestamp: datetime | None = None,
     ) -> Iterator[MarketContext]:
-        """Yield chronological no-lookahead snapshots for completed M15 bars."""
+        """Yield chronological no-lookahead snapshots for completed M5 bars."""
 
         normalized = self._validate_histories(histories)
         start = (
-            self._normalize_utc(start_timestamp, "start_timestamp")
+            normalize_utc(start_timestamp, "start_timestamp")
             if start_timestamp is not None
             else None
         )
         end = (
-            self._normalize_utc(end_timestamp, "end_timestamp")
+            normalize_utc(end_timestamp, "end_timestamp")
             if end_timestamp is not None
             else None
         )
         if start is not None and end is not None and start > end:
             raise ValueError("start_timestamp must not be after end_timestamp")
 
-        for bar in normalized["m15"]:
-            if start is not None and bar.timestamp < start:
+        for bar in normalized["m5"]:
+            timestamp = bar.timestamp.astimezone(UTC)
+            if start is not None and timestamp < start:
                 continue
-            if end is not None and bar.timestamp > end:
+            if end is not None and timestamp > end:
                 continue
             try:
                 yield self.synchronize_at(
                     histories=normalized,
-                    observation_timestamp=bar.timestamp,
+                    observation_timestamp=timestamp,
                 )
             except RuntimeError:
                 continue
 
     def _load_histories(
         self,
-        symbol: str,
-        bars: int,
         *,
-        end_time: datetime | None,
+        symbol: str,
+        counts: Mapping[str, int],
+        end_time: datetime,
     ) -> dict[str, list[MarketBar]]:
-        mapping = {
-            "m5": mt5.TIMEFRAME_M5,
-            "m15": mt5.TIMEFRAME_M15,
-            "h1": mt5.TIMEFRAME_H1,
-            "h4": mt5.TIMEFRAME_H4,
+        return {
+            key: self._load_one(
+                symbol=symbol,
+                key=key,
+                bars=counts[key],
+                end_time=end_time,
+            )
+            for key in self._KEY_TIMEFRAMES
         }
-        histories: dict[str, list[MarketBar]] = {}
-        for name, timeframe in mapping.items():
-            if end_time is None:
-                series = self.loader.load_history(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    bars=bars,
-                )
-            else:
-                series = self.loader.load_history(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    bars=bars,
-                    end_time=end_time,
-                )
-            histories[name] = series
-        return histories
+
+    def _load_one(
+        self,
+        *,
+        symbol: str,
+        key: str,
+        bars: int,
+        end_time: datetime,
+    ) -> list[MarketBar]:
+        return self.loader.load_history(
+            symbol=symbol,
+            timeframe=self._MT5_TIMEFRAMES[key],
+            bars=bars,
+            end_time=end_time,
+        )
+
+    def _snapshot_complete(
+        self,
+        *,
+        histories: Mapping[str, Sequence[MarketBar]],
+        boundary: datetime,
+        analysis_window_bars: int,
+    ) -> bool:
+        visible: dict[str, tuple[MarketBar, ...]] = {}
+        for key, timeframe in self._KEY_TIMEFRAMES.items():
+            values = visible_bars(
+                histories[key],
+                timeframe=timeframe,
+                boundary=boundary,
+                window_bars=analysis_window_bars,
+            )
+            if len(values) < analysis_window_bars:
+                return False
+            visible[key] = values
+
+        h4 = visible["h4"]
+        return bool(
+            completed_period_buckets(
+                h4,
+                boundary=boundary,
+                weekly=False,
+            )
+            and completed_period_buckets(
+                h4,
+                boundary=boundary,
+                weekly=True,
+            )
+        )
 
     def _validate_histories(
         self,
@@ -211,7 +381,7 @@ class MultiTimeframeLoader:
         if not isinstance(histories, Mapping):
             raise TypeError("histories must be a mapping")
 
-        expected = set(self._DURATIONS)
+        expected = set(self._KEY_TIMEFRAMES)
         missing = expected.difference(histories)
         unexpected = set(histories).difference(expected)
         if missing:
@@ -225,45 +395,26 @@ class MultiTimeframeLoader:
             )
 
         normalized: dict[str, tuple[MarketBar, ...]] = {}
-        for name in self._DURATIONS:
-            series = histories[name]
+        for key in self._KEY_TIMEFRAMES:
+            series = histories[key]
             if isinstance(series, (str, bytes)) or not isinstance(series, Sequence):
-                raise TypeError(f"{name} history must be a sequence of MarketBar")
+                raise TypeError(f"{key} history must be a sequence of MarketBar")
             if not series:
-                raise ValueError(f"{name} history cannot be empty")
+                raise ValueError(f"{key} history cannot be empty")
 
             validated: list[MarketBar] = []
             previous: datetime | None = None
             for bar in series:
-                self._validate_bar(bar, name)
-                timestamp = self._normalize_utc(bar.timestamp, f"{name} timestamp")
+                self._validate_bar(bar, key)
+                timestamp = normalize_utc(bar.timestamp, f"{key} timestamp")
                 if previous is not None and timestamp <= previous:
                     raise ValueError(
-                        f"{name} timestamps must be strictly increasing"
+                        f"{key} timestamps must be strictly increasing"
                     )
                 previous = timestamp
                 validated.append(bar)
-            normalized[name] = tuple(validated)
-
+            normalized[key] = tuple(validated)
         return normalized
-
-    def _completed_by(
-        self,
-        timeframe_name: str,
-        bars: Sequence[MarketBar],
-        visibility_boundary: datetime,
-    ) -> tuple[MarketBar, ...]:
-        duration = self._DURATIONS[timeframe_name]
-        boundary = self._normalize_utc(
-            visibility_boundary,
-            "visibility_boundary",
-        )
-        return tuple(
-            bar
-            for bar in bars
-            if self._normalize_utc(bar.timestamp, "bar timestamp") + duration
-            <= boundary
-        )
 
     @staticmethod
     def _validate_symbol(symbol: str) -> str:
@@ -283,16 +434,24 @@ class MultiTimeframeLoader:
         return bars
 
     @staticmethod
-    def _validate_clock(value: datetime) -> None:
-        MultiTimeframeLoader._normalize_utc(value, "clock")
+    def _validate_nonnegative_count(value: int, field_name: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{field_name} must be an integer")
+        if value < 0:
+            raise ValueError(f"{field_name} cannot be negative")
+        return value
 
     @staticmethod
-    def _normalize_utc(value: datetime, field_name: str) -> datetime:
-        if not isinstance(value, datetime):
-            raise TypeError(f"{field_name} must be a datetime")
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError(f"{field_name} must be timezone-aware")
-        return value.astimezone(UTC)
+    def _validate_analysis_window(value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError("analysis_window_bars must be an integer")
+        if value < 2:
+            raise ValueError("analysis_window_bars must be at least 2")
+        return value
+
+    @staticmethod
+    def _validate_clock(value: datetime) -> None:
+        normalize_utc(value, "clock")
 
     @staticmethod
     def _validate_bar(bar: MarketBar, timeframe_name: str) -> None:
@@ -300,10 +459,7 @@ class MultiTimeframeLoader:
             raise TypeError(
                 f"{timeframe_name} history values must be MarketBar instances"
             )
-        MultiTimeframeLoader._normalize_utc(
-            bar.timestamp,
-            f"{timeframe_name} timestamp",
-        )
+        normalize_utc(bar.timestamp, f"{timeframe_name} timestamp")
         for field_name in ("open", "high", "low", "close"):
             value = getattr(bar, field_name)
             if isinstance(value, bool) or not isinstance(value, (int, float)):

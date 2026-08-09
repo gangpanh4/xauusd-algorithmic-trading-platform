@@ -4,10 +4,12 @@ Historical Backtest Runner.
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from datetime import UTC, datetime
-import json
 from pathlib import Path
+
+import MetaTrader5 as mt5
 
 from .candidate_outcome_exporter import CandidateOutcomeExporter
 from .candidate_outcome_segmentation import (
@@ -16,60 +18,15 @@ from .candidate_outcome_segmentation import (
 from .config import BacktestConfig
 from .engine import BacktestingEngine
 from .exporter import BacktestExporter
+from .methodology_candidate_rule_simulator import (
+    MethodologyCandidateRuleSimulator,
+)
 from .methodology_condition_analytics import MethodologyConditionAnalytics
 from .methodology_condition_outcome_attribution import (
     MethodologyConditionOutcomeAttribution,
 )
 from .methodology_counterfactual_cohorts import (
     MethodologyCounterfactualCohorts,
-)
-from .methodology_candidate_rule_simulator import (
-    MethodologyCandidateRuleSimulator,
-)
-from .methodology_shadow_decision_comparison import (
-    MethodologyShadowDecisionComparison,
-)
-from .methodology_variant_b_shadow_scoring import (
-    MethodologyVariantBShadowScoring,
-)
-from .methodology_variant_b_shadow_trades import (
-    MethodologyVariantBShadowTrades,
-)
-from .methodology_variant_b_execution_diagnostics import (
-    MethodologyVariantBExecutionDiagnostics,
-)
-from .methodology_variant_b_atr_shadow_matrix import (
-    MethodologyVariantBATRShadowMatrix,
-)
-from .methodology_variant_b_cost_sensitivity import (
-    MethodologyVariantBCostSensitivity,
-)
-from .methodology_variant_b_execution_context import (
-    MethodologyVariantBExecutionContext,
-)
-from .methodology_variant_b_cluster_selection import (
-    MethodologyVariantBClusterSelection,
-)
-from .methodology_variant_b_confirmation_delay import (
-    MethodologyVariantBConfirmationDelay,
-)
-from .methodology_variant_b_statistical_stability import (
-    MethodologyVariantBStatisticalStability,
-)
-from .methodology_variant_b_shadow_integration import (
-    MethodologyVariantBShadowIntegration,
-)
-from .methodology_variant_b_alignment_integrity import (
-    MethodologyVariantBAlignmentIntegrity,
-)
-from .methodology_variant_b_probability_subset import (
-    MethodologyVariantBProbabilitySubset,
-)
-from .methodology_variant_b_shadow_exception_monitor import (
-    MethodologyVariantBShadowExceptionMonitor,
-)
-from .methodology_variant_b_shadow_exception_stability import (
-    MethodologyVariantBShadowExceptionStability,
 )
 from .methodology_diagnostics_exporter import (
     MethodologyDiagnosticsExporter,
@@ -81,7 +38,52 @@ from .methodology_outcome_research import MethodologyOutcomeResearch
 from .methodology_outcome_stability import (
     MethodologyOutcomeStabilityAnalytics,
 )
-from .models import BacktestResult
+from .methodology_shadow_decision_comparison import (
+    MethodologyShadowDecisionComparison,
+)
+from .methodology_variant_b_alignment_integrity import (
+    MethodologyVariantBAlignmentIntegrity,
+)
+from .methodology_variant_b_atr_shadow_matrix import (
+    MethodologyVariantBATRShadowMatrix,
+)
+from .methodology_variant_b_cluster_selection import (
+    MethodologyVariantBClusterSelection,
+)
+from .methodology_variant_b_confirmation_delay import (
+    MethodologyVariantBConfirmationDelay,
+)
+from .methodology_variant_b_cost_sensitivity import (
+    MethodologyVariantBCostSensitivity,
+)
+from .methodology_variant_b_execution_context import (
+    MethodologyVariantBExecutionContext,
+)
+from .methodology_variant_b_execution_diagnostics import (
+    MethodologyVariantBExecutionDiagnostics,
+)
+from .methodology_variant_b_probability_subset import (
+    MethodologyVariantBProbabilitySubset,
+)
+from .methodology_variant_b_shadow_exception_monitor import (
+    MethodologyVariantBShadowExceptionMonitor,
+)
+from .methodology_variant_b_shadow_exception_stability import (
+    MethodologyVariantBShadowExceptionStability,
+)
+from .methodology_variant_b_shadow_integration import (
+    MethodologyVariantBShadowIntegration,
+)
+from .methodology_variant_b_shadow_scoring import (
+    MethodologyVariantBShadowScoring,
+)
+from .methodology_variant_b_shadow_trades import (
+    MethodologyVariantBShadowTrades,
+)
+from .methodology_variant_b_statistical_stability import (
+    MethodologyVariantBStatisticalStability,
+)
+from .models import BacktestReplayContext, BacktestResult
 from .multi_timeframe_loader import MultiTimeframeLoader
 from .reporter import (
     print_report,
@@ -277,6 +279,7 @@ class BacktestRunner:
         Execute a complete historical backtest.
         """
 
+        self._validate_timeframe(timeframe)
         self.state.reset()
 
         context = self._load_context(
@@ -285,7 +288,7 @@ class BacktestRunner:
             end_time=end_time,
         )
 
-        if not context.m15_bars:
+        if not context.m5_bars:
             raise RuntimeError(
                 "No historical data returned."
             )
@@ -298,7 +301,7 @@ class BacktestRunner:
         )
 
         self._complete_state(
-            processed_bar_count=len(context.m15_bars),
+            processed_bar_count=self._eligible_m5_count(context),
             executed_trade_count=result.total_trades,
         )
 
@@ -318,6 +321,7 @@ class BacktestRunner:
         ``BacktestResult`` return contract.
         """
 
+        self._validate_timeframe(timeframe)
         self.state.reset()
 
         context = self._load_context(
@@ -326,7 +330,7 @@ class BacktestRunner:
             end_time=end_time,
         )
 
-        if not context.m15_bars:
+        if not context.m5_bars:
             raise RuntimeError(
                 "No historical data returned."
             )
@@ -339,7 +343,7 @@ class BacktestRunner:
         )
 
         self._complete_state(
-            processed_bar_count=len(context.m15_bars),
+            processed_bar_count=self._eligible_m5_count(context),
             executed_trade_count=output.result.total_trades,
         )
 
@@ -352,17 +356,18 @@ class BacktestRunner:
         bars: int,
         end_time: datetime | None,
     ) -> object:
-        """Preserve legacy loader calls when no explicit boundary is requested."""
+        """Load one M5-eligible replay with shared warm-up requirements."""
 
-        if end_time is None:
-            return self.loader.load(
-                symbol=symbol,
-                bars=bars,
-            )
         return self.loader.load(
             symbol=symbol,
             bars=bars,
             end_time=end_time,
+            warmup_bars=self.config.warmup_bars,
+            analysis_window_bars=getattr(
+                self.engine,
+                "multi_timeframe_window_bars",
+                500,
+            ),
         )
 
     def _capture_historical_window(
@@ -409,11 +414,58 @@ class BacktestRunner:
             # intentionally construct BacktestRunner without calling __init__.
             config = BacktestConfig()
 
+        replay_window = (
+            context.replay_window
+            if isinstance(context, BacktestReplayContext)
+            else None
+        )
         self._last_actual_window = {
-            "requested_bars_per_timeframe": requested_bars,
+            "requested_eligible_m5_bars": requested_bars,
             "requested_end_time": (
                 self._last_requested_end_time.isoformat()
                 if self._last_requested_end_time is not None
+                else None
+            ),
+            "source_start_time": (
+                replay_window.source_start.isoformat()
+                if replay_window is not None
+                else first_timestamp(m5_bars)
+            ),
+            "source_end_time": (
+                replay_window.source_end.isoformat()
+                if replay_window is not None
+                else self._last_requested_end_time.isoformat()
+                if self._last_requested_end_time is not None
+                else None
+            ),
+            "first_eligible_m5_timestamp": (
+                replay_window.first_eligible_m5_timestamp.isoformat()
+                if replay_window is not None
+                else first_timestamp(m5_bars)
+            ),
+            "last_eligible_m5_timestamp": (
+                replay_window.last_eligible_m5_timestamp.isoformat()
+                if replay_window is not None
+                else last_timestamp(m5_bars)
+            ),
+            "analysis_window_bars": (
+                replay_window.analysis_window_bars
+                if replay_window is not None
+                else getattr(self.engine, "multi_timeframe_window_bars", None)
+            ),
+            "required_warmup_snapshots": (
+                replay_window.required_warmup_snapshots
+                if replay_window is not None
+                else config.warmup_bars
+            ),
+            "available_warmup_snapshots": (
+                replay_window.available_warmup_snapshots
+                if replay_window is not None
+                else None
+            ),
+            "requested_bar_counts": (
+                dict(replay_window.requested_bar_counts)
+                if replay_window is not None
                 else None
             ),
             "actual": {
@@ -462,7 +514,22 @@ class BacktestRunner:
             },
             "closed_candle_only": True,
             "no_lookahead": True,
+            "decision_clock": "M5",
+            "simulation_clock": "M15_COMPLETED",
         }
+
+    @staticmethod
+    def _validate_timeframe(timeframe: int) -> None:
+        if isinstance(timeframe, bool) or not isinstance(timeframe, int):
+            raise TypeError("timeframe must be an integer MT5 constant")
+        if timeframe != mt5.TIMEFRAME_M5:
+            raise ValueError("BacktestRunner timeframe must be TIMEFRAME_M5")
+
+    @staticmethod
+    def _eligible_m5_count(context: object) -> int:
+        if isinstance(context, BacktestReplayContext):
+            return context.replay_window.requested_eligible_m5_bars
+        return len(tuple(getattr(context, "m5_bars", ())))
 
     def _complete_state(
         self,

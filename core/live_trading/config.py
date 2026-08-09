@@ -37,6 +37,8 @@ class LiveTradingConfig:
 
     history_window_bars: int = 500
 
+    warmup_bars: int = 200
+
     # This broker's MT5 terminal currently encodes market timestamps three
     # hours ahead of actual UTC. MarketDataService subtracts this offset at
     # the ingestion boundary before constructing UTC MarketBar objects.

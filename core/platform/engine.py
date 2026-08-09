@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import timedelta
+from collections.abc import Mapping
+from datetime import datetime, timedelta
 
 import MetaTrader5 as mt5
 
 from core.backtesting.config import BacktestConfig
 from core.backtesting.runner import BacktestRunner
 from core.data.market_data import MarketDataService
+from core.data.models import MarketBar
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.live_trading.execution_reconciliation_report import (
@@ -26,6 +28,12 @@ from core.mt5_execution.symbol_specification import (
     get_live_symbol_specification,
 )
 from core.multi_timeframe.enums import Timeframe
+from core.multi_timeframe.history_alignment import (
+    clip_history,
+    required_bar_count,
+    utc_week_start,
+    visible_bars,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +80,7 @@ class TradingPlatform:
             runner = BacktestRunner(config)
             result = runner.run(
                 symbol=symbol,
-                timeframe=mt5.TIMEFRAME_M15,
+                timeframe=mt5.TIMEFRAME_M5,
                 bars=50000,
             )
             runner.generate_reports(result)
@@ -137,10 +145,6 @@ class TradingPlatform:
                 ),
             ),
         }
-        buffer = LiveMultiTimeframeBuffer(
-            window_bars=config.history_window_bars,
-        )
-
         try:
             # Market data requires an MT5 terminal connection even when order
             # execution is disabled.
@@ -168,15 +172,27 @@ class TradingPlatform:
             engine.synchronize_active_orders()
 
             logger.info("Loading synchronized historical bars...")
-            for timeframe, service in services.items():
-                history = service.get_historical_bars(
-                    config.history_window_bars,
+            bootstrap_m5 = services[Timeframe.M5].get_latest_closed_bar()
+            if bootstrap_m5 is None:
+                raise RuntimeError("No completed M5 bootstrap boundary available.")
+            histories, capacities, source_start, bootstrap_boundary = (
+                self._load_aligned_live_histories(
+                    services=services,
+                    latest_m5=bootstrap_m5,
+                    analysis_window_bars=config.history_window_bars,
                 )
-                if not history:
-                    raise RuntimeError(
-                        f"No completed {timeframe.value} history available."
-                    )
+            )
+            buffer = LiveMultiTimeframeBuffer(
+                window_bars=config.history_window_bars,
+                source_capacity_bars=capacities,
+            )
+            for timeframe, history in histories.items():
                 buffer.load(timeframe, history)
+            logger.info(
+                "Loaded aligned live source history: start=%s end=%s",
+                source_start,
+                bootstrap_boundary,
+            )
 
             account = get_account_info()
 
@@ -201,21 +217,20 @@ class TradingPlatform:
             )
 
             logger.info("Warming up synchronized analytical state...")
+            warmup_snapshots = []
             for m5_bar in buffer.histories[Timeframe.M5]:
                 boundary = m5_bar.timestamp + timedelta(minutes=5)
                 snapshot = buffer.snapshot(boundary)
                 if snapshot is None:
-                    engine.process_bar(
-                        m5_bar,
-                        account_balance=account.balance,
-                        stop_loss_distance=(
-                            symbol_spec.minimum_stop_distance
-                        ),
-                        pip_value=symbol_spec.tick_value_per_lot,
-                        warmup=True,
-                    )
                     continue
-
+                warmup_snapshots.append(snapshot)
+            if len(warmup_snapshots) < config.warmup_bars:
+                raise RuntimeError(
+                    "Insufficient complete synchronized M5 warm-up snapshots: "
+                    f"required={config.warmup_bars} "
+                    f"available={len(warmup_snapshots)}."
+                )
+            for snapshot in warmup_snapshots:
                 engine.process_multi_timeframe(
                     snapshot,
                     account_balance=account.balance,
@@ -229,8 +244,10 @@ class TradingPlatform:
                 )
 
             logger.info(
-                "Warm-up completed. Waiting for completed M5 bars. "
+                "Warm-up completed with %s synchronized M5 snapshots. "
+                "Waiting for completed M5 bars. "
                 "Shadow observations will be appended to %s.",
+                len(warmup_snapshots),
                 config.shadow_observation_path,
             )
 
@@ -298,6 +315,91 @@ class TradingPlatform:
             if mt5_started:
                 mt5.shutdown()
             logger.info("Live Trading Engine stopped.")
+
+    @staticmethod
+    def _load_aligned_live_histories(
+        *,
+        services: Mapping[Timeframe, MarketDataService],
+        latest_m5: MarketBar,
+        analysis_window_bars: int,
+    ) -> tuple[
+        dict[Timeframe, list[MarketBar]],
+        dict[Timeframe, int],
+        datetime,
+        datetime,
+    ]:
+        """Load one completed live bootstrap window from a captured M5 close."""
+
+        if isinstance(analysis_window_bars, bool) or not isinstance(
+            analysis_window_bars,
+            int,
+        ):
+            raise TypeError("analysis_window_bars must be an integer")
+        if analysis_window_bars < 2:
+            raise ValueError("analysis_window_bars must be at least 2")
+        required = (
+            Timeframe.M5,
+            Timeframe.M15,
+            Timeframe.H1,
+            Timeframe.H4,
+        )
+        if set(services) != set(required):
+            raise ValueError("services must contain exactly M5, M15, H1, and H4")
+
+        boundary = latest_m5.timestamp + timedelta(minutes=5)
+        pilot_h4 = visible_bars(
+            services[Timeframe.H4].get_historical_bars(
+                analysis_window_bars + 2
+            ),
+            timeframe=Timeframe.H4,
+            boundary=boundary,
+        )
+        if len(pilot_h4) < analysis_window_bars:
+            raise RuntimeError(
+                "Insufficient completed H4 history at the live bootstrap boundary."
+            )
+        source_start = (
+            utc_week_start(pilot_h4[-analysis_window_bars].timestamp)
+            - timedelta(days=7)
+        )
+        capacities = {
+            timeframe: required_bar_count(
+                start=source_start,
+                end=boundary,
+                timeframe=timeframe,
+            )
+            for timeframe in required
+        }
+        histories: dict[Timeframe, list[MarketBar]] = {}
+        for timeframe in (
+            Timeframe.M5,
+            Timeframe.M15,
+            Timeframe.H1,
+            Timeframe.H4,
+        ):
+            loaded = services[timeframe].get_historical_bars(
+                capacities[timeframe]
+            )
+            clipped = list(
+                clip_history(
+                    loaded,
+                    timeframe=timeframe,
+                    start=source_start,
+                    end=boundary,
+                )
+            )
+            if not clipped:
+                raise RuntimeError(
+                    f"No completed {timeframe.value} history overlaps the "
+                    "live bootstrap window."
+                )
+            histories[timeframe] = clipped
+
+        if histories[Timeframe.M5][-1] != latest_m5:
+            raise RuntimeError(
+                "The captured M5 bootstrap boundary changed during history loading."
+            )
+        return histories, capacities, source_start, boundary
 
     def run_research(self) -> None:
         """Validate and summarize persisted live-shadow observations."""
