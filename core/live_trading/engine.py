@@ -6,6 +6,7 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from math import isclose, isfinite
 from uuid import uuid4
@@ -31,6 +32,7 @@ from core.mt5_execution.models import (
 )
 from core.mt5_execution.order_history import get_historical_orders
 from core.mt5_execution.positions import get_open_positions
+from core.mt5_execution.symbols import get_symbol_info
 from core.multi_timeframe.enums import Timeframe
 from core.risk_manager.models import RiskDecision
 from core.trading_pipeline.models import (
@@ -40,7 +42,19 @@ from core.trading_pipeline.models import (
 from core.trading_pipeline.pipeline import TradingPipeline
 
 from .config import LiveTradingConfig
+from .demo_canary_launch_abort_control import (
+    DemoCanaryLaunchAbort,
+    DemoCanaryPreflightSnapshot,
+    build_demo_canary_preflight_snapshot,
+    create_demo_canary_launch_plan,
+    evaluate_demo_canary_final_abort_control,
+)
+from .demo_canary_readiness_review import (
+    DemoCanaryReadinessReview,
+    review_demo_canary_readiness,
+)
 from .demo_execution_authorization import (
+    DemoExecutionAuthorization,
     DemoExecutionAuthorizationError,
     consume_demo_execution_authorization,
     load_demo_execution_authorization,
@@ -82,6 +96,17 @@ from .state import LiveTradingState
 
 logger = logging.getLogger(__name__)
 
+_MT5_TRADE_RETCODE_PLACED = 10008
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecutionSafetyFacts:
+    """One read-only view of submission-relevant runtime and broker facts."""
+
+    readiness_inputs: ExecutionReadinessInputs
+    open_position_count: int
+    unresolved_execution_intent: bool
+
 
 class LiveTradingEngine:
     """Coordinate live analysis and optional MT5 order execution."""
@@ -108,6 +133,16 @@ class LiveTradingEngine:
         """Return readiness diagnostics without submitting or authorizing orders."""
 
         return assess_execution_readiness(self.config, inputs)
+
+    def record_clock_normalization_validated(self) -> None:
+        """Record successful clock validation for the current process session."""
+
+        self.state.clock_normalization_validated = True
+
+    def record_parity_validation_passed(self) -> None:
+        """Record externally verified parity evidence for this process session."""
+
+        self.state.parity_validation_passed = True
 
     def start(self) -> None:
         """Start in analysis-only or live-execution mode."""
@@ -303,9 +338,12 @@ class LiveTradingEngine:
         MT5 and reduces the count during the next reconciliation.
         """
 
+        self.state.positions_synchronized = False
         positions = get_open_positions(self.config.symbol)
         count = len(positions)
         self.pipeline.set_open_position_count(count)
+        self.state.open_position_count = count
+        self.state.positions_synchronized = True
         return count
 
     def synchronize_active_orders(self) -> int:
@@ -316,6 +354,7 @@ class LiveTradingEngine:
         transition fails closed and preserves the execution guard.
         """
 
+        self.state.active_orders_synchronized = False
         count = get_active_order_count(self.config.symbol)
         if self.state.unresolved_partial_ticket is not None:
             positions = get_open_positions(self.config.symbol)
@@ -326,6 +365,7 @@ class LiveTradingEngine:
             )
         else:
             self.state.active_order_count = count
+        self.state.active_orders_synchronized = True
         return self.state.active_order_count
 
     def reconcile_realized_deals(
@@ -343,6 +383,7 @@ class LiveTradingEngine:
         the net P&L of this symbol's same-day realized deals.
         """
 
+        self.state.realized_deals_synchronized = False
         end = datetime.now(UTC) if as_of is None else as_of.astimezone(UTC)
         start = self.state.last_deal_reconciliation_time
         if start is None:
@@ -419,6 +460,7 @@ class LiveTradingEngine:
             )
 
         self.state.last_deal_reconciliation_time = end
+        self.state.realized_deals_synchronized = True
         return len(new_deals)
 
     def process_bar(
@@ -623,21 +665,19 @@ class LiveTradingEngine:
         execution_request = self.adapter.adapt(pipeline_result)
 
         try:
-            account = get_account_info()
-            authorization = load_demo_execution_authorization(
-                self.config.demo_authorization_path
-            )
-            validate_demo_execution_authorization(
-                authorization,
-                config=self.config,
-                account=account,
+            authorization = self._require_execution_safety(
                 request=execution_request.order_request,
-                now=datetime.now(UTC),
             )
-        except (DemoExecutionAuthorizationError, RuntimeError) as exc:
+        except (
+            DemoCanaryLaunchAbort,
+            DemoExecutionAuthorizationError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
             self.state.skipped_trades += 1
             self.state.last_error = (
-                "Demo execution authorization blocked submission: "
+                "Execution safety controls blocked submission: "
                 f"{exc}"
             )
             logger.error(self.state.last_error)
@@ -667,12 +707,14 @@ class LiveTradingEngine:
             take_profit=execution_request.order_request.take_profit,
             comment=execution_intent.broker_comment,
         )
+        self.state.order_submissions_this_session += 1
         with _authorize_broker_mutation():
             execution_result = self.executor.execute_order(broker_request)
         self._record_execution_intent_result(
             execution_intent,
             execution_result,
         )
+        self._update_execution_failure_counter(execution_result)
 
         if execution_result.status is OrderStatus.PENDING:
             # A placed order may execute later. Block subsequent submissions
@@ -775,6 +817,244 @@ class LiveTradingEngine:
             execution_result=execution_result,
             trade_executed=True,
         )
+
+    def _require_execution_safety(
+        self,
+        *,
+        request: OrderRequest,
+    ) -> DemoExecutionAuthorization:
+        """Enforce all Phase 5 controls before durable submission mutation."""
+
+        initial_time = datetime.now(UTC)
+        initial_facts = self._collect_execution_safety_facts()
+        self._require_execution_readiness(initial_facts.readiness_inputs)
+
+        authorization = load_demo_execution_authorization(
+            self.config.demo_authorization_path
+        )
+        validate_demo_execution_authorization(
+            authorization,
+            config=self.config,
+            account=initial_facts.readiness_inputs.account,
+            request=request,
+            now=initial_time,
+        )
+
+        review = review_demo_canary_readiness(
+            config=self.config,
+            readiness_inputs=initial_facts.readiness_inputs,
+            authorization=authorization,
+            request=request,
+            reconciliation_status=(
+                self.state.execution_intent_reconciliation_status
+            ),
+            now=initial_time,
+        )
+        if not review.review_passed:
+            raise DemoCanaryLaunchAbort(
+                "Demo canary readiness review failed: "
+                + "; ".join(review.reasons)
+            )
+
+        initial_snapshot = self._build_demo_canary_snapshot(
+            review=review,
+            authorization=authorization,
+            request=request,
+            facts=initial_facts,
+            captured_at=initial_time,
+        )
+        plan = create_demo_canary_launch_plan(
+            initial_snapshot,
+            now=initial_time,
+        )
+
+        final_time = datetime.now(UTC)
+        final_facts = self._collect_execution_safety_facts()
+        self._require_execution_readiness(final_facts.readiness_inputs)
+        final_authorization = load_demo_execution_authorization(
+            self.config.demo_authorization_path
+        )
+        validate_demo_execution_authorization(
+            final_authorization,
+            config=self.config,
+            account=final_facts.readiness_inputs.account,
+            request=request,
+            now=final_time,
+        )
+        current_review = replace(
+            review,
+            account_login=final_facts.readiness_inputs.account.login,
+            account_server=final_facts.readiness_inputs.account.server,
+        )
+        current_snapshot = self._build_demo_canary_snapshot(
+            review=current_review,
+            authorization=final_authorization,
+            request=request,
+            facts=final_facts,
+            captured_at=final_time,
+        )
+        decision = evaluate_demo_canary_final_abort_control(
+            plan=plan,
+            current_snapshot=current_snapshot,
+            now=final_time,
+        )
+        if decision.abort_required:
+            raise DemoCanaryLaunchAbort(
+                "Final demo canary state recheck failed: "
+                + "; ".join(decision.reasons)
+            )
+
+        return final_authorization
+
+    def _collect_execution_safety_facts(self) -> _ExecutionSafetyFacts:
+        """Read current broker and durable state without mutation authority."""
+
+        account = get_account_info()
+
+        self.state.positions_synchronized = False
+        positions = get_open_positions(self.config.symbol)
+        open_position_count = len(positions)
+        self.state.open_position_count = open_position_count
+        self.state.positions_synchronized = True
+
+        self.state.active_orders_synchronized = False
+        active_order_count = get_active_order_count(self.config.symbol)
+        self.state.active_order_count = active_order_count
+        self.state.active_orders_synchronized = True
+
+        self.state.symbol_specification_loaded = False
+        symbol = get_symbol_info(self.config.symbol)
+        if symbol.name != self.config.symbol:
+            raise RuntimeError(
+                "Loaded symbol specification does not match configured symbol."
+            )
+        self.state.symbol_specification_loaded = True
+
+        persisted_partial = self.partial_fill_store.load()
+        runtime_partial_ticket = self.state.unresolved_partial_ticket
+        persisted_partial_ticket = (
+            None if persisted_partial is None else persisted_partial.ticket
+        )
+        if (
+            runtime_partial_ticket is not None
+            and persisted_partial_ticket is not None
+            and runtime_partial_ticket != persisted_partial_ticket
+        ):
+            raise RuntimeError(
+                "Runtime and persisted partial-fill tickets differ."
+            )
+        unresolved_partial_ticket = (
+            runtime_partial_ticket
+            if runtime_partial_ticket is not None
+            else persisted_partial_ticket
+        )
+
+        intent = self.execution_intent_store.load()
+        readiness_inputs = ExecutionReadinessInputs(
+            account=account,
+            positions_synchronized=self.state.positions_synchronized,
+            active_orders_synchronized=(
+                self.state.active_orders_synchronized
+            ),
+            realized_deals_synchronized=(
+                self.state.realized_deals_synchronized
+            ),
+            symbol_specification_loaded=(
+                self.state.symbol_specification_loaded
+            ),
+            clock_normalization_validated=(
+                self.state.clock_normalization_validated
+            ),
+            parity_validation_passed=self.state.parity_validation_passed,
+            active_order_count=active_order_count,
+            unresolved_partial_ticket=unresolved_partial_ticket,
+            order_submissions_this_session=(
+                self.state.order_submissions_this_session
+            ),
+            consecutive_execution_failures=(
+                self.state.consecutive_execution_failures
+            ),
+        )
+        return _ExecutionSafetyFacts(
+            readiness_inputs=readiness_inputs,
+            open_position_count=open_position_count,
+            unresolved_execution_intent=(
+                intent is not None and intent.unresolved
+            ),
+        )
+
+    def _require_execution_readiness(
+        self,
+        inputs: ExecutionReadinessInputs,
+    ) -> None:
+        result = assess_execution_readiness(self.config, inputs)
+        if result.ready:
+            return
+        raise RuntimeError(
+            "Execution readiness failed: " + "; ".join(result.reasons)
+        )
+
+    def _build_demo_canary_snapshot(
+        self,
+        *,
+        review: DemoCanaryReadinessReview,
+        authorization: DemoExecutionAuthorization,
+        request: OrderRequest,
+        facts: _ExecutionSafetyFacts,
+        captured_at: datetime,
+    ) -> DemoCanaryPreflightSnapshot:
+        inputs = facts.readiness_inputs
+        return build_demo_canary_preflight_snapshot(
+            review=review,
+            authorization=authorization,
+            request=request,
+            account_trade_mode=inputs.account.trade_mode,
+            active_order_count=inputs.active_order_count,
+            open_position_count=facts.open_position_count,
+            unresolved_partial_ticket=inputs.unresolved_partial_ticket,
+            unresolved_execution_intent=(
+                facts.unresolved_execution_intent
+            ),
+            reconciliation_status=(
+                self.state.execution_intent_reconciliation_status
+            ),
+            order_submissions_this_session=(
+                inputs.order_submissions_this_session
+            ),
+            consecutive_execution_failures=(
+                inputs.consecutive_execution_failures
+            ),
+            live_execution_enabled=self.config.live_execution_enabled,
+            demo_execution_approved=self.config.demo_execution_approved,
+            execution_kill_switch_enabled=(
+                self.config.execution_kill_switch_enabled
+            ),
+            captured_at=captured_at,
+        )
+
+    def _update_execution_failure_counter(
+        self,
+        result: OrderResult,
+    ) -> None:
+        """Update the process-session breaker from one confirmed outcome."""
+
+        confirmed_success = result.status in {
+            OrderStatus.FILLED,
+            OrderStatus.PARTIALLY_FILLED,
+        } or (
+            result.status is OrderStatus.PENDING
+            and result.retcode == _MT5_TRADE_RETCODE_PLACED
+        )
+        if confirmed_success:
+            self.state.consecutive_execution_failures = 0
+            return
+
+        confirmed_broker_failure = (
+            result.status in {OrderStatus.REJECTED, OrderStatus.CANCELLED}
+            and result.retcode is not None
+        )
+        if confirmed_broker_failure:
+            self.state.consecutive_execution_failures += 1
 
     def _prepare_execution_intent(
         self,

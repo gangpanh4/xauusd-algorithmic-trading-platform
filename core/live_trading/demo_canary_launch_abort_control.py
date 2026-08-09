@@ -1,9 +1,9 @@
-"""Non-executing demo-canary launch planning and final abort control.
+"""Non-authoritative demo-canary launch planning and final abort control.
 
-This module is deliberately disconnected from MT5Executor. It cannot initialize
-MT5, consume an authorization, or submit an order. It binds a successful
-readiness review to an immutable preflight fingerprint and fails closed if any
-execution-relevant fact changes before a later, separately approved milestone.
+This module cannot initialize MT5, consume an authorization, or submit an order.
+It binds a successful readiness review to an immutable preflight fingerprint
+and fails closed if any execution-relevant fact changes before submission. The
+separate durable demo authorization remains the execution grant.
 """
 
 from __future__ import annotations
@@ -303,8 +303,13 @@ def fingerprint_demo_canary_preflight(
 ) -> str:
     """Return a deterministic SHA-256 binding for all preflight facts."""
 
+    payload = snapshot.to_payload()
+    # Observation time is provenance rather than execution state. Excluding it
+    # allows a later current-state read to match when every bound safety fact is
+    # unchanged; plan lifetime still bounds the recheck window.
+    payload.pop("captured_at")
     canonical = json.dumps(
-        snapshot.to_payload(),
+        payload,
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -344,32 +349,37 @@ def _validate_snapshot_safe(
         "NO_PERSISTED_INTENT",
         "NO_INTENT",
         "RECONCILED_CLEAR",
+        "ALREADY_RESOLVED",
+        "FILLED_CONFIRMED",
+        "REJECTED_CONFIRMED",
+        "CANCELLED_CONFIRMED",
+        "TERMINAL_CONFIRMED",
     }:
         raise DemoCanaryLaunchAbort(
             "Execution reconciliation is not clear."
         )
-    if snapshot.order_submissions_this_session != 0:
+    safe_disabled = (
+        not snapshot.live_execution_enabled
+        and not snapshot.demo_execution_approved
+        and snapshot.execution_kill_switch_enabled
+    )
+    active_submission = (
+        snapshot.live_execution_enabled
+        and snapshot.demo_execution_approved
+        and not snapshot.execution_kill_switch_enabled
+    )
+    if not (safe_disabled or active_submission):
         raise DemoCanaryLaunchAbort(
-            "A prior order submission blocks the one-shot canary."
+            "Execution controls are not in a complete safe-disabled planning "
+            "state or a complete active-submission state."
         )
-    if snapshot.consecutive_execution_failures != 0:
+    if safe_disabled and snapshot.order_submissions_this_session != 0:
         raise DemoCanaryLaunchAbort(
-            "Execution failure circuit breaker is not clear."
+            "A prior order submission blocks the one-shot canary review."
         )
-
-    # This milestone remains non-executing. A plan is only valid while all
-    # runtime execution controls are still in their safe disabled state.
-    if snapshot.live_execution_enabled:
+    if safe_disabled and snapshot.consecutive_execution_failures != 0:
         raise DemoCanaryLaunchAbort(
-            "Live execution must remain disabled during launch planning."
-        )
-    if snapshot.demo_execution_approved:
-        raise DemoCanaryLaunchAbort(
-            "Demo execution approval must remain false during launch planning."
-        )
-    if not snapshot.execution_kill_switch_enabled:
-        raise DemoCanaryLaunchAbort(
-            "Kill switch must remain enabled during launch planning."
+            "Execution failure circuit breaker is not clear for review."
         )
 
 

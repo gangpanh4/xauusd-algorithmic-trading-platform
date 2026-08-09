@@ -17,6 +17,7 @@ from core.mt5_execution.models import (
     OrderResult,
     OrderSide,
     OrderStatus,
+    SymbolInfo,
 )
 from core.regime_detector.models import MarketBar
 from core.risk_manager.models import RiskDecision
@@ -124,8 +125,25 @@ def _enabled_engine(path: Path) -> LiveTradingEngine:
             trade_mode=0,
         )
     )
+    live_engine_module.get_open_positions = Mock(return_value=[])
+    live_engine_module.get_active_order_count = Mock(return_value=0)
+    live_engine_module.get_symbol_info = Mock(
+        return_value=SymbolInfo(
+            name="XAUUSD",
+            digits=2,
+            point=0.01,
+            spread=10,
+            volume_min=0.01,
+            volume_max=100.0,
+            volume_step=0.01,
+            trade_allowed=True,
+        )
+    )
     engine = LiveTradingEngine(config)
     engine.state.running = True
+    engine.state.realized_deals_synchronized = True
+    engine.record_clock_normalization_validated()
+    engine.record_parity_validation_passed()
     engine.pipeline.process_bar = Mock(return_value=_approved())
     engine.executor.is_connected = Mock(return_value=True)
     engine.adapter.adapt = Mock(

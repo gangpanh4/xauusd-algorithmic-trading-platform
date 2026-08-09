@@ -129,6 +129,52 @@ def test_unchanged_state_is_launch_ready_but_not_authorized() -> None:
     assert decision.execution_authorized is False
 
 
+def test_active_submission_state_is_bound_without_granting_authority() -> None:
+    snapshot = _snapshot(
+        order_submissions_this_session=1,
+        consecutive_execution_failures=1,
+        live_execution_enabled=True,
+        demo_execution_approved=True,
+        execution_kill_switch_enabled=False,
+    )
+    plan = create_demo_canary_launch_plan(snapshot, now=NOW)
+    current = replace(
+        snapshot,
+        captured_at=NOW + timedelta(seconds=10),
+    )
+
+    decision = evaluate_demo_canary_final_abort_control(
+        plan=plan,
+        current_snapshot=current,
+        now=NOW + timedelta(seconds=10),
+    )
+
+    assert decision.launch_ready is True
+    assert decision.execution_authorized is False
+    assert fingerprint_demo_canary_preflight(current) == (
+        plan.preflight_fingerprint
+    )
+
+
+@pytest.mark.parametrize(
+    "reconciliation_status",
+    [
+        "ALREADY_RESOLVED",
+        "FILLED_CONFIRMED",
+        "REJECTED_CONFIRMED",
+        "CANCELLED_CONFIRMED",
+    ],
+)
+def test_terminal_restart_dispositions_are_clear(
+    reconciliation_status: str,
+) -> None:
+    snapshot = _snapshot(reconciliation_status=reconciliation_status)
+
+    plan = create_demo_canary_launch_plan(snapshot, now=NOW)
+
+    assert plan.execution_authorized is False
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

@@ -73,17 +73,21 @@ def review_demo_canary_readiness(
     observed_at = _aware_utc(now, "now")
     reasons: list[str] = []
 
-    if config.live_execution_enabled:
+    safe_disabled = (
+        not config.live_execution_enabled
+        and not config.demo_execution_approved
+        and config.execution_kill_switch_enabled
+    )
+    active_submission = (
+        config.live_execution_enabled
+        and config.demo_execution_approved
+        and not config.execution_kill_switch_enabled
+    )
+    controls_complete = safe_disabled or active_submission
+    if not controls_complete:
         reasons.append(
-            "Readiness review requires live execution to remain disabled."
-        )
-    if config.demo_execution_approved:
-        reasons.append(
-            "Readiness review requires demo execution approval to remain false."
-        )
-    if not config.execution_kill_switch_enabled:
-        reasons.append(
-            "Readiness review requires the execution kill switch to remain enabled."
+            "Execution controls are not in a complete safe-disabled planning "
+            "state or a complete active-submission state."
         )
 
     if not isinstance(reconciliation_status, str):
@@ -92,15 +96,21 @@ def review_demo_canary_readiness(
     reconciliation_clear = normalized_reconciliation in {
         "",
         "NO_PERSISTED_INTENT",
+        "NO_INTENT",
         "RECONCILED_CLEAR",
+        "ALREADY_RESOLVED",
+        "FILLED_CONFIRMED",
+        "REJECTED_CONFIRMED",
+        "CANCELLED_CONFIRMED",
+        "TERMINAL_CONFIRMED",
     }
     if not reconciliation_clear:
         reasons.append(
             "Execution-intent reconciliation is not clear for a canary review."
         )
 
-    # Assess the same readiness contract prospectively while preserving the
-    # actual supplied configuration in its safe disabled state.
+    # Safe-disabled review inputs are assessed prospectively; an active runtime
+    # is assessed without changing its actual immutable control state.
     prospective_config = replace(
         config,
         live_execution_enabled=True,
@@ -139,9 +149,7 @@ def review_demo_canary_readiness(
 
     review_passed = all(
         (
-            not config.live_execution_enabled,
-            not config.demo_execution_approved,
-            config.execution_kill_switch_enabled,
+            controls_complete,
             readiness_prerequisites_passed,
             authorization_draft_valid,
             reconciliation_clear,

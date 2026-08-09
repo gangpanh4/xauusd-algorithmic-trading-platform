@@ -61,6 +61,16 @@ def test_readiness_only_never_enables_execution() -> None:
     assert result.reasons == ("Live execution remains disabled.",)
 
 
+def test_fully_enabled_valid_inputs_are_operationally_ready() -> None:
+    result = assess_execution_readiness(
+        replace(_config(), live_execution_enabled=True),
+        _inputs(),
+    )
+
+    assert result.ready is True
+    assert result.reasons == ()
+
+
 def test_default_config_fails_closed() -> None:
     result = assess_execution_readiness(
         LiveTradingConfig(),

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.demo_canary_readiness_review import (
@@ -115,6 +118,32 @@ def test_review_passes_but_never_authorizes_execution(tmp_path) -> None:
     assert review.canary_execution_authorized is False
 
 
+def test_active_submission_review_uses_actual_controls_without_authorizing(
+    tmp_path,
+) -> None:
+    config = replace(
+        _config(tmp_path),
+        live_execution_enabled=True,
+        demo_execution_approved=True,
+        execution_kill_switch_enabled=False,
+    )
+
+    review = review_demo_canary_readiness(
+        config=config,
+        readiness_inputs=_inputs(),
+        authorization=_authorization(),
+        request=_request(),
+        reconciliation_status="NO_INTENT",
+        now=NOW,
+    )
+
+    assert review.review_passed is True
+    assert review.live_execution_currently_enabled is True
+    assert review.demo_execution_currently_approved is True
+    assert review.kill_switch_currently_enabled is False
+    assert review.canary_execution_authorized is False
+
+
 def test_review_fails_with_active_order(tmp_path) -> None:
     review = review_demo_canary_readiness(
         config=_config(tmp_path),
@@ -158,6 +187,33 @@ def test_review_fails_when_reconciliation_is_unresolved(tmp_path) -> None:
     assert review.review_passed is False
     assert review.reconciliation_clear is False
     assert review.canary_execution_authorized is False
+
+
+@pytest.mark.parametrize(
+    "reconciliation_status",
+    [
+        "NO_INTENT",
+        "ALREADY_RESOLVED",
+        "FILLED_CONFIRMED",
+        "REJECTED_CONFIRMED",
+        "CANCELLED_CONFIRMED",
+    ],
+)
+def test_review_accepts_clear_engine_restart_dispositions(
+    tmp_path,
+    reconciliation_status: str,
+) -> None:
+    review = review_demo_canary_readiness(
+        config=_config(tmp_path),
+        readiness_inputs=_inputs(),
+        authorization=_authorization(),
+        request=_request(),
+        reconciliation_status=reconciliation_status,
+        now=NOW,
+    )
+
+    assert review.reconciliation_clear is True
+    assert review.review_passed is True
 
 
 def test_review_export_is_explicitly_non_authoritative(tmp_path) -> None:

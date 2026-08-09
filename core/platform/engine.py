@@ -163,6 +163,7 @@ class TradingPlatform:
             )
 
             engine.start()
+            engine.record_clock_normalization_validated()
             engine.synchronize_open_positions()
             engine.synchronize_active_orders()
 
