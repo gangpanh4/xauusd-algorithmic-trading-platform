@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
-
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_BROKER_TEST_FILES = frozenset(
-    {
-        "test_execution_service.py",
-        "test_mt5_account.py",
-        "test_mt5_connection.py",
-        "test_mt5_positions.py",
-        "test_mt5_symbol.py",
-        "test_order_execution.py",
-        "test_order_validation.py",
-    }
-)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -27,7 +15,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--run-broker-tests",
         action="store_true",
         default=False,
-        help="Run tests that may initialize MetaTrader 5 or contact a broker.",
+        help="Run tests marked broker that may contact MetaTrader 5.",
     )
 
 
@@ -51,14 +39,17 @@ def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    """Skip broker-facing tests unless the user explicitly opts in."""
+    """Skip explicitly marked broker tests unless the user opts in."""
 
     if config.getoption("--run-broker-tests"):
         return
 
     skip_broker = pytest.mark.skip(
-        reason="broker-facing test disabled; pass --run-broker-tests to opt in"
+        reason=(
+            "requires an explicitly authorized MT5 or broker connection; "
+            "pass --run-broker-tests to opt in"
+        )
     )
     for item in items:
-        if Path(str(item.path)).name in _BROKER_TEST_FILES:
+        if item.get_closest_marker("broker") is not None:
             item.add_marker(skip_broker)
