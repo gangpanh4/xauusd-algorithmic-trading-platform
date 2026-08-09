@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
+from core.live_trading.execution_concurrency import (
+    LocalExecutionLock,
+    build_execution_lock_path,
+)
 from core.live_trading.execution_intent_store import (
     ExecutionIntentStateError,
     ExecutionIntentStatus,
@@ -63,6 +68,50 @@ def test_execution_intent_store_round_trip(tmp_path) -> None:
     intent = _intent()
     store.save(intent)
     assert store.load() == intent
+
+
+def test_two_independent_stores_exactly_one_claims_same_intent(
+    tmp_path,
+) -> None:
+    path = tmp_path / "intent.json"
+    stores = [ExecutionIntentStore(path), ExecutionIntentStore(path)]
+    intent = _intent()
+    barrier = threading.Barrier(2)
+    successes = []
+    failures: list[ExecutionIntentStateError] = []
+
+    def contend(store: ExecutionIntentStore) -> None:
+        barrier.wait()
+        try:
+            successes.append(store.claim(intent))
+        except ExecutionIntentStateError as exc:
+            failures.append(exc)
+
+    threads = [threading.Thread(target=contend, args=(store,)) for store in stores]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert successes == [intent]
+    assert len(failures) == 1
+    assert ExecutionIntentStore(path).load() == intent
+
+
+def test_crashed_intent_owner_blocks_load_and_claim(tmp_path) -> None:
+    path = tmp_path / "intent.json"
+    store = ExecutionIntentStore(path)
+    lock = LocalExecutionLock(
+        build_execution_lock_path(path, scope="intent-mutation"),
+        purpose="execution-intent mutation",
+    )
+    lock.acquire()
+
+    with pytest.raises(ExecutionIntentStateError, match="ownership is uncertain"):
+        store.load()
+    with pytest.raises(ExecutionIntentStateError, match="ownership is uncertain"):
+        store.claim(_intent())
+    assert not path.exists()
 
 
 def test_execution_intent_store_rejects_corrupt_state(tmp_path) -> None:

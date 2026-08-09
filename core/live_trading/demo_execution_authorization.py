@@ -13,6 +13,11 @@ from typing import Any, Final
 from core.mt5_execution.models import AccountInfo, OrderRequest
 
 from .config import LiveTradingConfig
+from .execution_concurrency import (
+    ExecutionConcurrencyError,
+    LocalExecutionLock,
+    build_execution_lock_path,
+)
 
 _SCHEMA_VERSION: Final = 1
 _DEMO_TRADE_MODE: Final = 0
@@ -57,6 +62,22 @@ class DemoExecutionAuthorization:
 
 
 def load_demo_execution_authorization(
+    path: str | Path,
+) -> DemoExecutionAuthorization:
+    source = Path(path)
+    lock = _authorization_consumption_lock(source)
+    try:
+        lock.assert_clear()
+        authorization = _load_demo_execution_authorization_unlocked(source)
+        lock.assert_clear()
+    except ExecutionConcurrencyError as exc:
+        raise DemoExecutionAuthorizationError(
+            "Demo execution authorization ownership is uncertain."
+        ) from exc
+    return authorization
+
+
+def _load_demo_execution_authorization_unlocked(
     path: str | Path,
 ) -> DemoExecutionAuthorization:
     source = Path(path)
@@ -227,30 +248,61 @@ def consume_demo_execution_authorization(
         raise DemoExecutionAuthorizationError(
             "Execution intent key is required before authorization consumption."
         )
-    consumed = replace(
-        authorization,
-        consumed_at=_aware_utc(consumed_at, "consumed_at"),
-        consumed_intent_key=intent_key,
-    )
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(target.name + ".tmp")
-    serialized = json.dumps(consumed.to_payload(), indent=2, sort_keys=True) + "\n"
     try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(serialized)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-    except OSError as exc:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        with _authorization_consumption_lock(target).hold():
+            current = _load_demo_execution_authorization_unlocked(target)
+            if current.consumed:
+                raise DemoExecutionAuthorizationError(
+                    "Demo execution authorization has already been consumed."
+                )
+            if current != authorization:
+                raise DemoExecutionAuthorizationError(
+                    "Demo execution authorization changed before consumption."
+                )
+            consumed = replace(
+                current,
+                consumed_at=_aware_utc(consumed_at, "consumed_at"),
+                consumed_intent_key=intent_key,
+            )
+            temporary = target.with_name(target.name + ".tmp")
+            serialized = (
+                json.dumps(consumed.to_payload(), indent=2, sort_keys=True)
+                + "\n"
+            )
+            try:
+                with temporary.open(
+                    "w",
+                    encoding="utf-8",
+                    newline="\n",
+                ) as handle:
+                    handle.write(serialized)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, target)
+            except OSError as exc:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise DemoExecutionAuthorizationError(
+                    "Unable to consume demo execution authorization durably."
+                ) from exc
+    except ExecutionConcurrencyError as exc:
         raise DemoExecutionAuthorizationError(
-            "Unable to consume demo execution authorization durably."
+            "Demo execution authorization consumption ownership is uncertain."
         ) from exc
     return consumed
+
+
+def _authorization_consumption_lock(path: Path) -> LocalExecutionLock:
+    return LocalExecutionLock(
+        build_execution_lock_path(
+            path,
+            scope="authorization-consumption",
+        ),
+        purpose="demo authorization consumption",
+    )
 
 
 def _parse_datetime(value: object, name: str) -> datetime:

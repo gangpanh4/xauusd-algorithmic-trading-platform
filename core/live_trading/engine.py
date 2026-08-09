@@ -44,6 +44,7 @@ from core.trading_pipeline.pipeline import TradingPipeline
 from .config import LiveTradingConfig
 from .demo_canary_launch_abort_control import (
     DemoCanaryLaunchAbort,
+    DemoCanaryLaunchPlan,
     DemoCanaryPreflightSnapshot,
     build_demo_canary_preflight_snapshot,
     create_demo_canary_launch_plan,
@@ -59,6 +60,11 @@ from .demo_execution_authorization import (
     consume_demo_execution_authorization,
     load_demo_execution_authorization,
     validate_demo_execution_authorization,
+)
+from .execution_concurrency import (
+    ExecutionConcurrencyError,
+    LocalExecutionLock,
+    build_execution_lock_path,
 )
 from .execution_intent_reconciliation import (
     ExecutionIntentReconciliationDisposition,
@@ -108,6 +114,14 @@ class _ExecutionSafetyFacts:
     unresolved_execution_intent: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _ExecutionSafetyPlan:
+    """Initial reviewed state to compare inside submission ownership."""
+
+    review: DemoCanaryReadinessReview
+    launch_plan: DemoCanaryLaunchPlan
+
+
 class LiveTradingEngine:
     """Coordinate live analysis and optional MT5 order execution."""
 
@@ -124,6 +138,13 @@ class LiveTradingEngine:
         )
         self.execution_intent_store = ExecutionIntentStore(
             config.execution_intent_state_path
+        )
+        self._execution_submission_lock = LocalExecutionLock(
+            build_execution_lock_path(
+                config.execution_intent_state_path,
+                scope="broker-submission",
+            ),
+            purpose="broker submission",
         )
 
     def assess_demo_execution_readiness(
@@ -665,7 +686,7 @@ class LiveTradingEngine:
         execution_request = self.adapter.adapt(pipeline_result)
 
         try:
-            authorization = self._require_execution_safety(
+            safety_plan = self._prepare_execution_safety(
                 request=execution_request.order_request,
             )
         except (
@@ -687,34 +708,78 @@ class LiveTradingEngine:
                 trade_executed=False,
             )
 
-        execution_intent = self._prepare_execution_intent(
-            observation_timestamp=timestamp,
-            request=execution_request.order_request,
-        )
-        consume_demo_execution_authorization(
-            self.config.demo_authorization_path,
-            authorization,
-            intent_key=execution_intent.intent_key,
-            consumed_at=datetime.now(UTC),
-        )
+        try:
+            submission_owner = self._execution_submission_lock.acquire()
+        except ExecutionConcurrencyError as exc:
+            self.state.skipped_trades += 1
+            self.state.last_error = (
+                "Execution safety controls blocked submission: "
+                f"{exc}"
+            )
+            logger.error(self.state.last_error)
+            return LiveTradingResult(
+                pipeline_result=pipeline_result,
+                execution_result=None,
+                trade_executed=False,
+            )
 
-        broker_request = OrderRequest(
-            symbol=execution_request.order_request.symbol,
-            side=execution_request.order_request.side,
-            volume=execution_request.order_request.volume,
-            entry_price=execution_request.order_request.entry_price,
-            stop_loss=execution_request.order_request.stop_loss,
-            take_profit=execution_request.order_request.take_profit,
-            comment=execution_intent.broker_comment,
-        )
-        self.state.order_submissions_this_session += 1
-        with _authorize_broker_mutation():
-            execution_result = self.executor.execute_order(broker_request)
-        self._record_execution_intent_result(
-            execution_intent,
-            execution_result,
-        )
-        self._update_execution_failure_counter(execution_result)
+        try:
+            try:
+                authorization = self._require_final_execution_safety(
+                    plan=safety_plan,
+                    request=execution_request.order_request,
+                )
+                execution_intent = self._build_execution_intent(
+                    observation_timestamp=timestamp,
+                    request=execution_request.order_request,
+                )
+                consume_demo_execution_authorization(
+                    self.config.demo_authorization_path,
+                    authorization,
+                    intent_key=execution_intent.intent_key,
+                    consumed_at=datetime.now(UTC),
+                )
+                self.execution_intent_store.claim(execution_intent)
+            except (
+                DemoCanaryLaunchAbort,
+                DemoExecutionAuthorizationError,
+                ExecutionConcurrencyError,
+                ExecutionIntentStateError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                self.state.skipped_trades += 1
+                self.state.last_error = (
+                    "Execution safety controls blocked submission: "
+                    f"{exc}"
+                )
+                logger.error(self.state.last_error)
+                return LiveTradingResult(
+                    pipeline_result=pipeline_result,
+                    execution_result=None,
+                    trade_executed=False,
+                )
+
+            broker_request = OrderRequest(
+                symbol=execution_request.order_request.symbol,
+                side=execution_request.order_request.side,
+                volume=execution_request.order_request.volume,
+                entry_price=execution_request.order_request.entry_price,
+                stop_loss=execution_request.order_request.stop_loss,
+                take_profit=execution_request.order_request.take_profit,
+                comment=execution_intent.broker_comment,
+            )
+            self.state.order_submissions_this_session += 1
+            with _authorize_broker_mutation():
+                execution_result = self.executor.execute_order(broker_request)
+            self._record_execution_intent_result(
+                execution_intent,
+                execution_result,
+            )
+            self._update_execution_failure_counter(execution_result)
+        finally:
+            self._execution_submission_lock.release(submission_owner)
 
         if execution_result.status is OrderStatus.PENDING:
             # A placed order may execute later. Block subsequent submissions
@@ -818,12 +883,12 @@ class LiveTradingEngine:
             trade_executed=True,
         )
 
-    def _require_execution_safety(
+    def _prepare_execution_safety(
         self,
         *,
         request: OrderRequest,
-    ) -> DemoExecutionAuthorization:
-        """Enforce all Phase 5 controls before durable submission mutation."""
+    ) -> _ExecutionSafetyPlan:
+        """Build the initial read-only plan before submission ownership."""
 
         initial_time = datetime.now(UTC)
         initial_facts = self._collect_execution_safety_facts()
@@ -863,10 +928,22 @@ class LiveTradingEngine:
             facts=initial_facts,
             captured_at=initial_time,
         )
-        plan = create_demo_canary_launch_plan(
+        launch_plan = create_demo_canary_launch_plan(
             initial_snapshot,
             now=initial_time,
         )
+        return _ExecutionSafetyPlan(
+            review=review,
+            launch_plan=launch_plan,
+        )
+
+    def _require_final_execution_safety(
+        self,
+        *,
+        plan: _ExecutionSafetyPlan,
+        request: OrderRequest,
+    ) -> DemoExecutionAuthorization:
+        """Re-read and bind final state while submission ownership is held."""
 
         final_time = datetime.now(UTC)
         final_facts = self._collect_execution_safety_facts()
@@ -882,7 +959,7 @@ class LiveTradingEngine:
             now=final_time,
         )
         current_review = replace(
-            review,
+            plan.review,
             account_login=final_facts.readiness_inputs.account.login,
             account_server=final_facts.readiness_inputs.account.server,
         )
@@ -894,7 +971,7 @@ class LiveTradingEngine:
             captured_at=final_time,
         )
         decision = evaluate_demo_canary_final_abort_control(
-            plan=plan,
+            plan=plan.launch_plan,
             current_snapshot=current_snapshot,
             now=final_time,
         )
@@ -1064,23 +1141,26 @@ class LiveTradingEngine:
     ) -> PersistedExecutionIntent:
         """Persist intent before broker submission and reject duplicates."""
 
-        intent = build_execution_intent(
+        return self.execution_intent_store.claim(
+            self._build_execution_intent(
+                observation_timestamp=observation_timestamp,
+                request=request,
+            )
+        )
+
+    def _build_execution_intent(
+        self,
+        *,
+        observation_timestamp: datetime,
+        request: object,
+    ) -> PersistedExecutionIntent:
+        """Build one deterministic intent without mutating durable state."""
+
+        return build_execution_intent(
             observation_timestamp=observation_timestamp,
             request=request,
             magic_number=self.config.execution.magic_number,
         )
-        existing = self.execution_intent_store.load()
-        if existing is not None:
-            if existing.intent_key == intent.intent_key:
-                raise ExecutionIntentStateError(
-                    "Duplicate execution intent is already persisted."
-                )
-            if existing.unresolved:
-                raise ExecutionIntentStateError(
-                    "A prior execution intent remains unresolved."
-                )
-        self.execution_intent_store.save(intent)
-        return intent
 
     def _record_execution_intent_result(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -11,6 +12,10 @@ from core.live_trading.demo_execution_authorization import (
     consume_demo_execution_authorization,
     load_demo_execution_authorization,
     validate_demo_execution_authorization,
+)
+from core.live_trading.execution_concurrency import (
+    LocalExecutionLock,
+    build_execution_lock_path,
 )
 from core.mt5_execution.models import AccountInfo, OrderRequest, OrderSide
 
@@ -104,6 +109,75 @@ def test_valid_authorization_passes_and_consumes_once(tmp_path) -> None:
             request=_request(),
             now=NOW,
         )
+
+
+def test_two_stale_authorization_contenders_exactly_one_consumes(
+    tmp_path,
+) -> None:
+    config = _config(tmp_path)
+    _write(config.demo_authorization_path)
+    authorizations = [
+        load_demo_execution_authorization(config.demo_authorization_path),
+        load_demo_execution_authorization(config.demo_authorization_path),
+    ]
+    intent_keys = ["a" * 64, "b" * 64]
+    barrier = threading.Barrier(2)
+    successes: list[str] = []
+    failures: list[DemoExecutionAuthorizationError] = []
+
+    def contend(index: int) -> None:
+        barrier.wait()
+        try:
+            consume_demo_execution_authorization(
+                config.demo_authorization_path,
+                authorizations[index],
+                intent_key=intent_keys[index],
+                consumed_at=NOW,
+            )
+        except DemoExecutionAuthorizationError as exc:
+            failures.append(exc)
+        else:
+            successes.append(intent_keys[index])
+
+    threads = [threading.Thread(target=contend, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert load_demo_execution_authorization(
+        config.demo_authorization_path
+    ).consumed_intent_key == successes[0]
+
+
+def test_crashed_authorization_owner_blocks_restart(tmp_path) -> None:
+    config = _config(tmp_path)
+    _write(config.demo_authorization_path)
+    authorization = load_demo_execution_authorization(
+        config.demo_authorization_path
+    )
+    lock = LocalExecutionLock(
+        build_execution_lock_path(
+            config.demo_authorization_path,
+            scope="authorization-consumption",
+        ),
+        purpose="demo authorization consumption",
+    )
+    lock.acquire()
+
+    with pytest.raises(
+        DemoExecutionAuthorizationError,
+        match="ownership is uncertain",
+    ):
+        consume_demo_execution_authorization(
+            config.demo_authorization_path,
+            authorization,
+            intent_key="a" * 64,
+            consumed_at=NOW,
+        )
+    assert config.demo_authorization_path.is_file()
 
 
 def test_authorization_rejects_real_account(tmp_path) -> None:

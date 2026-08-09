@@ -240,6 +240,51 @@ def test_readiness_pass_allows_authoritative_submission(
     execute.assert_called_once()
 
 
+def test_competing_engine_cannot_reach_mutation_and_owner_keeps_counters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    owner_engine = _enabled_engine(
+        monkeypatch,
+        tmp_path,
+        maximum_submissions=2,
+        maximum_failures=2,
+    )
+    contender_engine = _enabled_engine(
+        monkeypatch,
+        tmp_path,
+        maximum_submissions=2,
+        maximum_failures=2,
+    )
+    owner_execute = _mock_execution(
+        owner_engine,
+        _execution_result(OrderStatus.FILLED, retcode=10009),
+    )
+    contender_engine.executor.execute_order = Mock()
+
+    owner = owner_engine._execution_submission_lock.acquire()
+    try:
+        blocked = _process(contender_engine)
+    finally:
+        owner_engine._execution_submission_lock.release(owner)
+
+    assert blocked.execution_result is None
+    assert "ownership is already held or stale" in contender_engine.state.last_error
+    assert contender_engine.state.order_submissions_this_session == 0
+    assert contender_engine.execution_intent_store.load() is None
+    assert load_demo_execution_authorization(
+        contender_engine.config.demo_authorization_path
+    ).consumed is False
+    contender_engine.executor.execute_order.assert_not_called()
+
+    successful = _process(owner_engine)
+
+    assert successful.trade_executed is True
+    assert owner_engine.state.order_submissions_this_session == 1
+    assert owner_engine.state.consecutive_execution_failures == 0
+    owner_execute.assert_called_once()
+
+
 def test_readiness_failure_blocks_before_intent_or_authorization_consumption(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

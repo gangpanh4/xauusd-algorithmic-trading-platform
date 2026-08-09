@@ -15,6 +15,12 @@ from typing import Any
 
 from core.mt5_execution.models import OrderRequest, OrderResult, OrderStatus
 
+from .execution_concurrency import (
+    ExecutionConcurrencyError,
+    LocalExecutionLock,
+    build_execution_lock_path,
+)
+
 _SCHEMA_VERSION = 2
 _EXPECTED_KEYS = {
     "version",
@@ -169,8 +175,52 @@ class ExecutionIntentStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self._mutation_lock = LocalExecutionLock(
+            build_execution_lock_path(
+                self.path,
+                scope="intent-mutation",
+            ),
+            purpose="execution-intent mutation",
+        )
 
     def load(self) -> PersistedExecutionIntent | None:
+        try:
+            self._mutation_lock.assert_clear()
+            intent = self._load_unlocked()
+            self._mutation_lock.assert_clear()
+        except ExecutionConcurrencyError as exc:
+            raise ExecutionIntentStateError(
+                "Execution-intent mutation ownership is uncertain."
+            ) from exc
+        return intent
+
+    def claim(
+        self,
+        intent: PersistedExecutionIntent,
+    ) -> PersistedExecutionIntent:
+        """Atomically claim one intent identity before broker submission."""
+
+        validated = self._validate(intent)
+        try:
+            with self._mutation_lock.hold():
+                existing = self._load_unlocked()
+                if existing is not None:
+                    if existing.intent_key == validated.intent_key:
+                        raise ExecutionIntentStateError(
+                            "Duplicate execution intent is already persisted."
+                        )
+                    if existing.unresolved:
+                        raise ExecutionIntentStateError(
+                            "A prior execution intent remains unresolved."
+                        )
+                self._save_unlocked(validated)
+        except ExecutionConcurrencyError as exc:
+            raise ExecutionIntentStateError(
+                "Execution-intent claim ownership is uncertain."
+            ) from exc
+        return validated
+
+    def _load_unlocked(self) -> PersistedExecutionIntent | None:
         try:
             raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -189,6 +239,15 @@ class ExecutionIntentStore:
         return self._decode(payload)
 
     def save(self, intent: PersistedExecutionIntent) -> None:
+        try:
+            with self._mutation_lock.hold():
+                self._save_unlocked(intent)
+        except ExecutionConcurrencyError as exc:
+            raise ExecutionIntentStateError(
+                "Execution-intent mutation ownership is uncertain."
+            ) from exc
+
+    def _save_unlocked(self, intent: PersistedExecutionIntent) -> None:
         validated = self._validate(intent)
         payload = {
             "version": _SCHEMA_VERSION,
