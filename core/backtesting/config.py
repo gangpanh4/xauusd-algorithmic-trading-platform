@@ -8,6 +8,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+from core.execution_economics.models import (
+    ExecutionEconomicsProfile,
+    PriceSideClassification,
+    SpecificationProvenance,
+)
+from core.execution_economics.profiles import (
+    build_compatibility_execution_profile,
+)
 from core.trading_pipeline.config import TradingPipelineConfig
 
 
@@ -84,6 +92,38 @@ class BacktestConfig:
     cost_assumptions_verified: bool = False
 
     # ===========================
+    # Execution Provenance
+    # ===========================
+
+    execution_profile: ExecutionEconomicsProfile | None = None
+
+    execution_profile_id: str = "BACKTEST_CONFIG_COMPATIBILITY_V1"
+
+    instrument_specification_id: str = (
+        "XAUUSD_CURRENT_SNAPSHOT_ASSUMPTION_V1"
+    )
+
+    instrument_symbol: str = "XAUUSD"
+
+    point_size: float = 0.01
+
+    contract_size: float | None = None
+
+    specification_provenance: SpecificationProvenance = (
+        SpecificationProvenance.CURRENT_SNAPSHOT_ASSUMPTION
+    )
+
+    specification_source: str = "PINNED_BACKTEST_CONFIGURATION"
+
+    historical_specification_verified: bool = False
+
+    specification_captured_at: datetime | None = None
+
+    historical_price_side: PriceSideClassification = (
+        PriceSideClassification.UNKNOWN_SINGLE_PRICE
+    )
+
+    # ===========================
     # Trading Options
     # ===========================
 
@@ -122,3 +162,48 @@ class BacktestConfig:
     # ===========================
 
     debug_logging: bool = False
+
+    def resolved_execution_profile(self) -> ExecutionEconomicsProfile:
+        """Return the explicit profile or derive one from legacy scalars.
+
+        An explicit profile is authoritative. Existing callers that configure
+        only scalar fields keep their numerical behavior and receive a stable
+        compatibility profile with truthful assumption provenance.
+        """
+
+        if self.execution_profile is not None:
+            if not isinstance(
+                self.execution_profile,
+                ExecutionEconomicsProfile,
+            ):
+                raise TypeError(
+                    "execution_profile must be an ExecutionEconomicsProfile"
+                )
+            return self.execution_profile
+
+        return build_compatibility_execution_profile(
+            profile_id=self.execution_profile_id,
+            specification_id=self.instrument_specification_id,
+            symbol=self.instrument_symbol,
+            tick_size=self.tick_size,
+            tick_value_per_lot=self.tick_value_per_lot,
+            point_size=self.point_size,
+            volume_step=self.lot_step,
+            minimum_volume=self.minimum_lot,
+            maximum_volume=self.maximum_lot,
+            contract_size=self.contract_size,
+            minimum_stop_distance=self.stop_loss_distance,
+            specification_provenance=self.specification_provenance,
+            specification_source=self.specification_source,
+            historical_specification_verified=(
+                self.historical_specification_verified
+            ),
+            specification_captured_at=self.specification_captured_at,
+            historical_price_side=self.historical_price_side,
+            cost_profile_id=self.cost_assumption_profile,
+            costs_verified=self.cost_assumptions_verified,
+            spread_points=self.spread_points,
+            slippage_points=self.slippage_points,
+            commission_per_trade=self.commission_per_trade,
+            commission_per_lot=self.commission_per_lot,
+        )

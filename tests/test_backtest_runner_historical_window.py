@@ -92,6 +92,19 @@ def test_runner_forwards_explicit_historical_boundary() -> None:
     )
     assert runner._last_actual_window["closed_candle_only"] is True
     assert runner._last_actual_window["no_lookahead"] is True
+    economics = runner._last_actual_window["execution_economics"]
+    assert economics["contract"] == "DETERMINISTIC_HYBRID"
+    assert economics["historical_price_side"] == "UNKNOWN_SINGLE_PRICE"
+    assert set(economics["parity_claims"].values()) == {False}
+    provenance = runner._last_actual_window[
+        "instrument_specification_provenance"
+    ]
+    assert provenance["provenance"] == "CURRENT_SNAPSHOT_ASSUMPTION"
+    assert provenance["historical_specification_verified"] is False
+    assert provenance["contract_size"] is None
+    account = runner._last_actual_window["research_account_economics"]
+    assert account["risk_capital_source"] == "REALIZED_SIMULATED_BALANCE"
+    assert account["mark_to_market_equity_modeled"] is False
 
 
 def test_runner_without_end_time_still_forwards_shared_window_contract() -> None:
@@ -149,6 +162,9 @@ def test_window_metadata_records_actual_timeframe_ranges() -> None:
     )
     assert runner._last_actual_window["decision_clock"] == "M5"
     assert runner._last_actual_window["simulation_clock"] == "M15_COMPLETED"
+    costs = runner._last_actual_window["execution_cost_assumptions"]
+    assert costs["spread_source"] == "PINNED_EXPLICIT_ASSUMPTION"
+    assert costs["historical_spread_field_used"] is False
 
 
 def test_runner_rejects_m15_decision_clock() -> None:

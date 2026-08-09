@@ -11,6 +11,7 @@ from math import isfinite
 from time import perf_counter
 
 from core.data.models import MarketBar as SharedMarketBar
+from core.execution_economics.models import ExecutionEconomicsProfile
 from core.feature_engineering.models import FeatureVector
 from core.market_structure.models import MarketStructureResult
 from core.multi_timeframe.enums import Timeframe
@@ -74,24 +75,48 @@ class BacktestingEngine:
         tick_size: float = DEFAULT_TICK_SIZE,
         tick_value_per_lot: float = DEFAULT_TICK_VALUE_PER_LOT,
         lot_step: float = DEFAULT_LOT_STEP,
+        execution_profile: ExecutionEconomicsProfile | None = None,
         progress_interval_bars: int | None = 1_000,
         multi_timeframe_window_bars: int = 500,
     ) -> None:
         self.config = config
+        if execution_profile is None and config.execution_profile is not None:
+            execution_profile = config.execution_profile
+        if execution_profile is not None and not isinstance(
+            execution_profile,
+            ExecutionEconomicsProfile,
+        ):
+            raise TypeError(
+                "execution_profile must be an ExecutionEconomicsProfile"
+            )
+        self.execution_profile = execution_profile
+        instrument = (
+            execution_profile.instrument
+            if execution_profile is not None
+            else None
+        )
         self.stop_loss_distance = self._require_positive_finite(
-            stop_loss_distance,
+            (
+                instrument.minimum_stop_distance
+                if instrument is not None
+                else stop_loss_distance
+            ),
             "stop_loss_distance",
         )
         self.tick_size = self._require_positive_finite(
-            tick_size,
+            instrument.tick_size if instrument is not None else tick_size,
             "tick_size",
         )
         self.tick_value_per_lot = self._require_positive_finite(
-            tick_value_per_lot,
+            (
+                instrument.tick_value_per_lot
+                if instrument is not None
+                else tick_value_per_lot
+            ),
             "tick_value_per_lot",
         )
         self.lot_step = self._require_positive_finite(
-            lot_step,
+            instrument.volume_step if instrument is not None else lot_step,
             "lot_step",
         )
         self.progress_interval_bars = self._validate_progress_interval(
@@ -102,13 +127,31 @@ class BacktestingEngine:
         )
 
         self.state = BacktestState()
+        costs = execution_profile.costs if execution_profile is not None else None
         self.simulator = TradeSimulator(
             tick_size=self.tick_size,
             tick_value_per_lot=self.tick_value_per_lot,
-            spread_points=self.config.spread_points,
-            slippage_points=self.config.slippage_points,
-            commission_per_trade=self.config.commission_per_trade,
-            commission_per_lot=self.config.commission_per_lot,
+            spread_points=(
+                costs.spread_points
+                if costs is not None
+                else self.config.spread_points
+            ),
+            slippage_points=(
+                costs.slippage_points
+                if costs is not None
+                else self.config.slippage_points
+            ),
+            commission_per_trade=(
+                costs.commission_per_trade
+                if costs is not None
+                else self.config.commission_per_trade
+            ),
+            commission_per_lot=(
+                costs.commission_per_lot
+                if costs is not None
+                else self.config.commission_per_lot
+            ),
+            execution_profile=execution_profile,
         )
         self.pipeline = self._create_pipeline()
         self.strategy_observer = BacktestStrategyObserver()
@@ -1367,6 +1410,9 @@ class BacktestingEngine:
                 "position; max_open_positions must be 1"
             )
 
+        profile = self.execution_profile
+        instrument = profile.instrument if profile is not None else None
+        costs = profile.costs if profile is not None else None
         risk_config = replace(
             self.config.pipeline.risk_manager,
             lot_sizing_mode=RiskLotSizingMode(self.config.lot_mode.value),
@@ -1374,13 +1420,33 @@ class BacktestingEngine:
             risk_percent=self.config.risk_percent,
             use_virtual_balance=self.config.use_virtual_balance,
             virtual_balance=self.config.virtual_balance,
-            minimum_position_size=self.config.minimum_lot,
-            maximum_position_size=self.config.maximum_lot,
+            minimum_position_size=(
+                instrument.minimum_volume
+                if instrument is not None
+                else self.config.minimum_lot
+            ),
+            maximum_position_size=(
+                instrument.maximum_volume
+                if instrument is not None
+                else self.config.maximum_lot
+            ),
             maximum_open_positions=maximum_open_positions,
             allow_multiple_positions=False,
-            spread_points=self.config.spread_points,
-            commission_per_lot=self.config.commission_per_lot,
-            slippage_points=self.config.slippage_points,
+            spread_points=(
+                costs.spread_points
+                if costs is not None
+                else self.config.spread_points
+            ),
+            commission_per_lot=(
+                costs.commission_per_lot
+                if costs is not None
+                else self.config.commission_per_lot
+            ),
+            slippage_points=(
+                costs.slippage_points
+                if costs is not None
+                else self.config.slippage_points
+            ),
         )
         return replace(self.config.pipeline, risk_manager=risk_config)
 

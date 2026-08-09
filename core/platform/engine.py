@@ -13,6 +13,9 @@ from core.backtesting.config import BacktestConfig
 from core.backtesting.runner import BacktestRunner
 from core.data.market_data import MarketDataService
 from core.data.models import MarketBar
+from core.execution_economics.profiles import (
+    pinned_xauusd_research_profile,
+)
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.live_trading.execution_reconciliation_report import (
@@ -67,16 +70,9 @@ class TradingPlatform:
             )
 
         try:
-            symbol = "XAUUSD"
-            symbol_spec = get_live_symbol_specification(symbol)
-            config = BacktestConfig(
-                stop_loss_distance=symbol_spec.minimum_stop_distance,
-                tick_size=symbol_spec.tick_size,
-                tick_value_per_lot=symbol_spec.tick_value_per_lot,
-                lot_step=symbol_spec.lot_step,
-                minimum_lot=symbol_spec.minimum_lot,
-                maximum_lot=symbol_spec.maximum_lot,
-            )
+            execution_profile = pinned_xauusd_research_profile()
+            symbol = execution_profile.instrument.symbol
+            config = BacktestConfig(execution_profile=execution_profile)
             runner = BacktestRunner(config)
             result = runner.run(
                 symbol=symbol,

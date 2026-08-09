@@ -7,12 +7,14 @@ import pytest
 
 from core.backtesting.config import BacktestConfig
 from core.backtesting.engine import BacktestingEngine
+from core.execution_economics.profiles import (
+    pinned_xauusd_research_profile,
+)
 from core.feature_engineering.models import FeatureVector
 from core.regime_detector.models import MarketBar
 from core.risk_manager.models import RiskDecision, TradePlan
 from core.signal_generator.models import SignalDirection, TradingSignal
 from core.trading_pipeline.market_context import MarketContext
-
 
 BASE_TIME = datetime(2025, 1, 1, tzinfo=UTC)
 
@@ -131,6 +133,28 @@ def test_engine_constructs_simulator_from_backtest_cost_config() -> None:
     assert engine.simulator._slippage_points == pytest.approx(1.0)
     assert engine.simulator._commission_per_trade == pytest.approx(0.5)
     assert engine.simulator._commission_per_lot == pytest.approx(2.0)
+
+
+def test_explicit_execution_profile_is_authoritative_in_engine() -> None:
+    profile = pinned_xauusd_research_profile()
+    config = BacktestConfig(
+        execution_profile=profile,
+        tick_size=99.0,
+        tick_value_per_lot=99.0,
+        spread_points=99.0,
+    )
+
+    engine = BacktestingEngine(config)
+
+    assert engine.execution_profile is profile
+    assert engine.tick_size == pytest.approx(profile.instrument.tick_size)
+    assert engine.tick_value_per_lot == pytest.approx(
+        profile.instrument.tick_value_per_lot
+    )
+    assert engine.simulator.execution_profile is profile
+    assert engine.simulator._spread_points == pytest.approx(
+        profile.costs.spread_points
+    )
 
 
 def test_engine_applies_configured_costs_to_full_backtest_trade() -> None:

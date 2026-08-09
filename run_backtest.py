@@ -14,23 +14,13 @@ import MetaTrader5 as mt5
 
 from core.backtesting.config import BacktestConfig
 from core.backtesting.runner import BacktestRunner
-from core.mt5_execution.symbol_specification import (
-    get_live_symbol_specification,
+from core.execution_economics.profiles import (
+    pinned_xauusd_research_profile,
 )
 
 # Number of eligible M5 analytical decision bars. The loader obtains separate
 # overlapping source counts for M5, M15, H1, and H4 plus synchronized warm-up.
 HISTORICAL_BARS = 20_000
-
-# Explicit execution-cost assumptions for this historical run.
-# Zero remains the safe placeholder until broker/account-specific values are
-# verified. These values are recorded in historical_window.json.
-BACKTEST_SPREAD_POINTS = 0.0
-BACKTEST_SLIPPAGE_POINTS = 0.0
-BACKTEST_COMMISSION_PER_TRADE = 0.0
-BACKTEST_COMMISSION_PER_LOT = 0.0
-BACKTEST_COST_ASSUMPTION_PROFILE = "UNVERIFIED_ZERO_COST"
-BACKTEST_COST_ASSUMPTIONS_VERIFIED = False
 
 HISTORICAL_END_TIME = datetime(
     2026,
@@ -51,49 +41,9 @@ def main() -> None:
 
     try:
 
-        symbol = "XAUUSD"
-        symbol_info_available = callable(
-            getattr(mt5, "symbol_info", None)
-        )
-
-        if symbol_info_available:
-            symbol_spec = get_live_symbol_specification(symbol)
-            config = BacktestConfig(
-                stop_loss_distance=symbol_spec.minimum_stop_distance,
-                tick_size=symbol_spec.tick_size,
-                tick_value_per_lot=symbol_spec.tick_value_per_lot,
-                lot_step=symbol_spec.lot_step,
-                minimum_lot=symbol_spec.minimum_lot,
-                maximum_lot=symbol_spec.maximum_lot,
-                spread_points=BACKTEST_SPREAD_POINTS,
-                slippage_points=BACKTEST_SLIPPAGE_POINTS,
-                commission_per_trade=BACKTEST_COMMISSION_PER_TRADE,
-                commission_per_lot=BACKTEST_COMMISSION_PER_LOT,
-                cost_assumption_profile=(
-                    BACKTEST_COST_ASSUMPTION_PROFILE
-                ),
-                cost_assumptions_verified=(
-                    BACKTEST_COST_ASSUMPTIONS_VERIFIED
-                ),
-            )
-        else:
-            # Compatibility for isolated entrypoint tests and non-production
-            # MT5 stubs that intentionally expose lifecycle methods only.
-            # A real MT5 runtime must expose symbol_info and therefore uses the
-            # validated broker specification above.
-            symbol_spec = None
-            config = BacktestConfig(
-                spread_points=BACKTEST_SPREAD_POINTS,
-                slippage_points=BACKTEST_SLIPPAGE_POINTS,
-                commission_per_trade=BACKTEST_COMMISSION_PER_TRADE,
-                commission_per_lot=BACKTEST_COMMISSION_PER_LOT,
-                cost_assumption_profile=(
-                    BACKTEST_COST_ASSUMPTION_PROFILE
-                ),
-                cost_assumptions_verified=(
-                    BACKTEST_COST_ASSUMPTIONS_VERIFIED
-                ),
-            )
+        execution_profile = pinned_xauusd_research_profile()
+        symbol = execution_profile.instrument.symbol
+        config = BacktestConfig(execution_profile=execution_profile)
 
         runner = BacktestRunner(config)
 
@@ -105,37 +55,46 @@ def main() -> None:
             "Window end UTC  : "
             f"{HISTORICAL_END_TIME.isoformat()}"
         )
-        if symbol_spec is not None:
-            print(f"Symbol          : {symbol_spec.symbol}")
-            print(f"Tick size       : {symbol_spec.tick_size}")
-            print(f"Tick value/lot  : {symbol_spec.tick_value_per_lot}")
-            print(f"Lot step        : {symbol_spec.lot_step}")
-            print(f"Minimum lot     : {symbol_spec.minimum_lot}")
-            print(f"Maximum lot     : {symbol_spec.maximum_lot}")
-            print(
-                "Minimum stop    : "
-                f"{symbol_spec.minimum_stop_distance}"
-            )
+        instrument = execution_profile.instrument
+        costs = execution_profile.costs
+        print(f"Symbol          : {instrument.symbol}")
+        print(f"Tick size       : {instrument.tick_size}")
+        print(f"Tick value/lot  : {instrument.tick_value_per_lot}")
+        print(f"Point size      : {instrument.point_size}")
+        print(f"Lot step        : {instrument.volume_step}")
+        print(f"Minimum lot     : {instrument.minimum_volume}")
+        print(f"Maximum lot     : {instrument.maximum_volume}")
+        print(f"Contract size   : {instrument.contract_size}")
+        print(f"Minimum stop    : {instrument.minimum_stop_distance}")
+        print(f"Spec provenance : {instrument.provenance.value}")
+        print(
+            "Historical spec : "
+            f"{instrument.historical_specification_verified}"
+        )
+        print(
+            "Historical price: "
+            f"{execution_profile.historical_price_side.value}"
+        )
 
         print(
             "Cost profile     : "
-            f"{config.cost_assumption_profile}"
+            f"{costs.profile_id}"
         )
         print(
             "Costs verified   : "
-            f"{config.cost_assumptions_verified}"
+            f"{costs.verified}"
         )
-        print(f"Spread points   : {config.spread_points}")
-        print(f"Slippage points : {config.slippage_points}")
+        print(f"Spread points   : {costs.spread_points}")
+        print(f"Slippage points : {costs.slippage_points}")
         print(
             "Commission/trade: "
-            f"{config.commission_per_trade}"
+            f"{costs.commission_per_trade}"
         )
         print(
             "Commission/lot  : "
-            f"{config.commission_per_lot}"
+            f"{costs.commission_per_lot}"
         )
-        if not config.cost_assumptions_verified:
+        if not costs.verified:
             print(
                 "WARNING          : Execution costs are not verified for "
                 "this broker account."

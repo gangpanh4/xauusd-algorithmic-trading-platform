@@ -11,6 +11,8 @@ from pathlib import Path
 
 import MetaTrader5 as mt5
 
+from core.execution_economics.models import ExecutionEconomicsProfile
+
 from .candidate_outcome_exporter import CandidateOutcomeExporter
 from .candidate_outcome_segmentation import (
     CandidateOutcomeSegmentationCalculator,
@@ -105,6 +107,8 @@ class BacktestRunner:
     ) -> None:
 
         self.config = config
+        self.execution_profile = config.resolved_execution_profile()
+        instrument = self.execution_profile.instrument
 
         self.state = BacktestState()
 
@@ -112,10 +116,11 @@ class BacktestRunner:
 
         self.engine = BacktestingEngine(
             config,
-            stop_loss_distance=config.stop_loss_distance,
-            tick_size=config.tick_size,
-            tick_value_per_lot=config.tick_value_per_lot,
-            lot_step=config.lot_step,
+            stop_loss_distance=instrument.minimum_stop_distance,
+            tick_size=instrument.tick_size,
+            tick_value_per_lot=instrument.tick_value_per_lot,
+            lot_step=instrument.volume_step,
+            execution_profile=self.execution_profile,
         )
 
         self.exporter = BacktestExporter(
@@ -280,6 +285,7 @@ class BacktestRunner:
         """
 
         self._validate_timeframe(timeframe)
+        self._validate_profile_symbol(symbol)
         self.state.reset()
 
         context = self._load_context(
@@ -322,6 +328,7 @@ class BacktestRunner:
         """
 
         self._validate_timeframe(timeframe)
+        self._validate_profile_symbol(symbol)
         self.state.reset()
 
         context = self._load_context(
@@ -413,6 +420,11 @@ class BacktestRunner:
             # Compatibility for focused tests and legacy integrations that
             # intentionally construct BacktestRunner without calling __init__.
             config = BacktestConfig()
+        execution_profile = getattr(self, "execution_profile", None)
+        if not isinstance(execution_profile, ExecutionEconomicsProfile):
+            execution_profile = config.resolved_execution_profile()
+        instrument = execution_profile.instrument
+        costs = execution_profile.costs
 
         replay_window = (
             context.replay_window
@@ -491,17 +503,19 @@ class BacktestRunner:
                 },
             },
             "execution_cost_assumptions": {
-                "profile": config.cost_assumption_profile,
-                "verified": config.cost_assumptions_verified,
-                "spread_points": config.spread_points,
-                "slippage_points": config.slippage_points,
-                "commission_per_trade": (
-                    config.commission_per_trade
+                "profile": costs.profile_id,
+                "verified": costs.verified,
+                "spread_points": costs.spread_points,
+                "slippage_points": costs.slippage_points,
+                "commission_per_trade": costs.commission_per_trade,
+                "commission_per_lot": costs.commission_per_lot,
+                "spread_source": costs.spread_source,
+                "historical_spread_field_used": (
+                    costs.historical_spread_field_used
                 ),
-                "commission_per_lot": config.commission_per_lot,
                 "spread_definition": (
-                    "Configured round-trip spread points applied by the "
-                    "historical simulator."
+                    "Pinned round-trip spread assumption applied by the "
+                    "historical simulator; historical bar spread is unused."
                 ),
                 "slippage_definition": (
                     "Configured adverse points used by the simulator; this "
@@ -511,6 +525,28 @@ class BacktestRunner:
                     "Explicit account-specific assumptions; not inferred "
                     "from MT5 symbol metadata."
                 ),
+            },
+            "execution_economics": execution_profile.to_dict(),
+            "instrument_specification_provenance": {
+                "specification_id": instrument.specification_id,
+                "provenance": instrument.provenance.value,
+                "source": instrument.source,
+                "captured_at": (
+                    instrument.captured_at.astimezone(UTC).isoformat()
+                    if instrument.captured_at is not None
+                    else None
+                ),
+                "historical_specification_verified": (
+                    instrument.historical_specification_verified
+                ),
+                "contract_size": instrument.contract_size,
+            },
+            "research_account_economics": {
+                "risk_capital_source": (
+                    execution_profile.research_risk_capital_source.value
+                ),
+                "initial_balance": config.initial_balance,
+                "mark_to_market_equity_modeled": False,
             },
             "closed_candle_only": True,
             "no_lookahead": True,
@@ -524,6 +560,22 @@ class BacktestRunner:
             raise TypeError("timeframe must be an integer MT5 constant")
         if timeframe != mt5.TIMEFRAME_M5:
             raise ValueError("BacktestRunner timeframe must be TIMEFRAME_M5")
+
+    def _validate_profile_symbol(self, symbol: str) -> None:
+        if not isinstance(symbol, str) or not symbol.strip():
+            raise ValueError("symbol must be a non-empty string")
+        execution_profile = getattr(self, "execution_profile", None)
+        if not isinstance(execution_profile, ExecutionEconomicsProfile):
+            config = getattr(self, "config", None)
+            if not isinstance(config, BacktestConfig):
+                return
+            execution_profile = config.resolved_execution_profile()
+        configured = execution_profile.instrument.symbol
+        if symbol != configured:
+            raise ValueError(
+                "backtest symbol must match the pinned execution profile: "
+                f"expected={configured} received={symbol}"
+            )
 
     @staticmethod
     def _eligible_m5_count(context: object) -> int:

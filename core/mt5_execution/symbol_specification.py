@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from math import isfinite
 
 import MetaTrader5 as mt5
+
+from core.execution_economics.models import (
+    InstrumentSpecification,
+    SpecificationProvenance,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +25,40 @@ class LiveSymbolSpecification:
     minimum_lot: float
     maximum_lot: float
     minimum_stop_distance: float
+    point_size: float | None = None
+    contract_size: float | None = None
+    captured_at: datetime | None = None
+
+    def to_instrument_specification(
+        self,
+        *,
+        specification_id: str,
+        source: str = "MT5_SYMBOL_INFO_CURRENT_SNAPSHOT",
+    ) -> InstrumentSpecification:
+        """Convert this snapshot into the shared assumption contract."""
+
+        if self.point_size is None:
+            raise ValueError(
+                "point_size is required for a shared instrument specification"
+            )
+        return InstrumentSpecification(
+            specification_id=specification_id,
+            symbol=self.symbol,
+            tick_size=self.tick_size,
+            tick_value_per_lot=self.tick_value_per_lot,
+            point_size=self.point_size,
+            volume_step=self.lot_step,
+            minimum_volume=self.minimum_lot,
+            maximum_volume=self.maximum_lot,
+            contract_size=self.contract_size,
+            minimum_stop_distance=self.minimum_stop_distance,
+            provenance=(
+                SpecificationProvenance.CURRENT_SNAPSHOT_ASSUMPTION
+            ),
+            source=source,
+            historical_specification_verified=False,
+            captured_at=self.captured_at,
+        )
 
 
 def get_live_symbol_specification(symbol: str) -> LiveSymbolSpecification:
@@ -80,6 +120,10 @@ def get_live_symbol_specification(symbol: str) -> LiveSymbolSpecification:
         raise ValueError("volume_max cannot be smaller than volume_min")
 
     point = _positive(getattr(info, "point", None), "point")
+    contract_size = _optional_positive(
+        getattr(info, "trade_contract_size", None),
+        "trade_contract_size",
+    )
     raw_stops_level = getattr(info, "trade_stops_level", 0)
     if isinstance(raw_stops_level, bool) or not isinstance(
         raw_stops_level,
@@ -103,6 +147,9 @@ def get_live_symbol_specification(symbol: str) -> LiveSymbolSpecification:
         minimum_lot=minimum_lot,
         maximum_lot=maximum_lot,
         minimum_stop_distance=minimum_stop_distance,
+        point_size=point,
+        contract_size=contract_size,
+        captured_at=datetime.now(UTC),
     )
 
 
@@ -119,3 +166,11 @@ def _positive(value: object, name: str) -> float:
     if not _is_positive(value):
         raise ValueError(f"{name} must be finite and greater than zero")
     return float(value)
+
+
+def _optional_positive(value: object, name: str) -> float | None:
+    """Return ``None`` only when MT5 does not expose a usable value."""
+
+    if value is None or value == 0:
+        return None
+    return _positive(value, name)

@@ -9,10 +9,16 @@ uses an unavailable signal-candle close.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 from enum import Enum
 from math import isfinite
 from typing import Any
 
+from core.execution_economics.models import (
+    BacktestExecutionTrace,
+    ExecutionEconomicsProfile,
+)
+from core.execution_economics.pricing import recenter_exit_levels
 from core.regime_detector.models import MarketBar
 from core.risk_manager.models import RiskDecision, TradePlan
 from core.signal_generator.models import SignalDirection
@@ -141,6 +147,7 @@ class TradeSimulator:
         slippage_points: float | None = None,
         commission_per_trade: float | None = None,
         commission_per_lot: float | None = None,
+        execution_profile: ExecutionEconomicsProfile | None = None,
         breakeven_enabled: bool = True,
         recenter_exit_levels_on_fill: bool = True,
     ) -> None:
@@ -176,6 +183,14 @@ class TradeSimulator:
             commission_per_lot,
             "commission_per_lot",
         )
+        if execution_profile is not None and not isinstance(
+            execution_profile,
+            ExecutionEconomicsProfile,
+        ):
+            raise TypeError(
+                "execution_profile must be an ExecutionEconomicsProfile"
+            )
+        self.execution_profile = execution_profile
         self.breakeven_enabled = breakeven_enabled
         self.recenter_exit_levels_on_fill = recenter_exit_levels_on_fill
 
@@ -337,19 +352,17 @@ class TradeSimulator:
             else reference_entry_price - entry_slippage
         )
 
-        stop_distance = abs(trade_plan.entry_price - trade_plan.stop_loss)
-        target_distance = abs(trade_plan.take_profit - trade_plan.entry_price)
+        geometry = recenter_exit_levels(
+            is_buy=is_buy,
+            planned_entry_price=trade_plan.entry_price,
+            planned_stop_loss=trade_plan.stop_loss,
+            planned_take_profit=trade_plan.take_profit,
+            reference_entry_price=reference_entry_price,
+            normalize_to_tick=False,
+        )
         if self.recenter_exit_levels_on_fill:
-            stop_loss = (
-                reference_entry_price - stop_distance
-                if is_buy
-                else reference_entry_price + stop_distance
-            )
-            take_profit = (
-                reference_entry_price + target_distance
-                if is_buy
-                else reference_entry_price - target_distance
-            )
+            stop_loss = geometry.stop_loss
+            take_profit = geometry.take_profit
         else:
             stop_loss = float(trade_plan.stop_loss)
             take_profit = float(trade_plan.take_profit)
@@ -452,6 +465,25 @@ class TradeSimulator:
         net_r_multiple = (
             net_profit / monetary_risk if monetary_risk > 0.0 else 0.0
         )
+        execution_trace = (
+            BacktestExecutionTrace(
+                observation_timestamp=simulation.observation_bar.timestamp,
+                decision_available_at=(
+                    simulation.observation_bar.timestamp
+                    + timedelta(minutes=5)
+                ),
+                actual_entry_timestamp=fill_bar.timestamp,
+                planned_entry_price=trade_plan.entry_price,
+                reference_entry_price=reference_entry_price,
+                simulated_fill_price=state.entry_price,
+                effective_stop_loss=stop_loss,
+                effective_take_profit=take_profit,
+                position_size=trade_plan.position_size,
+                execution_profile=self.execution_profile,
+            )
+            if self.execution_profile is not None
+            else None
+        )
 
         metadata: dict[str, Any] = {
             **trade_plan.metadata,
@@ -498,7 +530,10 @@ class TradeSimulator:
                 simulation.used_legacy_economics
             ),
             "simulation_mode": "INCREMENTAL_BAR_LIFECYCLE",
+            "historical_spread_field_used": False,
         }
+        if execution_trace is not None:
+            metadata["execution_economics_trace"] = execution_trace.to_dict()
 
         trade = BacktestTrade(
             entry_time=fill_bar.timestamp,
@@ -717,6 +752,23 @@ class TradeSimulator:
         trade_plan: TradePlan,
         fill_bar: MarketBar,
     ) -> tuple[SimulationEconomics, bool]:
+        del fill_bar
+
+        if self.execution_profile is not None:
+            instrument = self.execution_profile.instrument
+            costs = self.execution_profile.costs
+            return (
+                SimulationEconomics(
+                    tick_size=instrument.tick_size,
+                    tick_value_per_lot=instrument.tick_value_per_lot,
+                    spread_points=costs.spread_points,
+                    slippage_points=costs.slippage_points,
+                    commission_per_trade=costs.commission_per_trade,
+                    commission_per_lot=costs.commission_per_lot,
+                ),
+                False,
+            )
+
         metadata = trade_plan.metadata
 
         tick_size_value = self._first_defined(
@@ -736,7 +788,6 @@ class TradeSimulator:
             and "tick_value_per_lot" not in metadata
         )
 
-        spread_default = fill_bar.spread if fill_bar.spread is not None else 0.0
         economics = SimulationEconomics(
             tick_size=self._require_positive(
                 tick_size_value,
@@ -750,7 +801,7 @@ class TradeSimulator:
                 self._first_defined(
                     self._spread_points,
                     metadata.get("spread_points"),
-                    spread_default,
+                    0.0,
                 ),
                 "spread_points",
             ),

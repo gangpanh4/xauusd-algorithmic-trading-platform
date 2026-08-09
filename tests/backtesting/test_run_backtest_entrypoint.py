@@ -147,7 +147,7 @@ def test_run_backtest_shuts_down_mt5_when_composite_run_fails(
     assert calls == ["shutdown"]
 
 
-def test_run_backtest_propagates_broker_volume_limits(
+def test_run_backtest_uses_pinned_offline_execution_profile(
     monkeypatch,
 ) -> None:
     captured: list[object] = []
@@ -158,18 +158,7 @@ def test_run_backtest_propagates_broker_volume_limits(
     mt5_stub.initialize = lambda: True
     mt5_stub.shutdown = lambda: None
     mt5_stub.last_error = lambda: (0, "OK")
-    mt5_stub.symbol_info = lambda symbol: object()
     monkeypatch.setitem(sys.modules, "MetaTrader5", mt5_stub)
-
-    symbol_spec = SimpleNamespace(
-        symbol="XAUUSD",
-        minimum_stop_distance=0.01,
-        tick_size=0.01,
-        tick_value_per_lot=0.1,
-        lot_step=0.01,
-        minimum_lot=0.01,
-        maximum_lot=25.0,
-    )
 
     specification_module = importlib.import_module(
         "core.mt5_execution.symbol_specification"
@@ -177,7 +166,11 @@ def test_run_backtest_propagates_broker_volume_limits(
     monkeypatch.setattr(
         specification_module,
         "get_live_symbol_specification",
-        lambda symbol: symbol_spec,
+        lambda symbol: (_ for _ in ()).throw(
+            AssertionError(
+                "historical entrypoint must not fetch current symbol metadata"
+            )
+        ),
     )
 
     class RunnerStub:
@@ -198,5 +191,14 @@ def test_run_backtest_propagates_broker_volume_limits(
     module.main()
 
     config = captured[0]
-    assert config.minimum_lot == 0.01
-    assert config.maximum_lot == 25.0
+    profile = config.resolved_execution_profile()
+    assert config.execution_profile is profile
+    assert profile.instrument.minimum_volume == 0.01
+    assert profile.instrument.maximum_volume == 10.0
+    assert profile.instrument.contract_size is None
+    assert profile.instrument.provenance.value == (
+        "CURRENT_SNAPSHOT_ASSUMPTION"
+    )
+    assert profile.instrument.historical_specification_verified is False
+    assert profile.historical_price_side.value == "UNKNOWN_SINGLE_PRICE"
+    assert profile.parity_claims.volume_parity is False

@@ -10,7 +10,6 @@ from core.regime_detector.models import MarketBar
 from core.risk_manager.models import RiskDecision, TradePlan
 from core.signal_generator.models import SignalDirection, TradingSignal
 
-
 BASE_TIME = datetime(2025, 1, 1, tzinfo=UTC)
 
 
@@ -125,6 +124,33 @@ def test_spread_commission_and_slippage_reduce_net_profit() -> None:
     assert trade.commission == pytest.approx(0.7)
     assert trade.net_profit == pytest.approx(99.0)
     assert trade.metadata["slippage_cost"] == pytest.approx(0.1)
+
+
+def test_historical_bar_spread_is_not_used_for_execution_economics() -> None:
+    observation = make_bar(
+        0,
+        open_price=99.0,
+        high=101.0,
+        low=98.0,
+        close=100.0,
+    )
+    fill_and_exit = make_bar(
+        15,
+        open_price=100.0,
+        high=110.5,
+        low=99.5,
+        close=110.0,
+        spread=250.0,
+    )
+
+    trade = TradeSimulator().simulate(
+        make_plan(),
+        observation,
+        [fill_and_exit],
+    )
+
+    assert trade.spread_cost == pytest.approx(0.0)
+    assert trade.metadata["historical_spread_field_used"] is False
 
 
 def test_buy_gap_through_stop_exits_at_open_with_adverse_slippage() -> None:
