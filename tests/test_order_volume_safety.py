@@ -3,6 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+
+from core.mt5_execution import orders
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.models import (
     OrderRequest,
@@ -10,7 +13,6 @@ from core.mt5_execution.models import (
     OrderStatus,
     SymbolInfo,
 )
-import core.mt5_execution.orders as orders
 
 
 def _request(volume: float) -> OrderRequest:
@@ -23,6 +25,14 @@ def _request(volume: float) -> OrderRequest:
         take_profit=3310.0,
         comment="Offline safety-lock test",
     )
+
+
+def _authorized_send_order(
+    request: OrderRequest,
+    config: MT5ExecutionConfig,
+):
+    with _authorize_broker_mutation():
+        return orders.send_order(request, config)
 
 
 def _tradable_symbol() -> SymbolInfo:
@@ -67,7 +77,7 @@ def test_default_safety_lock_rejects_larger_volume_before_order_send(
         lambda request: send_calls.append(request),
     )
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(0.02),
         MT5ExecutionConfig(),
     )
@@ -105,7 +115,7 @@ def test_default_safety_lock_allows_exact_configured_volume(
         ),
     )
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(0.01),
         MT5ExecutionConfig(),
     )
@@ -137,7 +147,7 @@ def test_custom_safety_lock_value_is_enforced(
 
     config = MT5ExecutionConfig(allowed_order_volume=0.02)
 
-    rejected = orders.send_order(
+    rejected = _authorized_send_order(
         _request(0.01),
         config,
     )
@@ -172,7 +182,7 @@ def test_invalid_safety_lock_configuration_fails_closed(
         lambda request: send_calls.append(request),
     )
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(0.01),
         MT5ExecutionConfig(allowed_order_volume=invalid_value),
     )
@@ -208,7 +218,7 @@ def test_binary_float_noise_does_not_trigger_false_rejection(
         ),
     )
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(0.010000000000000002),
         MT5ExecutionConfig(allowed_order_volume=0.01),
     )

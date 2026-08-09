@@ -18,6 +18,7 @@ from core.mt5_execution.active_orders import (
     get_active_order_count,
     get_active_orders,
 )
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.deal_history import (
     get_execution_deals,
     get_realized_deals,
@@ -666,7 +667,8 @@ class LiveTradingEngine:
             take_profit=execution_request.order_request.take_profit,
             comment=execution_intent.broker_comment,
         )
-        execution_result = self.executor.execute_order(broker_request)
+        with _authorize_broker_mutation():
+            execution_result = self.executor.execute_order(broker_request)
         self._record_execution_intent_result(
             execution_intent,
             execution_result,

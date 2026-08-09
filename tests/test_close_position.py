@@ -6,9 +6,11 @@ import pytest
 
 import core.mt5_execution.close_position as close_module
 import core.mt5_execution.executor as executor_module
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.executor import MT5Executor
 from core.mt5_execution.models import (
+    OrderResult,
     OrderSide,
     OrderStatus,
     PositionInfo,
@@ -72,6 +74,14 @@ def _prepare(
     )
 
 
+def _authorized_close_position(
+    ticket: int,
+    config: MT5ExecutionConfig,
+) -> OrderResult:
+    with _authorize_broker_mutation():
+        return close_module.close_position(ticket, config)
+
+
 def test_missing_position_fails_before_broker_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -88,7 +98,7 @@ def test_missing_position_fails_before_broker_calls(
         lambda request: calls.append("send"),
     )
 
-    result = close_module.close_position(
+    result = _authorized_close_position(
         123456,
         MT5ExecutionConfig(),
     )
@@ -137,7 +147,7 @@ def test_close_uses_opposite_side_and_executable_price(
 
     monkeypatch.setattr(close_module.mt5, "order_send", fake_send)
 
-    result = close_module.close_position(
+    result = _authorized_close_position(
         123456,
         MT5ExecutionConfig(),
     )
@@ -178,7 +188,7 @@ def test_close_preflight_rejection_prevents_submission(
         lambda request: sends.append(request),
     )
 
-    result = close_module.close_position(
+    result = _authorized_close_position(
         123456,
         MT5ExecutionConfig(),
     )
@@ -219,7 +229,7 @@ def test_partial_close_result_is_preserved(
         ),
     )
 
-    result = close_module.close_position(
+    result = _authorized_close_position(
         123456,
         MT5ExecutionConfig(),
     )
@@ -252,7 +262,7 @@ def test_unsupported_filling_mode_fails_before_preflight(
         lambda request: checks.append(request),
     )
 
-    result = close_module.close_position(
+    result = _authorized_close_position(
         123456,
         MT5ExecutionConfig(),
     )
@@ -271,7 +281,10 @@ def test_executor_requires_connection_before_closing(
     )
     monkeypatch.setattr(executor_module, "close_position", close_mock)
 
-    with pytest.raises(RuntimeError, match="not connected"):
+    with (
+        _authorize_broker_mutation(),
+        pytest.raises(RuntimeError, match="not connected"),
+    ):
         executor.close_position(123456)
 
 
@@ -304,7 +317,8 @@ def test_executor_delegates_close_when_connected(
 
     monkeypatch.setattr(executor_module, "close_position", fake_close)
 
-    result = executor.close_position(123456)
+    with _authorize_broker_mutation():
+        result = executor.close_position(123456)
 
     assert result is expected
     assert captured == {

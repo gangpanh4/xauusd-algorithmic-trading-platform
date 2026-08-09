@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 import core.mt5_execution.executor as executor_module
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.executor import MT5Executor
-from core.mt5_execution.models import OrderStatus
 
 
 def _healthy_terminal():
@@ -112,7 +112,10 @@ def test_execute_order_fails_before_send_when_runtime_health_is_lost(
         lambda **kwargs: pytest.fail("send_order must not be called"),
     )
 
-    with pytest.raises(RuntimeError, match="not connected"):
+    with (
+        _authorize_broker_mutation(),
+        pytest.raises(RuntimeError, match="not connected"),
+    ):
         executor.execute_order(object())
 
 
@@ -136,5 +139,8 @@ def test_close_position_fails_before_submission_when_runtime_health_is_lost(
         lambda **kwargs: pytest.fail("close_position must not be called"),
     )
 
-    with pytest.raises(RuntimeError, match="not connected"):
+    with (
+        _authorize_broker_mutation(),
+        pytest.raises(RuntimeError, match="not connected"),
+    ):
         executor.close_position(123456)

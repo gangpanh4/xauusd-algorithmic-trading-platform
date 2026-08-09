@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import core.mt5_execution.orders as orders
+from core.mt5_execution import orders
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.models import (
     OrderRequest,
@@ -42,6 +43,14 @@ def _request() -> OrderRequest:
     )
 
 
+def _authorized_send_order(
+    request: OrderRequest,
+    config: MT5ExecutionConfig,
+):
+    with _authorize_broker_mutation():
+        return orders.send_order(request, config)
+
+
 def _mock_reference_quote(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         orders,
@@ -70,7 +79,7 @@ def test_preflight_rejection_prevents_order_send(
         lambda request: sends.append(request),
     )
 
-    result = orders.send_order(_request(), MT5ExecutionConfig())
+    result = _authorized_send_order(_request(), MT5ExecutionConfig())
 
     assert result.status is OrderStatus.REJECTED
     assert result.retcode == 10019
@@ -96,7 +105,7 @@ def test_missing_preflight_result_fails_closed(
         lambda request: sends.append(request),
     )
 
-    result = orders.send_order(_request(), MT5ExecutionConfig())
+    result = _authorized_send_order(_request(), MT5ExecutionConfig())
 
     assert result.status is OrderStatus.REJECTED
     assert "Order preflight unavailable" in result.message
@@ -125,7 +134,7 @@ def test_successful_preflight_allows_submission(
         ),
     )
 
-    result = orders.send_order(_request(), MT5ExecutionConfig())
+    result = _authorized_send_order(_request(), MT5ExecutionConfig())
 
     assert result.status is OrderStatus.FILLED
     assert result.ticket == 123

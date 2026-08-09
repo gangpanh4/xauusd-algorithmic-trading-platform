@@ -9,6 +9,7 @@ from math import isclose, isfinite
 
 import MetaTrader5 as mt5
 
+from .authority import _require_broker_mutation_authority
 from .config import MT5ExecutionConfig
 from .models import (
     OrderRequest,
@@ -138,6 +139,8 @@ def send_order(
     """
     Validate and execute an MT5 order.
     """
+
+    _require_broker_mutation_authority()
 
     symbol = get_symbol_info(
         request.symbol,

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import MetaTrader5 as mt5
 
+from .authority import _require_broker_mutation_authority
 from .close_position import close_position
 from .config import MT5ExecutionConfig
 from .models import OrderRequest, OrderResult, OrderStatus
@@ -83,6 +84,8 @@ class MT5Executor:
         Execute an approved trading order.
         """
 
+        _require_broker_mutation_authority()
+
         if not self.is_connected():
             raise RuntimeError(
                 "MT5Executor is not connected."
@@ -105,6 +108,8 @@ class MT5Executor:
         ticket: int,
     ) -> OrderResult:
         """Close an existing position through the connected MT5 executor."""
+
+        _require_broker_mutation_authority()
 
         if not self.is_connected():
             raise RuntimeError(

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.mt5_execution import orders
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.models import (
     OrderRequest,
@@ -60,7 +61,8 @@ def _send_with_response(
         lambda request: SimpleNamespace(retcode=0, comment="Done"),
     )
     monkeypatch.setattr(orders.mt5, "order_send", lambda request: response)
-    return orders.send_order(_request(), MT5ExecutionConfig())
+    with _authorize_broker_mutation():
+        return orders.send_order(_request(), MT5ExecutionConfig())
 
 
 @pytest.mark.parametrize(

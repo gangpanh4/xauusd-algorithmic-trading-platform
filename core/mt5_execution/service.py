@@ -4,13 +4,14 @@ High-level MT5 execution service.
 
 from __future__ import annotations
 
+from .authority import _require_broker_mutation_authority
 from .config import MT5ExecutionConfig
 from .executor import MT5Executor
-
 from .models import (
     OrderRequest,
     OrderResult,
 )
+
 
 class ExecutionService:
     """
@@ -36,6 +37,8 @@ class ExecutionService:
         """
         Execute a validated trade request.
         """
+
+        _require_broker_mutation_authority()
 
         return self.executor.execute_order(
             request,

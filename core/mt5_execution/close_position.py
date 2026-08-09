@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from math import isclose, isfinite
+from math import isfinite
 
 import MetaTrader5 as mt5
 
+from .authority import _require_broker_mutation_authority
 from .config import MT5ExecutionConfig
 from .models import OrderResult, OrderSide, OrderStatus
 from .orders import (
@@ -25,6 +26,8 @@ def close_position(
     config: MT5ExecutionConfig,
 ) -> OrderResult:
     """Close one existing MT5 position using the full remaining volume."""
+
+    _require_broker_mutation_authority()
 
     if isinstance(ticket, bool) or not isinstance(ticket, int) or ticket <= 0:
         return _rejected("Position ticket must be a positive integer.")

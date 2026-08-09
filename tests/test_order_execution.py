@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import core.mt5_execution.orders as orders
+from core.mt5_execution import orders
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.models import (
     OrderRequest,
@@ -52,6 +53,14 @@ def _request(side: OrderSide = OrderSide.BUY) -> OrderRequest:
         take_profit=3296.0,
         comment="Offline Execution Test",
     )
+
+
+def _authorized_send_order(
+    request: OrderRequest,
+    config: MT5ExecutionConfig,
+):
+    with _authorize_broker_mutation():
+        return orders.send_order(request, config)
 
 
 def _mock_successful_broker(
@@ -102,7 +111,7 @@ def test_order_execution_is_fully_mocked_and_maps_fill(
         market_price=3300.0,
     )
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(),
         MT5ExecutionConfig(),
     )
@@ -124,7 +133,7 @@ def test_buy_uses_current_ask_and_recenters_exit_distances(
         market_price=3300.05,
     )
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(OrderSide.BUY),
         MT5ExecutionConfig(default_slippage=10),
     )
@@ -143,7 +152,7 @@ def test_sell_uses_current_bid_and_recenters_exit_distances(
         market_price=3299.95,
     )
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(OrderSide.SELL),
         MT5ExecutionConfig(default_slippage=10),
     )
@@ -168,7 +177,7 @@ def test_buy_rejects_adverse_movement_beyond_configured_deviation(
     monkeypatch.setattr(orders.mt5, "order_check", order_check)
     monkeypatch.setattr(orders.mt5, "order_send", order_send)
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(OrderSide.BUY),
         MT5ExecutionConfig(default_slippage=10),
     )
@@ -189,7 +198,7 @@ def test_sell_rejects_adverse_movement_beyond_configured_deviation(
     monkeypatch.setattr(orders.mt5, "order_check", pytest.fail)
     monkeypatch.setattr(orders.mt5, "order_send", pytest.fail)
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(OrderSide.SELL),
         MT5ExecutionConfig(default_slippage=10),
     )
@@ -206,7 +215,7 @@ def test_favorable_movement_is_allowed(
         market_price=3299.50,
     )
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(OrderSide.BUY),
         MT5ExecutionConfig(default_slippage=0),
     )
@@ -229,7 +238,7 @@ def test_zero_deviation_rejects_any_adverse_movement(
     monkeypatch.setattr(orders.mt5, "order_check", pytest.fail)
     monkeypatch.setattr(orders.mt5, "order_send", pytest.fail)
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(OrderSide.BUY),
         MT5ExecutionConfig(default_slippage=0),
     )
@@ -250,7 +259,7 @@ def test_market_quote_failure_rejects_before_broker_submission(
     monkeypatch.setattr(orders.mt5, "order_check", pytest.fail)
     monkeypatch.setattr(orders.mt5, "order_send", pytest.fail)
 
-    result = orders.send_order(
+    result = _authorized_send_order(
         _request(OrderSide.BUY),
         MT5ExecutionConfig(),
     )

@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import core.mt5_execution.orders as orders
+from core.mt5_execution import orders
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.models import (
     OrderRequest,
@@ -40,6 +41,14 @@ def _request() -> OrderRequest:
         stop_loss=3295.0,
         take_profit=3310.0,
     )
+
+
+def _authorized_send_order(
+    request: OrderRequest,
+    config: MT5ExecutionConfig,
+):
+    with _authorize_broker_mutation():
+        return orders.send_order(request, config)
 
 
 def _mock_reference_quote(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,7 +131,7 @@ def test_market_execution_without_fok_or_ioc_fails_closed(
         lambda request: send_calls.append(request),
     )
 
-    result = orders.send_order(_request(), MT5ExecutionConfig())
+    result = _authorized_send_order(_request(), MT5ExecutionConfig())
 
     assert result.status is OrderStatus.REJECTED
     assert "No supported filling mode" in result.message
@@ -146,7 +155,7 @@ def test_invalid_filling_flags_fail_closed(
         lambda request: send_calls.append(request),
     )
 
-    result = orders.send_order(_request(), MT5ExecutionConfig())
+    result = _authorized_send_order(_request(), MT5ExecutionConfig())
 
     assert result.status is OrderStatus.REJECTED
     assert "filling mode flags are invalid" in result.message
@@ -179,7 +188,7 @@ def test_selected_filling_mode_reaches_order_send(
 
     monkeypatch.setattr(orders.mt5, "order_send", fake_send)
 
-    result = orders.send_order(_request(), MT5ExecutionConfig())
+    result = _authorized_send_order(_request(), MT5ExecutionConfig())
 
     assert result.status is OrderStatus.FILLED
     assert captured["type_filling"] == orders.mt5.ORDER_FILLING_IOC

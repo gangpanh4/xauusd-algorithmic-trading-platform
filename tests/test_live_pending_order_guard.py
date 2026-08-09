@@ -10,6 +10,7 @@ import pytest
 import core.live_trading.engine as live_engine_module
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
+from core.mt5_execution.authority import _require_broker_mutation_authority
 from core.mt5_execution.models import (
     AccountInfo,
     OrderRequest,
@@ -66,6 +67,11 @@ def _partial_result(*, volume: float = 0.004) -> OrderResult:
         retcode=10010,
         executed_volume=volume,
     )
+
+
+def _authorized_result(result: OrderResult) -> OrderResult:
+    _require_broker_mutation_authority()
+    return result
 
 
 def _config(path: Path, *, enabled: bool = False) -> LiveTradingConfig:
@@ -148,7 +154,9 @@ def _set_partial_state(engine: LiveTradingEngine) -> None:
 
 def test_pending_result_blocks_future_execution(tmp_path: Path) -> None:
     engine = _enabled_engine(tmp_path / "partial.json")
-    engine.executor.execute_order = Mock(side_effect=lambda request: _pending_result())
+    engine.executor.execute_order = Mock(
+        side_effect=lambda request: _authorized_result(_pending_result())
+    )
 
     result = engine.process_bar(
         _bar(),
@@ -230,7 +238,9 @@ def test_partial_fill_records_actual_and_remaining_volume(
     engine = _enabled_engine(state_path)
     engine.pipeline.register_position_opened = Mock()
     engine.executor.execute_order = Mock(
-        side_effect=lambda request: _partial_result(volume=0.004)
+        side_effect=lambda request: _authorized_result(
+            _partial_result(volume=0.004)
+        )
     )
 
     result = engine.process_bar(

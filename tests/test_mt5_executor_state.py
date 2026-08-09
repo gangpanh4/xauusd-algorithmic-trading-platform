@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import core.mt5_execution.executor as executor_module
+from core.mt5_execution.authority import _authorize_broker_mutation
 from core.mt5_execution.config import MT5ExecutionConfig
 from core.mt5_execution.executor import MT5Executor
 from core.mt5_execution.models import OrderResult, OrderStatus
@@ -44,6 +45,16 @@ def _result(status: OrderStatus) -> OrderResult:
     )
 
 
+def _authorized_execute_order(executor: MT5Executor, request: object):
+    with _authorize_broker_mutation():
+        return executor.execute_order(request)
+
+
+def _authorized_close_position(executor: MT5Executor, ticket: int):
+    with _authorize_broker_mutation():
+        return executor.close_position(ticket)
+
+
 @pytest.mark.parametrize(
     "status",
     [
@@ -65,7 +76,7 @@ def test_execute_order_records_non_rejected_result(
         lambda **kwargs: expected,
     )
 
-    result = executor.execute_order(object())
+    result = _authorized_execute_order(executor, object())
 
     assert result is expected
     assert executor.state.last_order is expected
@@ -84,7 +95,7 @@ def test_execute_order_records_rejection_as_error(
         lambda **kwargs: expected,
     )
 
-    result = executor.execute_order(object())
+    result = _authorized_execute_order(executor, object())
 
     assert result is expected
     assert executor.state.last_order is expected
@@ -105,7 +116,7 @@ def test_execute_order_exception_increments_error_without_false_result(
     )
 
     with pytest.raises(RuntimeError, match="submission failure"):
-        executor.execute_order(object())
+        _authorized_execute_order(executor, object())
 
     assert executor.state.last_order is None
     assert executor.state.total_orders_sent == 0
@@ -123,7 +134,7 @@ def test_close_position_uses_same_state_accounting(
         lambda **kwargs: expected,
     )
 
-    result = executor.close_position(123456)
+    result = _authorized_close_position(executor, 123456)
 
     assert result is expected
     assert executor.state.last_order is expected
@@ -147,8 +158,8 @@ def test_multiple_execution_results_accumulate_count(
         lambda **kwargs: next(results),
     )
 
-    first = executor.execute_order(object())
-    second = executor.execute_order(object())
+    first = _authorized_execute_order(executor, object())
+    second = _authorized_execute_order(executor, object())
 
     assert executor.state.total_orders_sent == 2
     assert executor.state.last_order is second
