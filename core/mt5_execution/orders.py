@@ -4,6 +4,7 @@ MT5 Order validation.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from math import isclose, isfinite
 
@@ -135,6 +136,8 @@ def build_mt5_request(
 def send_order(
     request: OrderRequest,
     config: MT5ExecutionConfig,
+    *,
+    pre_send_guard: Callable[[], None] | None = None,
 ) -> OrderResult:
     """
     Validate and execute an MT5 order.
@@ -250,6 +253,18 @@ def send_order(
             ),
             retcode=check_retcode,
         )
+
+    if pre_send_guard is not None:
+        try:
+            pre_send_guard()
+        except RuntimeError as exc:
+            return OrderResult(
+                timestamp=datetime.now(UTC),
+                status=OrderStatus.REJECTED,
+                ticket=None,
+                executed_price=0.0,
+                message=f"Final pre-send safety guard rejected order: {exc}",
+            )
 
     result = mt5.order_send(mt5_request)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -70,8 +71,14 @@ def _partial_result(*, volume: float = 0.004) -> OrderResult:
     )
 
 
-def _authorized_result(result: OrderResult) -> OrderResult:
+def _authorized_result(
+    result: OrderResult,
+    *,
+    pre_send_guard: Callable[[], None] | None = None,
+) -> OrderResult:
     _require_broker_mutation_authority()
+    if pre_send_guard is not None:
+        pre_send_guard()
     return result
 
 
@@ -173,7 +180,10 @@ def _set_partial_state(engine: LiveTradingEngine) -> None:
 def test_pending_result_blocks_future_execution(tmp_path: Path) -> None:
     engine = _enabled_engine(tmp_path / "partial.json")
     engine.executor.execute_order = Mock(
-        side_effect=lambda request: _authorized_result(_pending_result())
+        side_effect=lambda request, *, pre_send_guard=None: _authorized_result(
+            _pending_result(),
+            pre_send_guard=pre_send_guard,
+        )
     )
 
     result = engine.process_bar(
@@ -256,8 +266,9 @@ def test_partial_fill_records_actual_and_remaining_volume(
     engine = _enabled_engine(state_path)
     engine.pipeline.register_position_opened = Mock()
     engine.executor.execute_order = Mock(
-        side_effect=lambda request: _authorized_result(
-            _partial_result(volume=0.004)
+        side_effect=lambda request, *, pre_send_guard=None: _authorized_result(
+            _partial_result(volume=0.004),
+            pre_send_guard=pre_send_guard,
         )
     )
 

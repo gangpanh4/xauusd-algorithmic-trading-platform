@@ -12,6 +12,8 @@ from core.live_trading.demo_execution_authorization import (
     consume_demo_execution_authorization,
     load_demo_execution_authorization,
     validate_demo_execution_authorization,
+    validate_demo_execution_authorization_scope,
+    validate_demo_execution_authorization_time_window,
 )
 from core.live_trading.execution_concurrency import (
     LocalExecutionLock,
@@ -257,4 +259,40 @@ def test_authorization_requires_kill_switch_clear(tmp_path) -> None:
             account=_account(),
             request=_request(),
             now=NOW,
+        )
+
+def test_request_free_scope_validation_uses_same_authorization_policy(
+    tmp_path,
+) -> None:
+    config = _config(tmp_path)
+    _write(config.demo_authorization_path)
+    authorization = load_demo_execution_authorization(
+        config.demo_authorization_path
+    )
+
+    validate_demo_execution_authorization_scope(
+        authorization,
+        config=config,
+        account=_account(),
+        now=NOW,
+    )
+
+
+def test_authorization_time_window_is_the_shared_expiry_boundary(
+    tmp_path,
+) -> None:
+    config = _config(tmp_path)
+    _write(config.demo_authorization_path)
+    authorization = load_demo_execution_authorization(
+        config.demo_authorization_path
+    )
+
+    validate_demo_execution_authorization_time_window(
+        authorization,
+        now=authorization.expires_at,
+    )
+    with pytest.raises(DemoExecutionAuthorizationError, match="expired"):
+        validate_demo_execution_authorization_time_window(
+            authorization,
+            now=authorization.expires_at + timedelta(microseconds=1),
         )

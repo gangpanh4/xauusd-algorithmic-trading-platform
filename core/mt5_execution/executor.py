@@ -4,6 +4,7 @@ MT5 Execution Engine.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import MetaTrader5 as mt5
@@ -79,6 +80,8 @@ class MT5Executor:
     def execute_order(
         self,
         request: OrderRequest,
+        *,
+        pre_send_guard: Callable[[], None] | None = None,
     ) -> OrderResult:
         """
         Execute an approved trading order.
@@ -92,10 +95,17 @@ class MT5Executor:
             )
 
         try:
-            result = send_order(
-                request=request,
-                config=self.config,
-            )
+            if pre_send_guard is None:
+                result = send_order(
+                    request=request,
+                    config=self.config,
+                )
+            else:
+                result = send_order(
+                    request=request,
+                    config=self.config,
+                    pre_send_guard=pre_send_guard,
+                )
         except Exception:
             self.state.error_count += 1
             raise

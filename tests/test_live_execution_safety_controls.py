@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -202,8 +203,14 @@ def _mock_execution(
     engine: LiveTradingEngine,
     result: OrderResult,
 ) -> Mock:
-    def execute(request: OrderRequest) -> OrderResult:
+    def execute(
+        request: OrderRequest,
+        *,
+        pre_send_guard: Callable[[], None] | None = None,
+    ) -> OrderResult:
         _require_broker_mutation_authority()
+        if pre_send_guard is not None:
+            pre_send_guard()
         return replace(result, timestamp=datetime.now(UTC))
 
     mocked = Mock(side_effect=execute)
@@ -238,6 +245,7 @@ def test_readiness_pass_allows_authoritative_submission(
         engine.config.demo_authorization_path
     ).consumed is True
     execute.assert_called_once()
+    assert callable(execute.call_args.kwargs["pre_send_guard"])
 
 
 def test_competing_engine_cannot_reach_mutation_and_owner_keeps_counters(

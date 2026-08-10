@@ -149,21 +149,47 @@ def _load_demo_execution_authorization_unlocked(
     return authorization
 
 
-def validate_demo_execution_authorization(
+def validate_demo_execution_authorization_time_window(
+    authorization: DemoExecutionAuthorization,
+    *,
+    now: datetime,
+) -> None:
+    """Validate only the authoritative authorization activation window."""
+
+    observed_at = _aware_utc(now, "now")
+    issued_at = _aware_utc(authorization.issued_at, "authorization.issued_at")
+    expires_at = _aware_utc(
+        authorization.expires_at,
+        "authorization.expires_at",
+    )
+    if observed_at < issued_at:
+        raise DemoExecutionAuthorizationError(
+            "Demo authorization is not active yet."
+        )
+    if observed_at > expires_at:
+        raise DemoExecutionAuthorizationError(
+            "Demo authorization has expired."
+        )
+
+
+def validate_demo_execution_authorization_scope(
     authorization: DemoExecutionAuthorization,
     *,
     config: LiveTradingConfig,
     account: AccountInfo,
-    request: OrderRequest,
     now: datetime,
 ) -> None:
+    """Validate authorization/account/control scope without inventing a request."""
+
     observed_at = _aware_utc(now, "now")
     if authorization.schema_version != _SCHEMA_VERSION:
         raise DemoExecutionAuthorizationError(
             "Unsupported demo authorization schema version."
         )
     if not authorization.authorization_id.strip():
-        raise DemoExecutionAuthorizationError("Demo authorization ID is empty.")
+        raise DemoExecutionAuthorizationError(
+            "Demo authorization ID is empty."
+        )
     if authorization.consumed:
         raise DemoExecutionAuthorizationError(
             "Demo execution authorization has already been consumed."
@@ -175,7 +201,9 @@ def validate_demo_execution_authorization(
             "Demo execution has not been explicitly approved."
         )
     if config.execution_kill_switch_enabled:
-        raise DemoExecutionAuthorizationError("Execution kill switch is enabled.")
+        raise DemoExecutionAuthorizationError(
+            "Execution kill switch is enabled."
+        )
     if account.trade_mode != _DEMO_TRADE_MODE or not authorization.demo_only:
         raise DemoExecutionAuthorizationError(
             "Execution authorization is restricted to an MT5 demo account."
@@ -191,7 +219,7 @@ def validate_demo_execution_authorization(
         raise DemoExecutionAuthorizationError(
             "Connected account identity does not match explicit authorization."
         )
-    if authorization.symbol != config.symbol or request.symbol != config.symbol:
+    if authorization.symbol != config.symbol:
         raise DemoExecutionAuthorizationError(
             "Authorized symbol does not match the execution request."
         )
@@ -203,7 +231,16 @@ def validate_demo_execution_authorization(
         raise DemoExecutionAuthorizationError(
             "Demo authorization acknowledgement is invalid."
         )
-    lifetime = (authorization.expires_at - authorization.issued_at).total_seconds()
+    lifetime = (
+        _aware_utc(
+            authorization.expires_at,
+            "authorization.expires_at",
+        )
+        - _aware_utc(
+            authorization.issued_at,
+            "authorization.issued_at",
+        )
+    ).total_seconds()
     configured_lifetime = config.demo_authorization_max_lifetime_seconds
     if (
         isinstance(configured_lifetime, bool)
@@ -215,10 +252,30 @@ def validate_demo_execution_authorization(
         raise DemoExecutionAuthorizationError(
             "Demo authorization lifetime is invalid."
         )
-    if observed_at < authorization.issued_at:
-        raise DemoExecutionAuthorizationError("Demo authorization is not active yet.")
-    if observed_at > authorization.expires_at:
-        raise DemoExecutionAuthorizationError("Demo authorization has expired.")
+    validate_demo_execution_authorization_time_window(
+        authorization,
+        now=observed_at,
+    )
+
+
+def validate_demo_execution_authorization(
+    authorization: DemoExecutionAuthorization,
+    *,
+    config: LiveTradingConfig,
+    account: AccountInfo,
+    request: OrderRequest,
+    now: datetime,
+) -> None:
+    validate_demo_execution_authorization_scope(
+        authorization,
+        config=config,
+        account=account,
+        now=now,
+    )
+    if request.symbol != config.symbol:
+        raise DemoExecutionAuthorizationError(
+            "Authorized symbol does not match the execution request."
+        )
     maximum_volume = authorization.maximum_volume
     request_volume = float(request.volume)
     if (
@@ -231,7 +288,6 @@ def validate_demo_execution_authorization(
         raise DemoExecutionAuthorizationError(
             "Execution request exceeds the authorized volume."
         )
-
 
 def consume_demo_execution_authorization(
     path: str | Path,

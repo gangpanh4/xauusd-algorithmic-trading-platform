@@ -60,6 +60,7 @@ from .demo_execution_authorization import (
     consume_demo_execution_authorization,
     load_demo_execution_authorization,
     validate_demo_execution_authorization,
+    validate_demo_execution_authorization_time_window,
 )
 from .execution_concurrency import (
     ExecutionConcurrencyError,
@@ -770,9 +771,18 @@ class LiveTradingEngine:
                 take_profit=execution_request.order_request.take_profit,
                 comment=execution_intent.broker_comment,
             )
+            def pre_send_guard() -> None:
+                validate_demo_execution_authorization_time_window(
+                    authorization,
+                    now=datetime.now(UTC),
+                )
+
             self.state.order_submissions_this_session += 1
             with _authorize_broker_mutation():
-                execution_result = self.executor.execute_order(broker_request)
+                execution_result = self.executor.execute_order(
+                    broker_request,
+                    pre_send_guard=pre_send_guard,
+                )
             self._record_execution_intent_result(
                 execution_intent,
                 execution_result,
