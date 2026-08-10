@@ -35,7 +35,7 @@ from core.trading_pipeline.pipeline import TradingPipeline
 
 from .candidate_outcome_models import CandidateOutcomeEvaluation
 from .candidate_outcome_tracker import CandidateOutcomeTracker
-from .config import BacktestConfig
+from .config import BacktestConfig, BacktestExecutionModel
 from .methodology_observer import MethodologyObservation
 from .models import (
     BacktestReplayContext,
@@ -152,6 +152,7 @@ class BacktestingEngine:
                 else self.config.commission_per_lot
             ),
             execution_profile=execution_profile,
+            execution_model=self.config.execution_model,
         )
         self.pipeline = self._create_pipeline()
         self.strategy_observer = BacktestStrategyObserver()
@@ -293,7 +294,7 @@ class BacktestingEngine:
             strategy_observations=self.strategy_observations,
             post_expiry_triggers=getattr(
                 self.strategy_observer,
-                'post_expiry_triggers',
+                "post_expiry_triggers",
                 (),
             ),
         )
@@ -319,7 +320,7 @@ class BacktestingEngine:
         )
 
     def run(self, context: MarketContext) -> BacktestResult:
-        """Execute M5 decisions while retaining completed-M15 simulation."""
+        """Execute M5 decisions with the selected versioned execution clock."""
 
         decision_bars = self._prepare_historical_bars(context)
         simulation_bars = self._prepare_simulation_bars(context)
@@ -334,6 +335,7 @@ class BacktestingEngine:
             if isinstance(context, BacktestReplayContext)
             else None
         )
+        lifecycle_minutes = self.config.execution_model.lifecycle_bar_minutes
 
         for index, bar in enumerate(decision_bars):
             boundary = bar.timestamp.astimezone(UTC) + timedelta(minutes=5)
@@ -341,7 +343,7 @@ class BacktestingEngine:
                 simulation_bar = simulation_bars[simulation_index]
                 simulation_close = (
                     simulation_bar.timestamp.astimezone(UTC)
-                    + timedelta(minutes=15)
+                    + timedelta(minutes=lifecycle_minutes)
                 )
                 if simulation_close > boundary:
                     break
@@ -396,8 +398,10 @@ class BacktestingEngine:
             future_simulation_bars = [
                 value
                 for value in simulation_bars
-                if value.timestamp.astimezone(UTC)
-                > observation_bar.timestamp.astimezone(UTC)
+                if self._execution_bar_is_eligible(
+                    observation_bar=observation_bar,
+                    execution_bar=value,
+                )
             ]
             if not future_simulation_bars:
                 continue
@@ -419,7 +423,6 @@ class BacktestingEngine:
 
         self._get_candidate_outcome_tracker().finalize()
         return self._finalize()
-
 
     def _process_observation(
         self,
@@ -490,7 +493,6 @@ class BacktestingEngine:
             visible_m5_end=m5_end,
         )
         return result, m5_bar
-
 
     def _observe_new_strategy_m5_bars(
         self,
@@ -679,7 +681,6 @@ class BacktestingEngine:
         self._last_pipeline_observation_timestamp = timestamp
         return result
 
-
     def _collect_observation_audit(self, observation_bar: MarketBar) -> None:
         """Collect the pipeline audit emitted for one completed observation.
 
@@ -726,7 +727,6 @@ class BacktestingEngine:
             and hasattr(self.pipeline, "confluence_engine")
             and callable(getattr(self.pipeline, "process_bar", None))
         )
-
 
     def _prepare_mtf_runtime_cache(self, context: MarketContext) -> None:
         """Precompute immutable MTF lookup data for one backtest context.
@@ -797,21 +797,21 @@ class BacktestingEngine:
         weekly: bool,
     ) -> list[SharedMarketBar]:
         return [
-                SharedMarketBar(
-                    timestamp=start,
-                    open=float(values[0].open),
-                    high=max(float(bar.high) for bar in values),
-                    low=min(float(bar.low) for bar in values),
-                    close=float(values[-1].close),
-                    tick_volume=sum(
-                        int(
-                            getattr(bar, "tick_volume", 0)
-                            or getattr(bar, "volume", 0)
-                            or 0
-                        )
-                        for bar in values
-                    ),
-                )
+            SharedMarketBar(
+                timestamp=start,
+                open=float(values[0].open),
+                high=max(float(bar.high) for bar in values),
+                low=min(float(bar.low) for bar in values),
+                close=float(values[-1].close),
+                tick_volume=sum(
+                    int(
+                        getattr(bar, "tick_volume", 0)
+                        or getattr(bar, "volume", 0)
+                        or 0
+                    )
+                    for bar in values
+                ),
+            )
             for start, values in completed_period_buckets(
                 bars,
                 boundary=boundary,
@@ -938,12 +938,10 @@ class BacktestingEngine:
         if simulation is None:
             return
 
-        if (
-            simulation.is_pending_entry
-            and bar.timestamp <= simulation.observation_bar.timestamp
+        if simulation.is_pending_entry and not self._execution_bar_is_eligible(
+            observation_bar=simulation.observation_bar,
+            execution_bar=bar,
         ):
-            # The candle opened before (or at) the M5 observation. It may only
-            # have become completed later and cannot supply a post-signal fill.
             return
 
         was_pending = simulation.is_pending_entry
@@ -1046,23 +1044,25 @@ class BacktestingEngine:
         liquidity = getattr(result, "liquidity_event", None)
         order_block = getattr(result, "order_block", None)
         fair_value_gap = getattr(result, "fair_value_gap", None)
+        execution_model = self.config.execution_model_provenance()
 
         metadata: dict[str, object] = {
             "observation_timestamp": self._timestamp_text(entry_bar.timestamp),
             "scheduled_exit_timestamp": self._timestamp_text(exit_timestamp),
+            **execution_model,
             "tick_size": self.tick_size,
             "tick_value_per_lot": self.tick_value_per_lot,
             "lot_step": self.lot_step,
             "pipeline_snapshot": self._snapshot(result),
             "probability": self._first_attribute(
-                probability, "probability", fallback=getattr(
-                    trade_plan, "probability", None
-                )
+                probability,
+                "probability",
+                fallback=getattr(trade_plan, "probability", None),
             ),
             "confidence": self._first_attribute(
-                probability, "confidence", fallback=getattr(
-                    trade_plan, "confidence", None
-                )
+                probability,
+                "confidence",
+                fallback=getattr(trade_plan, "confidence", None),
             ),
             "probability_accepted": getattr(probability, "accepted", None),
             "probability_reasons": self._snapshot(
@@ -1493,9 +1493,18 @@ class BacktestingEngine:
         self,
         context: MarketContext,
     ) -> list[MarketBar]:
-        """Return strictly ordered M15 bars retained for simulator economics."""
+        """Return ordered lifecycle bars selected by the execution model."""
 
-        bars = list(context.m15_bars)
+        model = self.config.execution_model
+        if model is BacktestExecutionModel.M15_COMPLETED_OHLC_V1:
+            bars = list(context.m15_bars)
+            clock = "M15"
+        elif model is BacktestExecutionModel.M5_COMPLETED_OHLC_V2:
+            bars = list(context.m5_bars)
+            clock = "M5"
+        else:  # Defensive; BacktestConfig rejects unknown model values.
+            raise ValueError(f"unsupported execution model: {model!r}")
+
         previous_timestamp: datetime | None = None
         for bar in bars:
             timestamp = bar.timestamp
@@ -1503,8 +1512,8 @@ class BacktestingEngine:
                 raise ValueError("simulation bar timestamps must be timezone-aware")
             if previous_timestamp is not None and timestamp <= previous_timestamp:
                 raise ValueError(
-                    "historical M15 bars must be strictly increasing without "
-                    "duplicate timestamps"
+                    f"historical {clock} bars must be strictly increasing "
+                    "without duplicate timestamps"
                 )
             previous_timestamp = timestamp
 
@@ -1522,6 +1531,28 @@ class BacktestingEngine:
             if (start_date is None or bar.timestamp >= start_date)
             and (end_date is None or bar.timestamp <= end_date)
         ]
+
+    def _execution_bar_is_eligible(
+        self,
+        *,
+        observation_bar: MarketBar,
+        execution_bar: MarketBar,
+    ) -> bool:
+        """Return whether an available bar may supply the execution reference.
+
+        V2 is causal from decision availability: an observation opening at
+        ``t`` is only actionable at ``t + 5 minutes``. The first *available*
+        M5 bar at or after that instant is eligible. Missing bars are never
+        fabricated. V1 retains the accepted legacy condition that the M15 bar
+        open must be strictly later than the M5 observation open.
+        """
+
+        observation_timestamp = observation_bar.timestamp.astimezone(UTC)
+        execution_timestamp = execution_bar.timestamp.astimezone(UTC)
+        if self.config.execution_model is BacktestExecutionModel.M5_COMPLETED_OHLC_V2:
+            decision_available_at = observation_timestamp + timedelta(minutes=5)
+            return execution_timestamp >= decision_available_at
+        return execution_timestamp > observation_timestamp
 
     def _direction_is_enabled(self, result: PipelineResult) -> bool:
         trade_plan = result.trade_plan

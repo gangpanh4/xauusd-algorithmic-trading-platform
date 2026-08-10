@@ -423,6 +423,7 @@ class BacktestRunner:
         execution_profile = getattr(self, "execution_profile", None)
         if not isinstance(execution_profile, ExecutionEconomicsProfile):
             execution_profile = config.resolved_execution_profile()
+        execution_model = config.execution_model_provenance()
         instrument = execution_profile.instrument
         costs = execution_profile.costs
 
@@ -527,6 +528,8 @@ class BacktestRunner:
                 ),
             },
             "execution_economics": execution_profile.to_dict(),
+            "execution_model": execution_model,
+            **execution_model,
             "instrument_specification_provenance": {
                 "specification_id": instrument.specification_id,
                 "provenance": instrument.provenance.value,
@@ -550,8 +553,7 @@ class BacktestRunner:
             },
             "closed_candle_only": True,
             "no_lookahead": True,
-            "decision_clock": "M5",
-            "simulation_clock": "M15_COMPLETED",
+            "simulation_clock": execution_model["lifecycle_clock"],
         }
 
     @staticmethod
@@ -619,7 +621,11 @@ class BacktestRunner:
             output_dir / "backtest_report.txt",
         )
 
-        self.exporter.export_summary(result)
+        execution_model = self.config.execution_model_provenance()
+        self.exporter.export_summary(
+            result,
+            execution_model_provenance=execution_model,
+        )
 
         self.exporter.export_trade_log(result)
 
@@ -640,6 +646,7 @@ class BacktestRunner:
 
         self.exporter.export_statistics(
             asdict(stats),
+            execution_model_provenance=execution_model,
         )
 
         (output_dir / "historical_window.json").write_text(

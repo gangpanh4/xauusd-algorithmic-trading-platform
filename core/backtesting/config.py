@@ -25,6 +25,58 @@ class LotSizingMode(Enum):
     RISK_PERCENT = "RISK_PERCENT"
 
 
+class BacktestExecutionModel(str, Enum):
+    """Versioned historical execution-bar clocks.
+
+    V1 preserves the accepted completed-M15 lifecycle. V2 changes only the
+    simulation bar clock to completed M5 bars while retaining the existing
+    execution-economics formulas and lifecycle rules.
+    """
+
+    M15_COMPLETED_OHLC_V1 = "M15_COMPLETED_OHLC_V1"
+    M5_COMPLETED_OHLC_V2 = "M5_COMPLETED_OHLC_V2"
+
+    @property
+    def lifecycle_bar_minutes(self) -> int:
+        if self is BacktestExecutionModel.M15_COMPLETED_OHLC_V1:
+            return 15
+        return 5
+
+    def provenance(self) -> dict[str, object]:
+        """Return stable, explicit execution-model provenance."""
+
+        if self is BacktestExecutionModel.M15_COMPLETED_OHLC_V1:
+            entry_policy = "NEXT_M15_OPEN"
+            entry_clock = "M15"
+            lifecycle_clock = "M15_COMPLETED"
+        else:
+            entry_policy = "NEXT_AVAILABLE_M5_OPEN"
+            entry_clock = "M5"
+            lifecycle_clock = "M5_COMPLETED"
+
+        return {
+            "execution_model_id": self.value,
+            "decision_clock": "M5",
+            "decision_available_after_minutes": 5,
+            "entry_policy": entry_policy,
+            "entry_clock": entry_clock,
+            "lifecycle_clock": lifecycle_clock,
+            "lifecycle_bar_minutes": self.lifecycle_bar_minutes,
+            "closed_bar_consumption": "ONLY_AFTER_BAR_COMPLETES",
+            "same_bar_entry_exit_evaluation": True,
+            "intra_bar_ambiguity_policy": "CONSERVATIVE_STOP_FIRST",
+            "gap_stop_policy": "BAR_OPEN_WITH_ADVERSE_SLIPPAGE",
+            "gap_target_policy": "TARGET_PRICE_NO_FAVORABLE_GAP_IMPROVEMENT",
+            "breakeven_activation_policy": (
+                "PENDING_AFTER_TRIGGER_BAR_ACTIVE_NEXT_LIFECYCLE_BAR"
+            ),
+            "exit_timestamp_semantics": (
+                "LIFECYCLE_BAR_OPEN_TIMESTAMP_INTRABAR_TIME_UNKNOWN"
+            ),
+            "comparable_with_unversioned_results": False,
+        }
+
+
 @dataclass(frozen=True)
 class BacktestConfig:
     """
@@ -58,6 +110,14 @@ class BacktestConfig:
     fixed_lot_size: float = 0.01
 
     risk_percent: float = 1.0
+
+    # ===========================
+    # Execution Model
+    # ===========================
+
+    execution_model: BacktestExecutionModel = (
+        BacktestExecutionModel.M15_COMPLETED_OHLC_V1
+    )
 
     # ===========================
     # Execution Economics
@@ -163,6 +223,12 @@ class BacktestConfig:
 
     debug_logging: bool = False
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.execution_model, BacktestExecutionModel):
+            raise TypeError(
+                "execution_model must be a BacktestExecutionModel"
+            )
+
     def resolved_execution_profile(self) -> ExecutionEconomicsProfile:
         """Return the explicit profile or derive one from legacy scalars.
 
@@ -207,3 +273,8 @@ class BacktestConfig:
             commission_per_trade=self.commission_per_trade,
             commission_per_lot=self.commission_per_lot,
         )
+
+    def execution_model_provenance(self) -> dict[str, object]:
+        """Return the selected versioned simulator-clock contract."""
+
+        return self.execution_model.provenance()

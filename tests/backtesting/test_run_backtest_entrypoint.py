@@ -5,6 +5,7 @@ import sys
 from datetime import UTC, datetime
 from types import ModuleType, SimpleNamespace
 
+from core.backtesting.config import BacktestExecutionModel
 from core.backtesting.models import BacktestResult
 
 
@@ -89,6 +90,8 @@ def test_run_backtest_uses_bounded_composite_research_path(
     )
     assert module.HISTORICAL_BARS == 20_000
     assert module.HISTORICAL_END_TIME == expected_end_time
+    config = calls[0][1]
+    assert config.execution_model is BacktestExecutionModel.M5_COMPLETED_OHLC_V2
     assert calls[1] == (
         "run_with_strategy_comparison",
         {
@@ -105,6 +108,7 @@ def test_run_backtest_uses_bounded_composite_research_path(
     assert "XAUUSD HISTORICAL BACKTEST" in stdout
     assert "Bars requested  : 20,000" in stdout
     assert "2026-04-09T23:59:00+00:00" in stdout
+    assert "Execution model : M5_COMPLETED_OHLC_V2" in stdout
     assert "Trades          : 1" in stdout
     assert "Win Rate        : 100.00%" in stdout
     assert "Net Profit      : 155.82" in stdout
@@ -193,6 +197,7 @@ def test_run_backtest_uses_pinned_offline_execution_profile(
     config = captured[0]
     profile = config.resolved_execution_profile()
     assert config.execution_profile is profile
+    assert config.execution_model is BacktestExecutionModel.M5_COMPLETED_OHLC_V2
     assert profile.instrument.minimum_volume == 0.01
     assert profile.instrument.maximum_volume == 10.0
     assert profile.instrument.contract_size is None

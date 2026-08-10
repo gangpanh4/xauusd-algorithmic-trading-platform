@@ -106,7 +106,10 @@ class BacktestExporter:
         ("Monetary Risk", "monetary_risk"),
         ("Gross R Multiple", "gross_r_multiple"),
         ("Net R Multiple", "net_r_multiple"),
+        ("Execution Model ID", "execution_model_id"),
         ("Entry Policy", "entry_policy"),
+        ("Entry Clock", "entry_clock"),
+        ("Lifecycle Clock", "lifecycle_clock"),
         ("Execution Policy", "execution_policy"),
         ("Exit Levels Recentered", "exit_levels_recentered"),
         ("Legacy Unit Economics Fallback", "legacy_unit_economics_fallback"),
@@ -119,7 +122,6 @@ class BacktestExporter:
         ("Emergency Stop", "emergency_stop"),
         ("Daily Loss Limit Hit", "daily_loss_limit_hit"),
     )
-
 
     _OBSERVATION_AUDIT_COLUMNS: Final[tuple[str, ...]] = (
         "Observation Number",
@@ -188,10 +190,12 @@ class BacktestExporter:
     def export_summary(
         self,
         result: BacktestResult,
+        *,
+        execution_model_provenance: Mapping[str, object] | None = None,
     ) -> Path:
         """Export a complete ``summary.json``."""
 
-        summary = {
+        summary: dict[str, object] = {
             "total_trades": result.total_trades,
             "winning_trades": result.winning_trades,
             "losing_trades": result.losing_trades,
@@ -222,6 +226,10 @@ class BacktestExporter:
             "low_quality_trades": result.low_quality_trades,
             "rejected_quality_trades": result.rejected_quality_trades,
         }
+        self._attach_execution_model_provenance(
+            summary,
+            execution_model_provenance,
+        )
 
         path = self.output_directory / "summary.json"
         self._write_json(path, summary)
@@ -286,7 +294,6 @@ class BacktestExporter:
                 )
 
         return path
-
 
     def export_observation_audit(
         self,
@@ -549,7 +556,6 @@ class BacktestExporter:
                 extrasaction="raise",
             )
             writer.writeheader()
-
             for index, lifecycle in enumerate(
                 comparison.setup_lifecycles,
                 start=1,
@@ -590,86 +596,204 @@ class BacktestExporter:
         comparison: BacktestStrategyComparison,
     ) -> Path:
         if not isinstance(comparison, BacktestStrategyComparison):
-            raise TypeError('comparison must be BacktestStrategyComparison')
+            raise TypeError("comparison must be BacktestStrategyComparison")
 
-        path = self.output_directory / 'strategy_post_expiry_triggers.csv'
+        path = self.output_directory / "strategy_post_expiry_triggers.csv"
         fieldnames = (
-            'Setup Number', 'Setup ID', 'Strategy ID', 'Direction',
-            'Expired At', 'Maximum Bars', 'Bars Observed',
-            'Trigger Found', 'First Trigger At', 'Bars After Expiry',
-            'Trigger Type', 'Window Complete',
-            'Geometry Valid', 'Trigger Price',
-            'Invalidation Price', 'Stop Reference Price',
-            'Target Reference Prices', 'Nearest Target Price',
-            'Target Directionally Valid At Trigger',
-            'Target Crossed Before Trigger',
-            'First Target Crossed At', 'Bars Since Target Cross',
-            'Target Distance At First Post Expiry Bar',
-            'Target Distance At Trigger',
-            'Hypothetical Terminal Reason',
-            'Hypothetical Terminal At',
-            'Bars After Expiry At Hypothetical Terminal',
-            'Setup Age Minutes At Hypothetical Terminal',
-            'Trigger Appeared After Hypothetical Terminal',
-            'Candidate Created After Hypothetical Terminal',
-            'Bars From Hypothetical Terminal To Trigger',
-            'Geometry Rejection Code', 'Geometry Rejection Reason',
-            'Entry Price', 'Stop Loss Price',
-            'Take Profit Prices', 'Reward Risk', 'Outcome',
-            'Outcome Timestamp', 'Outcome Bars Evaluated',
-            'Maximum Favorable R Multiple',
-            'Maximum Adverse R Multiple',
-            'Outcome Window Complete',
+            "Setup Number", "Setup ID", "Strategy ID", "Direction",
+            "Expired At", "Maximum Bars", "Bars Observed",
+            "Trigger Found", "First Trigger At", "Bars After Expiry",
+            "Trigger Type", "Window Complete",
+            "Geometry Valid", "Trigger Price",
+            "Invalidation Price", "Stop Reference Price",
+            "Target Reference Prices", "Nearest Target Price",
+            "Target Directionally Valid At Trigger",
+            "Target Crossed Before Trigger",
+            "First Target Crossed At", "Bars Since Target Cross",
+            "Target Distance At First Post Expiry Bar",
+            "Target Distance At Trigger",
+            "Hypothetical Terminal Reason",
+            "Hypothetical Terminal At",
+            "Bars After Expiry At Hypothetical Terminal",
+            "Setup Age Minutes At Hypothetical Terminal",
+            "Trigger Appeared After Hypothetical Terminal",
+            "Candidate Created After Hypothetical Terminal",
+            "Bars From Hypothetical Terminal To Trigger",
+            "Geometry Rejection Code", "Geometry Rejection Reason",
+            "Entry Price", "Stop Loss Price",
+            "Take Profit Prices", "Reward Risk", "Outcome",
+            "Outcome Timestamp", "Outcome Bars Evaluated",
+            "Maximum Favorable R Multiple",
+            "Maximum Adverse R Multiple",
+            "Outcome Window Complete",
         )
-        with path.open('w', newline='', encoding='utf-8') as file:
-            writer = csv.DictWriter(file, fieldnames=list(fieldnames), extrasaction='raise')
+        with path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=list(fieldnames),
+                extrasaction="raise",
+            )
             writer.writeheader()
-            for index, record in enumerate(comparison.post_expiry_triggers, start=1):
-                writer.writerow({
-                    'Setup Number': index,
-                    'Setup ID': record.setup_id,
-                    'Strategy ID': record.strategy_id,
-                    'Direction': record.direction,
-                    'Expired At': record.expired_at.isoformat(),
-                    'Maximum Bars': record.maximum_bars,
-                    'Bars Observed': record.bars_observed,
-                    'Trigger Found': record.trigger_found,
-                    'First Trigger At': record.first_trigger_at.isoformat() if record.first_trigger_at else '',
-                    'Bars After Expiry': record.bars_after_expiry if record.bars_after_expiry is not None else '',
-                    'Trigger Type': record.trigger_type or '',
-                    'Window Complete': record.window_complete,
-                    'Geometry Valid': record.geometry_valid if record.geometry_valid is not None else '',
-                    'Trigger Price': record.trigger_price if record.trigger_price is not None else '',
-                    'Invalidation Price': record.invalidation_price if record.invalidation_price is not None else '',
-                    'Stop Reference Price': record.stop_reference_price if record.stop_reference_price is not None else '',
-                    'Target Reference Prices': json.dumps(record.target_reference_prices),
-                    'Nearest Target Price': record.nearest_target_price if record.nearest_target_price is not None else '',
-                    'Target Directionally Valid At Trigger': record.target_directionally_valid_at_trigger if record.target_directionally_valid_at_trigger is not None else '',
-                    'Target Crossed Before Trigger': record.target_crossed_before_trigger,
-                    'First Target Crossed At': record.first_target_crossed_at.isoformat() if record.first_target_crossed_at is not None else '',
-                    'Bars Since Target Cross': record.bars_since_target_cross if record.bars_since_target_cross is not None else '',
-                    'Target Distance At First Post Expiry Bar': record.target_distance_at_first_post_expiry_bar if record.target_distance_at_first_post_expiry_bar is not None else '',
-                    'Target Distance At Trigger': record.target_distance_at_trigger if record.target_distance_at_trigger is not None else '',
-                    'Hypothetical Terminal Reason': record.hypothetical_terminal_reason or '',
-                    'Hypothetical Terminal At': record.hypothetical_terminal_at.isoformat() if record.hypothetical_terminal_at is not None else '',
-                    'Bars After Expiry At Hypothetical Terminal': record.bars_after_expiry_at_hypothetical_terminal if record.bars_after_expiry_at_hypothetical_terminal is not None else '',
-                    'Setup Age Minutes At Hypothetical Terminal': record.setup_age_minutes_at_hypothetical_terminal if record.setup_age_minutes_at_hypothetical_terminal is not None else '',
-                    'Trigger Appeared After Hypothetical Terminal': record.trigger_appeared_after_hypothetical_terminal,
-                    'Candidate Created After Hypothetical Terminal': record.candidate_created_after_hypothetical_terminal,
-                    'Bars From Hypothetical Terminal To Trigger': record.bars_from_hypothetical_terminal_to_trigger if record.bars_from_hypothetical_terminal_to_trigger is not None else '',
-                    'Geometry Rejection Code': record.geometry_rejection_code or '',
-                    'Geometry Rejection Reason': record.geometry_rejection_reason or '',
-                    'Entry Price': record.entry_price if record.entry_price is not None else '',
-                    'Stop Loss Price': record.stop_loss_price if record.stop_loss_price is not None else '',
-                    'Take Profit Prices': json.dumps(record.take_profit_prices),
-                    'Reward Risk': record.reward_risk if record.reward_risk is not None else '',
-                    'Outcome': record.outcome or '',
-                    'Outcome Timestamp': record.outcome_timestamp.isoformat() if record.outcome_timestamp is not None else '',
-                    'Outcome Bars Evaluated': record.outcome_bars_evaluated,
-                    'Maximum Favorable R Multiple': record.maximum_favorable_r_multiple if record.maximum_favorable_r_multiple is not None else '',
-                    'Maximum Adverse R Multiple': record.maximum_adverse_r_multiple if record.maximum_adverse_r_multiple is not None else '',
-                    'Outcome Window Complete': record.outcome_window_complete,
-                })
+            for index, record in enumerate(
+                comparison.post_expiry_triggers,
+                start=1,
+            ):
+                writer.writerow(
+                    {
+                        "Setup Number": index,
+                        "Setup ID": record.setup_id,
+                        "Strategy ID": record.strategy_id,
+                        "Direction": record.direction,
+                        "Expired At": record.expired_at.isoformat(),
+                        "Maximum Bars": record.maximum_bars,
+                        "Bars Observed": record.bars_observed,
+                        "Trigger Found": record.trigger_found,
+                        "First Trigger At": (
+                            record.first_trigger_at.isoformat()
+                            if record.first_trigger_at
+                            else ""
+                        ),
+                        "Bars After Expiry": (
+                            record.bars_after_expiry
+                            if record.bars_after_expiry is not None
+                            else ""
+                        ),
+                        "Trigger Type": record.trigger_type or "",
+                        "Window Complete": record.window_complete,
+                        "Geometry Valid": (
+                            record.geometry_valid
+                            if record.geometry_valid is not None
+                            else ""
+                        ),
+                        "Trigger Price": (
+                            record.trigger_price
+                            if record.trigger_price is not None
+                            else ""
+                        ),
+                        "Invalidation Price": (
+                            record.invalidation_price
+                            if record.invalidation_price is not None
+                            else ""
+                        ),
+                        "Stop Reference Price": (
+                            record.stop_reference_price
+                            if record.stop_reference_price is not None
+                            else ""
+                        ),
+                        "Target Reference Prices": json.dumps(
+                            record.target_reference_prices
+                        ),
+                        "Nearest Target Price": (
+                            record.nearest_target_price
+                            if record.nearest_target_price is not None
+                            else ""
+                        ),
+                        "Target Directionally Valid At Trigger": (
+                            record.target_directionally_valid_at_trigger
+                            if record.target_directionally_valid_at_trigger
+                            is not None
+                            else ""
+                        ),
+                        "Target Crossed Before Trigger": (
+                            record.target_crossed_before_trigger
+                        ),
+                        "First Target Crossed At": (
+                            record.first_target_crossed_at.isoformat()
+                            if record.first_target_crossed_at is not None
+                            else ""
+                        ),
+                        "Bars Since Target Cross": (
+                            record.bars_since_target_cross
+                            if record.bars_since_target_cross is not None
+                            else ""
+                        ),
+                        "Target Distance At First Post Expiry Bar": (
+                            record.target_distance_at_first_post_expiry_bar
+                            if record.target_distance_at_first_post_expiry_bar
+                            is not None
+                            else ""
+                        ),
+                        "Target Distance At Trigger": (
+                            record.target_distance_at_trigger
+                            if record.target_distance_at_trigger is not None
+                            else ""
+                        ),
+                        "Hypothetical Terminal Reason": (
+                            record.hypothetical_terminal_reason or ""
+                        ),
+                        "Hypothetical Terminal At": (
+                            record.hypothetical_terminal_at.isoformat()
+                            if record.hypothetical_terminal_at is not None
+                            else ""
+                        ),
+                        "Bars After Expiry At Hypothetical Terminal": (
+                            record.bars_after_expiry_at_hypothetical_terminal
+                            if record.bars_after_expiry_at_hypothetical_terminal
+                            is not None
+                            else ""
+                        ),
+                        "Setup Age Minutes At Hypothetical Terminal": (
+                            record.setup_age_minutes_at_hypothetical_terminal
+                            if record.setup_age_minutes_at_hypothetical_terminal
+                            is not None
+                            else ""
+                        ),
+                        "Trigger Appeared After Hypothetical Terminal": (
+                            record.trigger_appeared_after_hypothetical_terminal
+                        ),
+                        "Candidate Created After Hypothetical Terminal": (
+                            record.candidate_created_after_hypothetical_terminal
+                        ),
+                        "Bars From Hypothetical Terminal To Trigger": (
+                            record.bars_from_hypothetical_terminal_to_trigger
+                            if record.bars_from_hypothetical_terminal_to_trigger
+                            is not None
+                            else ""
+                        ),
+                        "Geometry Rejection Code": (
+                            record.geometry_rejection_code or ""
+                        ),
+                        "Geometry Rejection Reason": (
+                            record.geometry_rejection_reason or ""
+                        ),
+                        "Entry Price": (
+                            record.entry_price
+                            if record.entry_price is not None
+                            else ""
+                        ),
+                        "Stop Loss Price": (
+                            record.stop_loss_price
+                            if record.stop_loss_price is not None
+                            else ""
+                        ),
+                        "Take Profit Prices": json.dumps(
+                            record.take_profit_prices
+                        ),
+                        "Reward Risk": (
+                            record.reward_risk
+                            if record.reward_risk is not None
+                            else ""
+                        ),
+                        "Outcome": record.outcome or "",
+                        "Outcome Timestamp": (
+                            record.outcome_timestamp.isoformat()
+                            if record.outcome_timestamp is not None
+                            else ""
+                        ),
+                        "Outcome Bars Evaluated": record.outcome_bars_evaluated,
+                        "Maximum Favorable R Multiple": (
+                            record.maximum_favorable_r_multiple
+                            if record.maximum_favorable_r_multiple is not None
+                            else ""
+                        ),
+                        "Maximum Adverse R Multiple": (
+                            record.maximum_adverse_r_multiple
+                            if record.maximum_adverse_r_multiple is not None
+                            else ""
+                        ),
+                        "Outcome Window Complete": record.outcome_window_complete,
+                    }
+                )
         return path
 
     def export_equity_curve(
@@ -703,11 +827,18 @@ class BacktestExporter:
     def export_statistics(
         self,
         statistics: dict,
+        *,
+        execution_model_provenance: Mapping[str, object] | None = None,
     ) -> Path:
-        """Export JSON-safe ``statistics.json``."""
+        """Export JSON-safe ``statistics.json`` with execution provenance."""
 
+        payload: dict[str, object] = dict(statistics)
+        self._attach_execution_model_provenance(
+            payload,
+            execution_model_provenance,
+        )
         path = self.output_directory / "statistics.json"
-        self._write_json(path, statistics)
+        self._write_json(path, payload)
         return path
 
     def _build_trade_row(
@@ -841,11 +972,15 @@ class BacktestExporter:
             return value
         if isinstance(value, (str, datetime, date, timedelta, Enum)):
             converted = cls._to_json_compatible(value)
-            return converted if not isinstance(converted, (dict, list)) else json.dumps(
-                converted,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
+            return (
+                converted
+                if not isinstance(converted, (dict, list))
+                else json.dumps(
+                    converted,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
             )
         converted = cls._to_json_compatible(value)
         if isinstance(converted, (dict, list)):
@@ -919,3 +1054,22 @@ class BacktestExporter:
                 active_ids.remove(value_id)
 
         return str(value)
+
+    @classmethod
+    def _attach_execution_model_provenance(
+        cls,
+        payload: dict[str, object],
+        provenance: Mapping[str, object] | None,
+    ) -> None:
+        if provenance is None:
+            return
+        if not isinstance(provenance, Mapping):
+            raise TypeError("execution_model_provenance must be a mapping or None")
+        normalized = cls._to_json_compatible(dict(provenance))
+        if not isinstance(normalized, dict):
+            raise TypeError("execution model provenance must serialize to a mapping")
+        model_id = normalized.get("execution_model_id")
+        if not isinstance(model_id, str) or not model_id:
+            raise ValueError("execution model provenance requires execution_model_id")
+        payload["execution_model_id"] = model_id
+        payload["execution_model"] = normalized

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 import MetaTrader5 as mt5
 
-from core.backtesting.config import BacktestConfig
+from core.backtesting.config import BacktestConfig, BacktestExecutionModel
 from core.backtesting.runner import BacktestRunner
 from core.data.market_data import MarketDataService
 from core.data.models import MarketBar
@@ -72,7 +72,10 @@ class TradingPlatform:
         try:
             execution_profile = pinned_xauusd_research_profile()
             symbol = execution_profile.instrument.symbol
-            config = BacktestConfig(execution_profile=execution_profile)
+            config = BacktestConfig(
+                execution_profile=execution_profile,
+                execution_model=BacktestExecutionModel.M5_COMPLETED_OHLC_V2,
+            )
             runner = BacktestRunner(config)
             result = runner.run(
                 symbol=symbol,

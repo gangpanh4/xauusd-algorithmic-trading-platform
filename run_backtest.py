@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 import MetaTrader5 as mt5
 
-from core.backtesting.config import BacktestConfig
+from core.backtesting.config import BacktestConfig, BacktestExecutionModel
 from core.backtesting.runner import BacktestRunner
 from core.execution_economics.profiles import (
     pinned_xauusd_research_profile,
@@ -43,7 +43,10 @@ def main() -> None:
 
         execution_profile = pinned_xauusd_research_profile()
         symbol = execution_profile.instrument.symbol
-        config = BacktestConfig(execution_profile=execution_profile)
+        config = BacktestConfig(
+            execution_profile=execution_profile,
+            execution_model=BacktestExecutionModel.M5_COMPLETED_OHLC_V2,
+        )
 
         runner = BacktestRunner(config)
 
@@ -54,6 +57,15 @@ def main() -> None:
         print(
             "Window end UTC  : "
             f"{HISTORICAL_END_TIME.isoformat()}"
+        )
+        execution_model = config.execution_model_provenance()
+        print(f"Execution model : {config.execution_model.value}")
+        print(f"Entry policy    : {execution_model['entry_policy']}")
+        print(f"Entry clock     : {execution_model['entry_clock']}")
+        print(f"Lifecycle clock : {execution_model['lifecycle_clock']}")
+        print(
+            "Closed-bar use  : "
+            f"{execution_model['closed_bar_consumption']}"
         )
         instrument = execution_profile.instrument
         costs = execution_profile.costs

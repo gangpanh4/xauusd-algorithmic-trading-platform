@@ -1,9 +1,9 @@
 """Deterministic historical trade execution simulation.
 
 The simulator supports both a compatibility batch API and an incremental
-one-completed-bar lifecycle.  A signal observed on ``observation_bar`` is
-filled at the open of the next completed bar, so historical execution never
-uses an unavailable signal-candle close.
+one-completed-bar lifecycle. A signal observed on ``observation_bar`` is filled
+using the selected versioned execution clock; lifecycle OHLC is consumed only
+after the corresponding execution bar has completed.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from core.regime_detector.models import MarketBar
 from core.risk_manager.models import RiskDecision, TradePlan
 from core.signal_generator.models import SignalDirection
 
+from .config import BacktestExecutionModel
 from .models import BacktestTrade, ExitReason, TradeOutcome
 
 
@@ -84,10 +85,10 @@ class IncrementalTradeSimulation:
     """State owned by the one-bar-at-a-time simulation API.
 
     A simulation starts in :attr:`SimulationPhase.PENDING_ENTRY`. The first
-    completed bar after ``observation_bar`` supplies the market-entry fill and
-    is also evaluated for stop/target interaction. The object then remains
-    open until :meth:`TradeSimulator.process_bar` returns a completed trade or
-    :meth:`TradeSimulator.finalize_at_end_of_data` is called.
+    completed execution bar supplied by the engine provides the market-entry
+    reference and is also evaluated for stop/target interaction. The object
+    remains open until :meth:`TradeSimulator.process_bar` returns a completed
+    trade or :meth:`TradeSimulator.finalize_at_end_of_data` is called.
     """
 
     trade_plan: TradePlan
@@ -148,17 +149,25 @@ class TradeSimulator:
         commission_per_trade: float | None = None,
         commission_per_lot: float | None = None,
         execution_profile: ExecutionEconomicsProfile | None = None,
+        execution_model: BacktestExecutionModel = (
+            BacktestExecutionModel.M15_COMPLETED_OHLC_V1
+        ),
         breakeven_enabled: bool = True,
         recenter_exit_levels_on_fill: bool = True,
     ) -> None:
         if not isinstance(execution_policy, ExecutionPolicy):
             raise TypeError("execution_policy must be an ExecutionPolicy")
+        if not isinstance(execution_model, BacktestExecutionModel):
+            raise TypeError(
+                "execution_model must be a BacktestExecutionModel"
+            )
         if not isinstance(breakeven_enabled, bool):
             raise TypeError("breakeven_enabled must be a bool")
         if not isinstance(recenter_exit_levels_on_fill, bool):
             raise TypeError("recenter_exit_levels_on_fill must be a bool")
 
         self.execution_policy = execution_policy
+        self.execution_model = execution_model
         self._tick_size = self._validate_optional_positive(
             tick_size,
             "tick_size",
@@ -465,6 +474,7 @@ class TradeSimulator:
         net_r_multiple = (
             net_profit / monetary_risk if monetary_risk > 0.0 else 0.0
         )
+        execution_model = self.execution_model.provenance()
         execution_trace = (
             BacktestExecutionTrace(
                 observation_timestamp=simulation.observation_bar.timestamp,
@@ -480,6 +490,40 @@ class TradeSimulator:
                 effective_take_profit=take_profit,
                 position_size=trade_plan.position_size,
                 execution_profile=self.execution_profile,
+                execution_model_id=str(
+                    execution_model["execution_model_id"]
+                ),
+                decision_clock=str(execution_model["decision_clock"]),
+                decision_available_after_minutes=int(
+                    execution_model["decision_available_after_minutes"]
+                ),
+                entry_policy=str(execution_model["entry_policy"]),
+                entry_clock=str(execution_model["entry_clock"]),
+                lifecycle_clock=str(execution_model["lifecycle_clock"]),
+                lifecycle_bar_minutes=int(
+                    execution_model["lifecycle_bar_minutes"]
+                ),
+                closed_bar_consumption=str(
+                    execution_model["closed_bar_consumption"]
+                ),
+                same_bar_entry_exit_evaluation=bool(
+                    execution_model["same_bar_entry_exit_evaluation"]
+                ),
+                intra_bar_ambiguity_policy=str(
+                    execution_model["intra_bar_ambiguity_policy"]
+                ),
+                gap_stop_policy=str(execution_model["gap_stop_policy"]),
+                gap_target_policy=str(execution_model["gap_target_policy"]),
+                breakeven_activation_policy=str(
+                    execution_model["breakeven_activation_policy"]
+                ),
+                exit_timestamp_semantics=str(
+                    execution_model["exit_timestamp_semantics"]
+                ),
+                comparable_with_unversioned_results=bool(
+                    execution_model["comparable_with_unversioned_results"]
+                ),
+                simulation_clock=str(execution_model["lifecycle_clock"]),
             )
             if self.execution_profile is not None
             else None
@@ -495,6 +539,22 @@ class TradeSimulator:
             "signal_observation_time": (
                 simulation.observation_bar.timestamp.isoformat()
             ),
+            "decision_available_at": (
+                simulation.observation_bar.timestamp + timedelta(minutes=5)
+            ).isoformat(),
+            "entry_reference_timestamp": fill_bar.timestamp.isoformat(),
+            "entry_bar_completed_at": (
+                fill_bar.timestamp
+                + timedelta(
+                    minutes=int(execution_model["lifecycle_bar_minutes"])
+                )
+            ).isoformat(),
+            "first_lifecycle_evaluation_available_at": (
+                fill_bar.timestamp
+                + timedelta(
+                    minutes=int(execution_model["lifecycle_bar_minutes"])
+                )
+            ).isoformat(),
             "reference_entry_price": reference_entry_price,
             "actual_entry_price": state.entry_price,
             "planned_entry_price": trade_plan.entry_price,
@@ -524,7 +584,37 @@ class TradeSimulator:
             "monetary_risk": monetary_risk,
             "same_bar_exit": fill_bar.timestamp == exit_bar.timestamp,
             "execution_policy": self.execution_policy.value,
-            "entry_policy": "NEXT_BAR_OPEN",
+            "entry_policy": execution_model["entry_policy"],
+            "execution_model_id": execution_model["execution_model_id"],
+            "decision_clock": execution_model["decision_clock"],
+            "decision_available_after_minutes": execution_model[
+                "decision_available_after_minutes"
+            ],
+            "entry_clock": execution_model["entry_clock"],
+            "lifecycle_clock": execution_model["lifecycle_clock"],
+            "lifecycle_bar_minutes": execution_model[
+                "lifecycle_bar_minutes"
+            ],
+            "closed_bar_consumption": execution_model[
+                "closed_bar_consumption"
+            ],
+            "same_bar_entry_exit_evaluation": execution_model[
+                "same_bar_entry_exit_evaluation"
+            ],
+            "intra_bar_ambiguity_policy": execution_model[
+                "intra_bar_ambiguity_policy"
+            ],
+            "gap_stop_policy": execution_model["gap_stop_policy"],
+            "gap_target_policy": execution_model["gap_target_policy"],
+            "breakeven_activation_policy": execution_model[
+                "breakeven_activation_policy"
+            ],
+            "exit_timestamp_semantics": execution_model[
+                "exit_timestamp_semantics"
+            ],
+            "comparable_with_unversioned_results": execution_model[
+                "comparable_with_unversioned_results"
+            ],
             "exit_levels_recentered": self.recenter_exit_levels_on_fill,
             "legacy_unit_economics_fallback": (
                 simulation.used_legacy_economics

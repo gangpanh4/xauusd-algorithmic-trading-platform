@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import MetaTrader5 as mt5
 
-from core.backtesting.config import BacktestConfig
+from core.backtesting.config import BacktestConfig, BacktestExecutionModel
 from core.backtesting.models import BacktestResult
 from core.backtesting.runner import BacktestRunner
 from core.regime_detector.models import MarketBar
@@ -49,6 +49,7 @@ class _Engine:
     multi_timeframe_window_bars = 500
 
     def run(self, context: object) -> BacktestResult:
+        del context
         return _result()
 
 
@@ -87,11 +88,16 @@ def test_runner_forwards_explicit_historical_boundary() -> None:
     ]
     assert runner._last_requested_end_time == boundary
     assert runner._last_actual_window["requested_eligible_m5_bars"] == 20_000
-    assert runner._last_actual_window["requested_end_time"] == (
-        boundary.isoformat()
-    )
+    assert runner._last_actual_window["requested_end_time"] == boundary.isoformat()
     assert runner._last_actual_window["closed_candle_only"] is True
     assert runner._last_actual_window["no_lookahead"] is True
+    assert runner._last_actual_window["execution_model_id"] == (
+        "M15_COMPLETED_OHLC_V1"
+    )
+    assert runner._last_actual_window["entry_clock"] == "M15"
+    assert runner._last_actual_window["lifecycle_clock"] == "M15_COMPLETED"
+    assert runner._last_actual_window["lifecycle_bar_minutes"] == 15
+    assert runner._last_actual_window["comparable_with_unversioned_results"] is False
     economics = runner._last_actual_window["execution_economics"]
     assert economics["contract"] == "DETERMINISTIC_HYBRID"
     assert economics["historical_price_side"] == "UNKNOWN_SINGLE_PRICE"
@@ -165,6 +171,32 @@ def test_window_metadata_records_actual_timeframe_ranges() -> None:
     costs = runner._last_actual_window["execution_cost_assumptions"]
     assert costs["spread_source"] == "PINNED_EXPLICIT_ASSUMPTION"
     assert costs["historical_spread_field_used"] is False
+
+
+def test_v2_window_metadata_declares_completed_m5_execution_clock() -> None:
+    config = BacktestConfig(
+        execution_model=BacktestExecutionModel.M5_COMPLETED_OHLC_V2
+    )
+    runner = BacktestRunner(config)
+    runner.loader = SimpleNamespace(load=lambda **kwargs: _context())
+    runner.engine = _Engine()
+
+    runner.run(
+        symbol="XAUUSD",
+        timeframe=mt5.TIMEFRAME_M5,
+        bars=100,
+    )
+
+    provenance = runner._last_actual_window["execution_model"]
+    assert provenance["execution_model_id"] == "M5_COMPLETED_OHLC_V2"
+    assert provenance["decision_available_after_minutes"] == 5
+    assert provenance["entry_policy"] == "NEXT_AVAILABLE_M5_OPEN"
+    assert provenance["entry_clock"] == "M5"
+    assert provenance["lifecycle_clock"] == "M5_COMPLETED"
+    assert provenance["lifecycle_bar_minutes"] == 5
+    assert provenance["closed_bar_consumption"] == "ONLY_AFTER_BAR_COMPLETES"
+    assert provenance["comparable_with_unversioned_results"] is False
+    assert runner._last_actual_window["simulation_clock"] == "M5_COMPLETED"
 
 
 def test_runner_rejects_m15_decision_clock() -> None:

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.backtesting.config import BacktestExecutionModel
 from core.platform import engine as platform_engine
 
 
@@ -45,6 +46,7 @@ def test_platform_backtest_uses_pinned_profile_without_live_spec_lookup(
     config = captured["config"]
     profile = config.resolved_execution_profile()
     assert config.execution_profile is profile
+    assert config.execution_model is BacktestExecutionModel.M5_COMPLETED_OHLC_V2
     assert profile.instrument.symbol == "XAUUSD"
     assert profile.instrument.historical_specification_verified is False
     assert profile.instrument.contract_size is None

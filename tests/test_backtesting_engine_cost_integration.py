@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.backtesting.config import BacktestConfig
+from core.backtesting.config import BacktestConfig, BacktestExecutionModel
 from core.backtesting.engine import BacktestingEngine
 from core.execution_economics.profiles import (
     pinned_xauusd_research_profile,
@@ -133,6 +133,9 @@ def test_engine_constructs_simulator_from_backtest_cost_config() -> None:
     assert engine.simulator._slippage_points == pytest.approx(1.0)
     assert engine.simulator._commission_per_trade == pytest.approx(0.5)
     assert engine.simulator._commission_per_lot == pytest.approx(2.0)
+    assert engine.simulator.execution_model is (
+        BacktestExecutionModel.M15_COMPLETED_OHLC_V1
+    )
 
 
 def test_explicit_execution_profile_is_authoritative_in_engine() -> None:
@@ -155,6 +158,40 @@ def test_explicit_execution_profile_is_authoritative_in_engine() -> None:
     assert engine.simulator._spread_points == pytest.approx(
         profile.costs.spread_points
     )
+
+
+def test_v2_changes_simulation_clock_without_changing_cost_configuration() -> None:
+    common = dict(
+        spread_points=2.0,
+        slippage_points=1.0,
+        commission_per_trade=0.5,
+        commission_per_lot=2.0,
+    )
+    v1 = BacktestingEngine(
+        BacktestConfig(
+            execution_model=BacktestExecutionModel.M15_COMPLETED_OHLC_V1,
+            **common,
+        ),
+        tick_size=0.01,
+        tick_value_per_lot=1.25,
+    )
+    v2 = BacktestingEngine(
+        BacktestConfig(
+            execution_model=BacktestExecutionModel.M5_COMPLETED_OHLC_V2,
+            **common,
+        ),
+        tick_size=0.01,
+        tick_value_per_lot=1.25,
+    )
+
+    assert v1.simulator._spread_points == v2.simulator._spread_points
+    assert v1.simulator._slippage_points == v2.simulator._slippage_points
+    assert v1.simulator._commission_per_trade == v2.simulator._commission_per_trade
+    assert v1.simulator._commission_per_lot == v2.simulator._commission_per_lot
+    assert v1.simulator._tick_size == v2.simulator._tick_size
+    assert v1.simulator._tick_value_per_lot == v2.simulator._tick_value_per_lot
+    assert v1.simulator.execution_model is BacktestExecutionModel.M15_COMPLETED_OHLC_V1
+    assert v2.simulator.execution_model is BacktestExecutionModel.M5_COMPLETED_OHLC_V2
 
 
 def test_engine_applies_configured_costs_to_full_backtest_trade() -> None:
@@ -188,5 +225,9 @@ def test_engine_applies_configured_costs_to_full_backtest_trade() -> None:
     assert pipeline.opened == 1
     assert pipeline.closed == 1
     assert pipeline.completed == [
-        (pytest.approx(99.0), BASE_TIME + timedelta(minutes=15), pytest.approx(10_099.0))
+        (
+            pytest.approx(99.0),
+            BASE_TIME + timedelta(minutes=15),
+            pytest.approx(10_099.0),
+        )
     ]

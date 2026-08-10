@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.backtesting.config import BacktestConfig
+from core.backtesting.config import BacktestConfig, BacktestExecutionModel
 from core.backtesting.engine import BacktestingEngine
 from core.backtesting.models import ExitReason
 from core.backtesting.simulator import TradeSimulator
@@ -131,6 +131,7 @@ def make_engine(
     engine.simulator = NoBatchSimulator(
         tick_size=0.01,
         tick_value_per_lot=1.0,
+        execution_model=BacktestExecutionModel.M15_COMPLETED_OHLC_V1,
         breakeven_enabled=False,
     )
     return engine, pipeline
@@ -151,6 +152,9 @@ def test_engine_uses_incremental_simulator_without_batch_scan() -> None:
     assert result.trades[0].exit_time == bars[1].timestamp
     assert result.trades[0].metadata["simulation_mode"] == (
         "INCREMENTAL_BAR_LIFECYCLE"
+    )
+    assert result.trades[0].metadata["execution_model_id"] == (
+        "M15_COMPLETED_OHLC_V1"
     )
     assert pipeline.opened == 1
     assert pipeline.closed == 1

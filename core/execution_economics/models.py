@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from math import isfinite
 
@@ -274,7 +274,7 @@ class ExecutionEconomicsProfile:
 
 @dataclass(frozen=True, slots=True)
 class BacktestExecutionTrace:
-    """Economics trace for one completed M15-simulated trade."""
+    """Execution-economics trace with versioned simulator-clock provenance."""
 
     observation_timestamp: datetime
     decision_available_at: datetime
@@ -286,8 +286,25 @@ class BacktestExecutionTrace:
     effective_take_profit: float
     position_size: float
     execution_profile: ExecutionEconomicsProfile
-    entry_policy: str = "NEXT_M15_OPEN"
+    execution_model_id: str = "M15_COMPLETED_OHLC_V1"
     decision_clock: str = "M5"
+    decision_available_after_minutes: int = 5
+    entry_policy: str = "NEXT_M15_OPEN"
+    entry_clock: str = "M15"
+    lifecycle_clock: str = "M15_COMPLETED"
+    lifecycle_bar_minutes: int = 15
+    closed_bar_consumption: str = "ONLY_AFTER_BAR_COMPLETES"
+    same_bar_entry_exit_evaluation: bool = True
+    intra_bar_ambiguity_policy: str = "CONSERVATIVE_STOP_FIRST"
+    gap_stop_policy: str = "BAR_OPEN_WITH_ADVERSE_SLIPPAGE"
+    gap_target_policy: str = "TARGET_PRICE_NO_FAVORABLE_GAP_IMPROVEMENT"
+    breakeven_activation_policy: str = (
+        "PENDING_AFTER_TRIGGER_BAR_ACTIVE_NEXT_LIFECYCLE_BAR"
+    )
+    exit_timestamp_semantics: str = (
+        "LIFECYCLE_BAR_OPEN_TIMESTAMP_INTRABAR_TIME_UNKNOWN"
+    )
+    comparable_with_unversioned_results: bool = False
     simulation_clock: str = "M15_COMPLETED"
 
     def __post_init__(self) -> None:
@@ -303,13 +320,31 @@ class BacktestExecutionTrace:
             self.actual_entry_timestamp,
             "actual_entry_timestamp",
         )
+        for name in (
+            "decision_available_after_minutes",
+            "lifecycle_bar_minutes",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
         if self.decision_available_at <= self.observation_timestamp:
             raise ValueError(
                 "decision_available_at must follow observation_timestamp"
             )
-        if self.actual_entry_timestamp <= self.observation_timestamp:
+        expected_decision_available_at = (
+            self.observation_timestamp
+            + timedelta(minutes=self.decision_available_after_minutes)
+        )
+        if self.decision_available_at != expected_decision_available_at:
             raise ValueError(
-                "actual_entry_timestamp must follow observation_timestamp"
+                "decision_available_at must equal observation_timestamp plus "
+                "decision_available_after_minutes"
+            )
+        if self.actual_entry_timestamp < self.decision_available_at:
+            raise ValueError(
+                "actual_entry_timestamp cannot precede decision_available_at"
             )
         for name in (
             "planned_entry_price",
@@ -324,9 +359,30 @@ class BacktestExecutionTrace:
             raise TypeError(
                 "execution_profile must be an ExecutionEconomicsProfile"
             )
-        _require_nonempty(self.entry_policy, "entry_policy")
-        _require_nonempty(self.decision_clock, "decision_clock")
-        _require_nonempty(self.simulation_clock, "simulation_clock")
+        for name in (
+            "execution_model_id",
+            "decision_clock",
+            "entry_policy",
+            "entry_clock",
+            "lifecycle_clock",
+            "closed_bar_consumption",
+            "intra_bar_ambiguity_policy",
+            "gap_stop_policy",
+            "gap_target_policy",
+            "breakeven_activation_policy",
+            "exit_timestamp_semantics",
+            "simulation_clock",
+        ):
+            _require_nonempty(getattr(self, name), name)
+        if not isinstance(self.same_bar_entry_exit_evaluation, bool):
+            raise TypeError("same_bar_entry_exit_evaluation must be a bool")
+        if not isinstance(self.comparable_with_unversioned_results, bool):
+            raise TypeError("comparable_with_unversioned_results must be a bool")
+        if self.comparable_with_unversioned_results:
+            raise ValueError(
+                "versioned execution results cannot be silently treated as "
+                "equivalent to unversioned historical results"
+            )
 
     def to_dict(self) -> dict[str, object]:
         """Return a compact JSON-compatible trade trace."""
@@ -349,14 +405,44 @@ class BacktestExecutionTrace:
             "actual_entry_timestamp": self.actual_entry_timestamp.astimezone(
                 UTC
             ).isoformat(),
+            "entry_reference_timestamp": self.actual_entry_timestamp.astimezone(
+                UTC
+            ).isoformat(),
+            "entry_bar_completed_at": (
+                self.actual_entry_timestamp.astimezone(UTC)
+                + timedelta(minutes=self.lifecycle_bar_minutes)
+            ).isoformat(),
+            "first_lifecycle_evaluation_available_at": (
+                self.actual_entry_timestamp.astimezone(UTC)
+                + timedelta(minutes=self.lifecycle_bar_minutes)
+            ).isoformat(),
             "planned_entry_price": self.planned_entry_price,
             "reference_entry_price": self.reference_entry_price,
             "simulated_fill_price": self.simulated_fill_price,
             "effective_stop_loss": self.effective_stop_loss,
             "effective_take_profit": self.effective_take_profit,
             "position_size": self.position_size,
-            "entry_policy": self.entry_policy,
+            "execution_model_id": self.execution_model_id,
             "decision_clock": self.decision_clock,
+            "decision_available_after_minutes": (
+                self.decision_available_after_minutes
+            ),
+            "entry_policy": self.entry_policy,
+            "entry_clock": self.entry_clock,
+            "lifecycle_clock": self.lifecycle_clock,
+            "lifecycle_bar_minutes": self.lifecycle_bar_minutes,
+            "closed_bar_consumption": self.closed_bar_consumption,
+            "same_bar_entry_exit_evaluation": (
+                self.same_bar_entry_exit_evaluation
+            ),
+            "intra_bar_ambiguity_policy": self.intra_bar_ambiguity_policy,
+            "gap_stop_policy": self.gap_stop_policy,
+            "gap_target_policy": self.gap_target_policy,
+            "breakeven_activation_policy": self.breakeven_activation_policy,
+            "exit_timestamp_semantics": self.exit_timestamp_semantics,
+            "comparable_with_unversioned_results": (
+                self.comparable_with_unversioned_results
+            ),
             "simulation_clock": self.simulation_clock,
             "execution_profile_id": profile.profile_id,
             "instrument_specification_id": instrument.specification_id,

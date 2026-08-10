@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from core.backtesting.config import BacktestExecutionModel
 from core.backtesting.exporter import BacktestExporter
 from core.backtesting.models import (
     BacktestResult,
@@ -90,6 +91,9 @@ def test_trade_log_exports_research_evidence_and_dynamic_metadata(
         "slippage_points": 0.5,
         "gross_r_multiple": 2.0,
         "net_r_multiple": 1.992,
+        "execution_model_id": "M5_COMPLETED_OHLC_V2",
+        "entry_clock": "M5",
+        "lifecycle_clock": "M5_COMPLETED",
         "custom": {
             "evidence": ExampleEvidence.CONFIRMED,
             "values": [1, 2, 3],
@@ -113,6 +117,9 @@ def test_trade_log_exports_research_evidence_and_dynamic_metadata(
     assert row["Trade Quality Level"] == "HIGH"
     assert row["BOS Present"] == "True"
     assert row["Gross R Multiple"] == "2.0"
+    assert row["Execution Model ID"] == "M5_COMPLETED_OHLC_V2"
+    assert row["Entry Clock"] == "M5"
+    assert row["Lifecycle Clock"] == "M5_COMPLETED"
     assert row["Metadata:custom.evidence"] == "CONFIRMED"
     assert row["Metadata:custom.values"] == "[1,2,3]"
 
@@ -135,6 +142,7 @@ def test_missing_evidence_is_blank_not_fabricated_zero(tmp_path: Path) -> None:
     assert row["CHOCH Present"] == ""
     assert row["Liquidity Present"] == ""
     assert row["Confluence Score"] == ""
+    assert row["Execution Model ID"] == ""
 
 
 def test_summary_exports_complete_observability_metrics(tmp_path: Path) -> None:
@@ -150,6 +158,34 @@ def test_summary_exports_complete_observability_metrics(tmp_path: Path) -> None:
     assert payload["average_trade_quality_confidence"] == 0.95
     assert payload["high_quality_trades"] == 1
     assert "rejected_quality_trades" in payload
+
+
+def test_summary_and_statistics_export_execution_model_provenance(
+    tmp_path: Path,
+) -> None:
+    exporter = BacktestExporter(tmp_path)
+    provenance = BacktestExecutionModel.M5_COMPLETED_OHLC_V2.provenance()
+
+    summary_path = exporter.export_summary(
+        _result([_trade()]),
+        execution_model_provenance=provenance,
+    )
+    statistics_path = exporter.export_statistics(
+        {"trades": 1},
+        execution_model_provenance=provenance,
+    )
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    statistics = json.loads(statistics_path.read_text(encoding="utf-8"))
+    for payload in (summary, statistics):
+        assert payload["execution_model_id"] == "M5_COMPLETED_OHLC_V2"
+        assert payload["execution_model"]["entry_policy"] == (
+            "NEXT_AVAILABLE_M5_OPEN"
+        )
+        assert payload["execution_model"]["lifecycle_bar_minutes"] == 5
+        assert payload["execution_model"][
+            "comparable_with_unversioned_results"
+        ] is False
 
 
 def test_equity_curve_preserves_existing_two_column_schema(tmp_path: Path) -> None:
