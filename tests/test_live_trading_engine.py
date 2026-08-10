@@ -367,8 +367,28 @@ def test_restart_creates_new_shadow_session_metadata(tmp_path) -> None:
     assert rows[1]["session_id"] == second_session_id
 
 
-def test_multi_timeframe_records_analysis_only_parity_evidence(tmp_path) -> None:
+def test_multi_timeframe_records_analysis_only_parity_evidence(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.live_trading import engine as live_trading_engine_module
+    from core.live_trading.parity_provenance import (
+        M5_ANALYTICAL_CONTRACT_V1,
+        ParityAnalyticalProvenance,
+    )
     from core.multi_timeframe.enums import Timeframe
+
+    source_commit = "a" * 40
+    config_fingerprint = "b" * 64
+    monkeypatch.setattr(
+        live_trading_engine_module,
+        "current_parity_provenance",
+        lambda _config: ParityAnalyticalProvenance(
+            analytical_contract_version=M5_ANALYTICAL_CONTRACT_V1,
+            source_commit=source_commit,
+            pipeline_config_fingerprint=config_fingerprint,
+        ),
+    )
 
     path = tmp_path / "parity.jsonl"
     engine = LiveTradingEngine(
@@ -416,6 +436,13 @@ def test_multi_timeframe_records_analysis_only_parity_evidence(tmp_path) -> None
 
     assert result.trade_executed is False
     payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 2
+    assert (
+        payload["analytical_contract_version"]
+        == M5_ANALYTICAL_CONTRACT_V1
+    )
+    assert payload["source_commit"] == source_commit
+    assert payload["pipeline_config_fingerprint"] == config_fingerprint
     assert payload["observation_timestamp"] == bar.timestamp.isoformat()
     assert payload["live_execution_enabled"] is False
     assert payload["shadow_only"] is True

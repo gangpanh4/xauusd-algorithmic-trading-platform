@@ -19,6 +19,13 @@ from core.trading_pipeline.models import (
     PipelineStage,
 )
 
+from .execution_concurrency import LocalExecutionLock, build_execution_lock_path
+from .parity_provenance import (
+    PARITY_EVIDENCE_SCHEMA_VERSION,
+    validate_pipeline_config_fingerprint,
+    validate_source_commit,
+)
+
 _REQUIRED_TIMEFRAMES = tuple(Timeframe)
 
 
@@ -39,6 +46,14 @@ def _require_finite(value: float, name: str, *, positive: bool = False) -> float
     if positive and numeric <= 0.0:
         raise ValueError(f"{name} must be greater than zero")
     return numeric
+
+
+def _require_contract(value: str | None) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(
+            "analytical_contract_version must be a non-empty exact string"
+        )
+    return value
 
 
 def _bar_payload(bar: MarketBar) -> dict[str, object]:
@@ -120,7 +135,9 @@ def audit_from_payload(payload: Mapping[str, object]) -> PipelineObservationAudi
             disposition=PipelineDisposition(str(payload["disposition"])),
             stage_reached=PipelineStage(str(payload["stage_reached"])),
             rejection_stage=(PipelineStage(str(rejection)) if rejection else None),
-            reason_code=(str(payload["reason_code"]) if payload.get("reason_code") else None),
+            reason_code=(
+                str(payload["reason_code"]) if payload.get("reason_code") else None
+            ),
             reason=(str(payload["reason"]) if payload.get("reason") else None),
             regime_confirmed=bool(payload["regime_confirmed"]),
             bos_present=bool(payload["bos_present"]),
@@ -130,19 +147,22 @@ def audit_from_payload(payload: Mapping[str, object]) -> PipelineObservationAudi
             probability_calculated=bool(payload["probability_calculated"]),
             probability_accepted=bool(payload["probability_accepted"]),
             probability_value=(
-                None if payload.get("probability_value") is None
+                None
+                if payload.get("probability_value") is None
                 else float(payload["probability_value"])
             ),
             trade_quality_calculated=bool(payload["trade_quality_calculated"]),
             trade_quality_approved=bool(payload["trade_quality_approved"]),
             trade_quality_score=(
-                None if payload.get("trade_quality_score") is None
+                None
+                if payload.get("trade_quality_score") is None
                 else float(payload["trade_quality_score"])
             ),
             confluence_available=bool(payload["confluence_available"]),
             confluence_approved=bool(payload["confluence_approved"]),
             confluence_score=(
-                None if payload.get("confluence_score") is None
+                None
+                if payload.get("confluence_score") is None
                 else float(payload["confluence_score"])
             ),
             signal_generated=bool(payload["signal_generated"]),
@@ -168,22 +188,70 @@ class LiveParityEvidence:
     minimum_lot: float | None
     maximum_lot: float | None
     expected_audit: PipelineObservationAudit
+    analytical_contract_version: str | None = None
+    source_commit: str | None = None
+    pipeline_config_fingerprint: str | None = None
     live_execution_enabled: bool = False
     shadow_only: bool = True
     trade_executed: bool = False
-    schema_version: int = 1
+    schema_version: int = PARITY_EVIDENCE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "captured_at", _require_aware_utc(self.captured_at, "captured_at"))
+        object.__setattr__(
+            self,
+            "captured_at",
+            _require_aware_utc(self.captured_at, "captured_at"),
+        )
         object.__setattr__(
             self,
             "observation_timestamp",
-            _require_aware_utc(self.observation_timestamp, "observation_timestamp"),
+            _require_aware_utc(
+                self.observation_timestamp,
+                "observation_timestamp",
+            ),
         )
         if not isinstance(self.symbol, str) or not self.symbol.strip():
             raise ValueError("symbol must be a non-empty string")
-        if self.schema_version != 1:
+        if self.schema_version not in {1, PARITY_EVIDENCE_SCHEMA_VERSION}:
             raise ValueError("unsupported parity evidence schema_version")
+
+        if self.schema_version == 1:
+            if any(
+                value is not None
+                for value in (
+                    self.analytical_contract_version,
+                    self.source_commit,
+                    self.pipeline_config_fingerprint,
+                )
+            ):
+                raise ValueError(
+                    "schema-v1 evidence cannot claim analytical provenance"
+                )
+        else:
+            object.__setattr__(
+                self,
+                "analytical_contract_version",
+                _require_contract(self.analytical_contract_version),
+            )
+            if self.source_commit is None:
+                raise ValueError("source_commit is required for schema-v2 evidence")
+            if self.pipeline_config_fingerprint is None:
+                raise ValueError(
+                    "pipeline_config_fingerprint is required for schema-v2 evidence"
+                )
+            object.__setattr__(
+                self,
+                "source_commit",
+                validate_source_commit(self.source_commit),
+            )
+            object.__setattr__(
+                self,
+                "pipeline_config_fingerprint",
+                validate_pipeline_config_fingerprint(
+                    self.pipeline_config_fingerprint
+                ),
+            )
+
         if self.live_execution_enabled or not self.shadow_only or self.trade_executed:
             raise ValueError("parity evidence must remain analysis-only")
 
@@ -197,11 +265,16 @@ class LiveParityEvidence:
                 for bar in values
             ]
             if any(current <= prior for prior, current in pairwise(timestamps)):
-                raise ValueError(f"{timeframe.value} parity history must increase strictly")
+                raise ValueError(
+                    f"{timeframe.value} parity history must increase strictly"
+                )
             normalized[timeframe] = values
         object.__setattr__(self, "bars_by_timeframe", normalized)
 
-        if normalized[Timeframe.M5][-1].timestamp.astimezone(UTC) != self.observation_timestamp:
+        if (
+            normalized[Timeframe.M5][-1].timestamp.astimezone(UTC)
+            != self.observation_timestamp
+        ):
             raise ValueError("latest M5 bar must match observation_timestamp")
         if self.expected_audit.timestamp != self.observation_timestamp:
             raise ValueError("expected audit timestamp must match observation_timestamp")
@@ -213,11 +286,19 @@ class LiveParityEvidence:
             ("tick_size", True),
             ("lot_step", True),
         ):
-            object.__setattr__(self, name, _require_finite(getattr(self, name), name, positive=positive))
+            object.__setattr__(
+                self,
+                name,
+                _require_finite(getattr(self, name), name, positive=positive),
+            )
         for name in ("minimum_lot", "maximum_lot"):
             value = getattr(self, name)
             if value is not None:
-                object.__setattr__(self, name, _require_finite(value, name, positive=True))
+                object.__setattr__(
+                    self,
+                    name,
+                    _require_finite(value, name, positive=True),
+                )
         if (
             self.minimum_lot is not None
             and self.maximum_lot is not None
@@ -226,7 +307,7 @@ class LiveParityEvidence:
             raise ValueError("minimum_lot cannot exceed maximum_lot")
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "schema_version": self.schema_version,
             "captured_at": self.captured_at.isoformat(),
             "observation_timestamp": self.observation_timestamp.isoformat(),
@@ -247,17 +328,33 @@ class LiveParityEvidence:
             "shadow_only": self.shadow_only,
             "trade_executed": self.trade_executed,
         }
+        if self.schema_version == PARITY_EVIDENCE_SCHEMA_VERSION:
+            payload.update(
+                {
+                    "analytical_contract_version": self.analytical_contract_version,
+                    "source_commit": self.source_commit,
+                    "pipeline_config_fingerprint": self.pipeline_config_fingerprint,
+                }
+            )
+        return payload
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> LiveParityEvidence:
         try:
+            raw_schema = payload["schema_version"]
+            if isinstance(raw_schema, bool) or not isinstance(raw_schema, int):
+                raise TypeError("schema_version must be an integer")
+            schema_version = raw_schema
             raw_histories = payload["bars_by_timeframe"]
             if not isinstance(raw_histories, Mapping):
                 raise TypeError("bars_by_timeframe must be a mapping")
             histories: dict[Timeframe, tuple[MarketBar, ...]] = {}
             for timeframe in _REQUIRED_TIMEFRAMES:
                 raw_values = raw_histories.get(timeframe.value)
-                if not isinstance(raw_values, Sequence) or isinstance(raw_values, (str, bytes)):
+                if not isinstance(raw_values, Sequence) or isinstance(
+                    raw_values,
+                    (str, bytes),
+                ):
                     raise TypeError(f"{timeframe.value} history must be a sequence")
                 histories[timeframe] = tuple(
                     _bar_from_payload(value)
@@ -269,10 +366,33 @@ class LiveParityEvidence:
             expected = payload["expected_audit"]
             if not isinstance(expected, Mapping):
                 raise TypeError("expected_audit must be a mapping")
+
+            analytical_contract_version: str | None = None
+            source_commit: str | None = None
+            pipeline_config_fingerprint: str | None = None
+            if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION:
+                raw_contract = payload["analytical_contract_version"]
+                raw_commit = payload["source_commit"]
+                raw_fingerprint = payload["pipeline_config_fingerprint"]
+                if not isinstance(raw_contract, str):
+                    raise TypeError("analytical_contract_version must be a string")
+                if not isinstance(raw_commit, str):
+                    raise TypeError("source_commit must be a string")
+                if not isinstance(raw_fingerprint, str):
+                    raise TypeError("pipeline_config_fingerprint must be a string")
+                analytical_contract_version = raw_contract
+                source_commit = raw_commit
+                pipeline_config_fingerprint = raw_fingerprint
+
             return cls(
-                schema_version=int(payload["schema_version"]),
+                schema_version=schema_version,
+                analytical_contract_version=analytical_contract_version,
+                source_commit=source_commit,
+                pipeline_config_fingerprint=pipeline_config_fingerprint,
                 captured_at=datetime.fromisoformat(str(payload["captured_at"])),
-                observation_timestamp=datetime.fromisoformat(str(payload["observation_timestamp"])),
+                observation_timestamp=datetime.fromisoformat(
+                    str(payload["observation_timestamp"])
+                ),
                 symbol=str(payload["symbol"]),
                 bars_by_timeframe=histories,
                 account_balance=float(payload["account_balance"]),
@@ -280,8 +400,16 @@ class LiveParityEvidence:
                 pip_value=float(payload["pip_value"]),
                 tick_size=float(payload["tick_size"]),
                 lot_step=float(payload["lot_step"]),
-                minimum_lot=(None if payload.get("minimum_lot") is None else float(payload["minimum_lot"])),
-                maximum_lot=(None if payload.get("maximum_lot") is None else float(payload["maximum_lot"])),
+                minimum_lot=(
+                    None
+                    if payload.get("minimum_lot") is None
+                    else float(payload["minimum_lot"])
+                ),
+                maximum_lot=(
+                    None
+                    if payload.get("maximum_lot") is None
+                    else float(payload["maximum_lot"])
+                ),
                 expected_audit=audit_from_payload(expected),
                 live_execution_enabled=bool(payload["live_execution_enabled"]),
                 shadow_only=bool(payload["shadow_only"]),
@@ -292,13 +420,14 @@ class LiveParityEvidence:
 
 
 def append_parity_evidence(path: Path, evidence: LiveParityEvidence) -> None:
-    """Append one complete JSONL record and recover from a truncated tail.
+    """Append one complete JSONL record under lifecycle ownership."""
 
-    A process interruption can leave the previous JSON object without its final
-    newline. On restart, insert a separator before the next complete record so
-    the reporter can classify the truncated row independently and still parse
-    all later evidence.
-    """
+    with _parity_evidence_lifecycle_lock(path).hold():
+        _append_parity_evidence_unlocked(path, evidence)
+
+
+def _append_parity_evidence_unlocked(path: Path, evidence: LiveParityEvidence) -> None:
+    """Append one record and recover from a truncated predecessor."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     needs_separator = False
@@ -311,3 +440,10 @@ def append_parity_evidence(path: Path, evidence: LiveParityEvidence) -> None:
         if needs_separator:
             file.write("\n")
         file.write(json.dumps(evidence.to_payload(), sort_keys=True) + "\n")
+
+
+def _parity_evidence_lifecycle_lock(path: Path) -> LocalExecutionLock:
+    return LocalExecutionLock(
+        build_execution_lock_path(path, scope="parity-evidence-lifecycle"),
+        purpose="parity evidence lifecycle",
+    )

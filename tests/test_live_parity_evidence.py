@@ -7,16 +7,21 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from core.data.models import MarketBar
-from core.live_trading.parity_evidence import (
-    LiveParityEvidence,
-    append_parity_evidence,
+from core.live_trading.parity_evidence import LiveParityEvidence, append_parity_evidence
+from core.live_trading.parity_provenance import (
+    M5_ANALYTICAL_CONTRACT_V1,
+    pipeline_config_fingerprint,
 )
 from core.multi_timeframe.enums import Timeframe
+from core.trading_pipeline.config import TradingPipelineConfig
 from core.trading_pipeline.models import (
     PipelineDisposition,
     PipelineObservationAudit,
     PipelineStage,
 )
+
+_SOURCE_COMMIT = "a" * 40
+_FINGERPRINT = pipeline_config_fingerprint(TradingPipelineConfig())
 
 
 def _bar(timestamp: datetime) -> MarketBar:
@@ -30,7 +35,7 @@ def _bar(timestamp: datetime) -> MarketBar:
     )
 
 
-def _evidence() -> LiveParityEvidence:
+def _evidence(*, schema_version: int = 2) -> LiveParityEvidence:
     timestamp = datetime(2026, 8, 6, 10, 0, tzinfo=UTC)
     histories = {
         timeframe: (_bar(timestamp - timedelta(minutes=5)), _bar(timestamp))
@@ -54,6 +59,12 @@ def _evidence() -> LiveParityEvidence:
         confluence_score=0.10,
     )
     return LiveParityEvidence(
+        schema_version=schema_version,
+        analytical_contract_version=(
+            M5_ANALYTICAL_CONTRACT_V1 if schema_version == 2 else None
+        ),
+        source_commit=_SOURCE_COMMIT if schema_version == 2 else None,
+        pipeline_config_fingerprint=_FINGERPRINT if schema_version == 2 else None,
         captured_at=timestamp + timedelta(minutes=5),
         observation_timestamp=timestamp,
         symbol="XAUUSD",
@@ -69,31 +80,45 @@ def _evidence() -> LiveParityEvidence:
     )
 
 
-def test_live_parity_evidence_round_trip() -> None:
+def test_live_parity_evidence_schema_v2_round_trip_exactly() -> None:
     evidence = _evidence()
+    payload = evidence.to_payload()
 
-    restored = LiveParityEvidence.from_payload(evidence.to_payload())
+    restored = LiveParityEvidence.from_payload(payload)
 
-    assert restored.observation_timestamp == evidence.observation_timestamp
-    assert restored.expected_audit == evidence.expected_audit
-    assert (
-        restored.bars_by_timeframe[Timeframe.M5]
-        == evidence.bars_by_timeframe[Timeframe.M5]
-    )
-    assert restored.live_execution_enabled is False
-    assert restored.shadow_only is True
-    assert restored.trade_executed is False
+    assert restored == evidence
+    assert restored.to_payload() == payload
+    assert payload["schema_version"] == 2
+    assert payload["analytical_contract_version"] == M5_ANALYTICAL_CONTRACT_V1
+    assert payload["source_commit"] == _SOURCE_COMMIT
+    assert payload["pipeline_config_fingerprint"] == _FINGERPRINT
+
+
+def test_schema_v1_remains_parseable_without_inferred_provenance() -> None:
+    evidence = _evidence(schema_version=1)
+    payload = evidence.to_payload()
+
+    restored = LiveParityEvidence.from_payload(payload)
+
+    assert restored == evidence
+    assert "analytical_contract_version" not in payload
+    assert "source_commit" not in payload
+    assert "pipeline_config_fingerprint" not in payload
+
+
+def test_schema_v2_missing_provenance_fails_closed() -> None:
+    payload = _evidence().to_payload()
+    del payload["source_commit"]
+
+    with pytest.raises(ValueError, match="invalid live parity evidence payload"):
+        LiveParityEvidence.from_payload(payload)
 
 
 def test_live_parity_evidence_rejects_execution_authority() -> None:
     evidence = _evidence()
 
     with pytest.raises(ValueError, match="analysis-only"):
-        replace(
-            evidence,
-            live_execution_enabled=True,
-            shadow_only=False,
-        )
+        replace(evidence, live_execution_enabled=True, shadow_only=False)
 
 
 def test_live_parity_evidence_rejects_missing_timeframe() -> None:

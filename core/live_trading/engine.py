@@ -94,6 +94,10 @@ from .parity_evidence import (
     LiveParityEvidence,
     append_parity_evidence,
 )
+from .parity_provenance import (
+    PARITY_EVIDENCE_SCHEMA_VERSION,
+    current_parity_provenance,
+)
 from .partial_fill_store import (
     PartialFillStateError,
     PartialFillStateStore,
@@ -1247,7 +1251,16 @@ class LiveTradingEngine:
             timeframe: tuple(bars_by_timeframe.get(timeframe, ()))
             for timeframe in Timeframe
         }
+        provenance = current_parity_provenance(self.config.pipeline)
         evidence = LiveParityEvidence(
+            schema_version=PARITY_EVIDENCE_SCHEMA_VERSION,
+            analytical_contract_version=(
+                provenance.analytical_contract_version
+            ),
+            source_commit=provenance.source_commit,
+            pipeline_config_fingerprint=(
+                provenance.pipeline_config_fingerprint
+            ),
             captured_at=datetime.now(UTC),
             observation_timestamp=timestamp,
             symbol=self.config.symbol,

@@ -3,18 +3,38 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 
 from core.data.models import MarketBar
+from core.live_trading import parity_provenance
 from core.live_trading.parity_evidence import LiveParityEvidence
+from core.live_trading.parity_provenance import (
+    M5_ANALYTICAL_CONTRACT_V1,
+    ParityResultClassification,
+    pipeline_config_fingerprint,
+)
 from core.live_trading.parity_report import LiveParityReporter
 from core.multi_timeframe.enums import Timeframe
+from core.trading_pipeline.config import TradingPipelineConfig
 from core.trading_pipeline.models import (
     PipelineDisposition,
     PipelineObservationAudit,
     PipelineStage,
 )
+
+_SOURCE_COMMIT = "a" * 40
+_FINGERPRINT = pipeline_config_fingerprint(TradingPipelineConfig())
+
+
+@pytest.fixture(autouse=True)
+def _stable_source_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        parity_provenance,
+        "resolve_source_commit",
+        lambda **kwargs: _SOURCE_COMMIT,
+    )
 
 
 def _audit() -> PipelineObservationAudit:
@@ -52,7 +72,7 @@ def _bar(timestamp: datetime) -> MarketBar:
     )
 
 
-def _evidence() -> LiveParityEvidence:
+def _evidence(*, schema_version: int = 2) -> LiveParityEvidence:
     audit = _audit()
     histories = {
         timeframe: (
@@ -62,6 +82,12 @@ def _evidence() -> LiveParityEvidence:
         for timeframe in Timeframe
     }
     return LiveParityEvidence(
+        schema_version=schema_version,
+        analytical_contract_version=(
+            M5_ANALYTICAL_CONTRACT_V1 if schema_version == 2 else None
+        ),
+        source_commit=_SOURCE_COMMIT if schema_version == 2 else None,
+        pipeline_config_fingerprint=_FINGERPRINT if schema_version == 2 else None,
         captured_at=audit.timestamp + timedelta(minutes=5),
         observation_timestamp=audit.timestamp,
         symbol="XAUUSD",
@@ -77,9 +103,17 @@ def _evidence() -> LiveParityEvidence:
     )
 
 
+def _reporter(tmp_path, payloads: list[dict[str, object]]) -> LiveParityReporter:
+    path = tmp_path / "parity.jsonl"
+    path.write_text(
+        "".join(json.dumps(payload, sort_keys=True) + "\n" for payload in payloads),
+        encoding="utf-8",
+    )
+    return LiveParityReporter(input_path=path, output_directory=tmp_path / "output")
+
+
 def test_compare_audits_accepts_exact_match() -> None:
     audit = _audit()
-
     assert LiveParityReporter.compare_audits(audit, audit) == []
 
 
@@ -107,6 +141,7 @@ def test_empty_parity_input_fails_closed(tmp_path) -> None:
     report = reporter.calculate()
 
     assert report["total_evidence_count"] == 0
+    assert report["compatible_evidence_count"] == 0
     assert report["validation_passed"] is False
     assert report["live_execution_enabled"] is False
     assert report["trade_executed"] is False
@@ -115,10 +150,7 @@ def test_empty_parity_input_fails_closed(tmp_path) -> None:
 def test_corrupted_json_fails_closed(tmp_path) -> None:
     path = tmp_path / "parity.jsonl"
     path.write_text("{not-json}\n", encoding="utf-8")
-    reporter = LiveParityReporter(
-        input_path=path,
-        output_directory=tmp_path / "output",
-    )
+    reporter = LiveParityReporter(input_path=path, output_directory=tmp_path / "output")
 
     report = reporter.calculate()
 
@@ -126,12 +158,12 @@ def test_corrupted_json_fails_closed(tmp_path) -> None:
     assert report["parity_fail_count"] == 1
     assert report["parse_error_count"] == 1
     assert report["validation_passed"] is False
-    assert report["results"][0]["mismatches"][0]["field"] == "evidence"
+    assert report["results"][0]["classification"] == "PARSE_ERROR"
 
 
 def test_partial_row_does_not_hide_later_valid_evidence(
     tmp_path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     evidence = _evidence()
     path = tmp_path / "parity.jsonl"
@@ -141,10 +173,7 @@ def test_partial_row_does_not_hide_later_valid_evidence(
         + "\n",
         encoding="utf-8",
     )
-    reporter = LiveParityReporter(
-        input_path=path,
-        output_directory=tmp_path / "output",
-    )
+    reporter = LiveParityReporter(input_path=path, output_directory=tmp_path / "output")
     monkeypatch.setattr(reporter, "_replay", lambda row: row.expected_audit)
 
     report = reporter.calculate()
@@ -154,32 +183,45 @@ def test_partial_row_does_not_hide_later_valid_evidence(
     assert report["parity_fail_count"] == 1
     assert report["parse_error_count"] == 1
     assert report["validation_passed"] is False
-    assert report["results"][1]["parity_passed"] is True
+    assert report["results"][1]["classification"] == "PARITY_MATCH"
 
 
-def test_altered_audit_field_is_reported_as_divergence(
+def test_matching_v2_provenance_permits_replay_and_can_pass(
     tmp_path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     evidence = _evidence()
-    path = tmp_path / "parity.jsonl"
-    path.write_text(
-        json.dumps(evidence.to_payload(), sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    reporter = LiveParityReporter(
-        input_path=path,
-        output_directory=tmp_path / "output",
-    )
+    reporter = _reporter(tmp_path, [evidence.to_payload()])
+    replay = Mock(return_value=evidence.expected_audit)
+    monkeypatch.setattr(reporter, "_replay", replay)
+
+    report = reporter.calculate()
+
+    replay.assert_called_once()
+    assert report["compatible_evidence_count"] == 1
+    assert report["parity_pass_count"] == 1
+    assert report["parity_fail_count"] == 0
+    assert report["validation_passed"] is True
+    assert report["results"][0]["classification"] == "PARITY_MATCH"
+
+
+def test_altered_audit_under_matching_provenance_is_analytical_mismatch(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _evidence()
+    reporter = _reporter(tmp_path, [evidence.to_payload()])
     replay = replace(evidence.expected_audit, trade_quality_score=0.9)
     monkeypatch.setattr(reporter, "_replay", lambda row: replay)
 
     report = reporter.calculate()
 
+    assert report["compatible_evidence_count"] == 1
     assert report["parity_pass_count"] == 0
     assert report["parity_fail_count"] == 1
     assert report["parse_error_count"] == 0
     assert report["validation_passed"] is False
+    assert report["results"][0]["classification"] == "ANALYTICAL_MISMATCH"
     assert report["results"][0]["mismatches"] == [
         {
             "field": "trade_quality_score",
@@ -189,16 +231,98 @@ def test_altered_audit_field_is_reported_as_divergence(
     ]
 
 
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    (
+        ("source_commit", "b" * 40),
+        ("analytical_contract_version", "M5_ANALYTICAL_CONTRACT_V2"),
+        ("pipeline_config_fingerprint", "b" * 64),
+    ),
+)
+def test_provenance_mismatch_blocks_replay(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    bad_value: str,
+) -> None:
+    payload = _evidence().to_payload()
+    payload[field_name] = bad_value
+    reporter = _reporter(tmp_path, [payload])
+    replay = Mock()
+    monkeypatch.setattr(reporter, "_replay", replay)
+
+    report = reporter.calculate()
+
+    replay.assert_not_called()
+    assert report["compatible_evidence_count"] == 0
+    assert report["provenance_mismatch_count"] == 1
+    assert report["results"][0]["classification"] == "PROVENANCE_MISMATCH"
+    assert report["validation_passed"] is False
+
+
+def test_missing_v2_provenance_fails_before_replay(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _evidence().to_payload()
+    del payload["source_commit"]
+    reporter = _reporter(tmp_path, [payload])
+    replay = Mock()
+    monkeypatch.setattr(reporter, "_replay", replay)
+
+    report = reporter.calculate()
+
+    replay.assert_not_called()
+    assert report["provenance_mismatch_count"] == 1
+    assert report["parse_error_count"] == 0
+    assert report["validation_passed"] is False
+
+
+def test_schema_v1_is_legacy_and_never_replayed(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = _evidence(schema_version=1)
+    reporter = _reporter(tmp_path, [legacy.to_payload()])
+    replay = Mock()
+    monkeypatch.setattr(reporter, "_replay", replay)
+
+    report = reporter.calculate()
+
+    replay.assert_not_called()
+    assert report["compatible_evidence_count"] == 0
+    assert report["legacy_unversioned_count"] == 1
+    assert report["parity_fail_count"] == 1
+    assert report["parse_error_count"] == 0
+    assert report["validation_passed"] is False
+    assert report["results"][0]["classification"] == (
+        ParityResultClassification.LEGACY_UNVERSIONED_ANALYTICAL_BASELINE.value
+    )
+
+
+def test_legacy_plus_valid_current_evidence_remains_fail_closed(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = _evidence(schema_version=1)
+    current = _evidence()
+    reporter = _reporter(tmp_path, [legacy.to_payload(), current.to_payload()])
+    monkeypatch.setattr(reporter, "_replay", lambda row: row.expected_audit)
+
+    report = reporter.calculate()
+
+    assert report["compatible_evidence_count"] == 1
+    assert report["legacy_unversioned_count"] == 1
+    assert report["parity_pass_count"] == 1
+    assert report["parity_fail_count"] == 1
+    assert report["validation_passed"] is False
+
+
 def test_missing_timeframe_payload_is_parse_error(tmp_path) -> None:
     evidence = _evidence()
     payload = evidence.to_payload()
     del payload["bars_by_timeframe"]["H4"]
-    path = tmp_path / "parity.jsonl"
-    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    reporter = LiveParityReporter(
-        input_path=path,
-        output_directory=tmp_path / "output",
-    )
+    reporter = _reporter(tmp_path, [payload])
 
     report = reporter.calculate()
 
@@ -212,12 +336,7 @@ def test_execution_authority_payload_is_parse_error(tmp_path) -> None:
     payload = evidence.to_payload()
     payload["live_execution_enabled"] = True
     payload["shadow_only"] = False
-    path = tmp_path / "parity.jsonl"
-    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    reporter = LiveParityReporter(
-        input_path=path,
-        output_directory=tmp_path / "output",
-    )
+    reporter = _reporter(tmp_path, [payload])
 
     report = reporter.calculate()
 
@@ -229,9 +348,7 @@ def test_execution_authority_payload_is_parse_error(tmp_path) -> None:
     assert report["trade_executed"] is False
 
 
-def test_replay_never_falls_back_when_target_snapshot_is_incomplete(
-    tmp_path,
-) -> None:
+def test_replay_never_falls_back_when_target_snapshot_is_incomplete(tmp_path) -> None:
     reporter = LiveParityReporter(
         input_path=tmp_path / "unused.jsonl",
         output_directory=tmp_path / "output",
