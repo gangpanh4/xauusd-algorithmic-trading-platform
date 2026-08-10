@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -23,6 +24,10 @@ from .config import LiveTradingConfig
 from .connected_reconciliation_probe import (
     ConnectedReconciliationProbeResult,
     run_connected_demo_read_only_probe,
+)
+from .demo_execution_authorization import (
+    DemoExecutionAuthorizationError,
+    load_demo_execution_authorization,
 )
 from .execution_intent_store import ExecutionIntentStore
 from .partial_fill_store import PartialFillStateStore
@@ -110,6 +115,34 @@ def collect_connected_demo_canary_preflight_evidence(
     partial = PartialFillStateStore(config.partial_fill_state_path).load()
     intent = ExecutionIntentStore(config.execution_intent_state_path).load()
 
+    # Connected preflight may run before authorization creation. The loader is
+    # still invoked for an absent artifact so uncertain authorization-lock
+    # ownership cannot be hidden by a missing file. Only the loader's exact
+    # clean-missing outcome preserves the accepted non-blocking behavior.
+    authorization_path = config.demo_authorization_path
+    authorization_was_present = os.path.lexists(authorization_path)
+    authorization = None
+    try:
+        authorization = load_demo_execution_authorization(authorization_path)
+    except DemoExecutionAuthorizationError as exc:
+        clean_missing = (
+            not authorization_was_present
+            and not os.path.lexists(authorization_path)
+            and str(exc)
+            == (
+                "Demo execution authorization file does not exist: "
+                f"{authorization_path}"
+            )
+        )
+        if not clean_missing:
+            raise ConnectedDemoCanaryPreflightError(
+                "Connected canary preflight could not safely read the existing "
+                "demo execution authorization."
+            ) from exc
+    authorization_consumed = (
+        authorization is not None and authorization.consumed
+    )
+
     reasons: list[str] = []
     reconciliation_clear = probe.reconciliation_disposition in {
         "NO_PERSISTED_INTENT",
@@ -134,6 +167,10 @@ def collect_connected_demo_canary_preflight_evidence(
         reasons.append("Execution-intent reconciliation is not clear.")
     if intent is not None and intent.unresolved:
         reasons.append("A persisted unresolved execution intent exists.")
+    if authorization_consumed:
+        reasons.append(
+            "Existing demo execution authorization has already been consumed."
+        )
 
     validation_passed = not reasons
     return ConnectedDemoCanaryPreflightEvidence(
@@ -164,7 +201,7 @@ def collect_connected_demo_canary_preflight_evidence(
         demo_execution_approved=False,
         execution_kill_switch_enabled=True,
         order_submission_attempted=False,
-        authorization_consumed=False,
+        authorization_consumed=authorization_consumed,
         trade_executed=False,
         validation_passed=validation_passed,
         reasons=tuple(reasons),

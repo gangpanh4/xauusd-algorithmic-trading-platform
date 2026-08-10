@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+import core.live_trading.connected_demo_canary_preflight as preflight_module
+import core.live_trading.demo_execution_authorization as authorization_module
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.connected_demo_canary_preflight import (
     ConnectedDemoCanaryPreflightError,
@@ -12,6 +15,10 @@ from core.live_trading.connected_demo_canary_preflight import (
 )
 from core.live_trading.connected_reconciliation_probe import (
     ConnectedReconciliationProbeResult,
+)
+from core.live_trading.execution_concurrency import (
+    LocalExecutionLock,
+    build_execution_lock_path,
 )
 from core.live_trading.partial_fill_store import (
     PartialFillStateStore,
@@ -27,6 +34,7 @@ def _config(tmp_path: Path) -> LiveTradingConfig:
         live_execution_enabled=False,
         demo_execution_approved=False,
         execution_kill_switch_enabled=True,
+        demo_authorization_path=tmp_path / "authorization.json",
         partial_fill_state_path=tmp_path / "partial.json",
         execution_intent_state_path=tmp_path / "intent.json",
     )
@@ -79,15 +87,46 @@ def _symbol() -> SymbolInfo:
     )
 
 
-def test_clean_connected_preflight_passes_without_execution(tmp_path: Path) -> None:
-    evidence = collect_connected_demo_canary_preflight_evidence(
-        config=_config(tmp_path),
+def _write_authorization(path: Path, **overrides: object) -> bytes:
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "authorization_id": "demo-canary-preflight",
+        "issued_at": (NOW - timedelta(minutes=1)).isoformat(),
+        "expires_at": (NOW + timedelta(minutes=4)).isoformat(),
+        "account_login": 123456,
+        "account_server": "MetaQuotes-Demo",
+        "symbol": "XAUUSD",
+        "maximum_volume": 0.01,
+        "maximum_submissions": 1,
+        "demo_only": True,
+        "one_shot": True,
+        "acknowledgement": "I AUTHORIZE ONE DEMO ORDER",
+        "consumed_at": None,
+        "consumed_intent_key": None,
+    }
+    payload.update(overrides)
+    serialized = json.dumps(payload, sort_keys=True).encode("utf-8")
+    path.write_bytes(serialized)
+    return serialized
+
+
+def _collect(config: LiveTradingConfig):
+    return collect_connected_demo_canary_preflight_evidence(
+        config=config,
         lookback_hours=24,
         as_of=NOW,
         probe_runner=lambda **kwargs: _probe(),
         symbol_reader=lambda symbol: _symbol(),
     )
 
+
+def test_clean_connected_preflight_passes_without_execution(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    assert config.demo_authorization_path.exists() is False
+
+    evidence = _collect(config)
+
+    assert config.demo_authorization_path.exists() is False
     assert evidence.validation_passed is True
     assert evidence.demo_account_confirmed is True
     assert evidence.reconciliation_clear is True
@@ -99,6 +138,152 @@ def test_clean_connected_preflight_passes_without_execution(tmp_path: Path) -> N
     assert evidence.live_execution_enabled is False
     assert evidence.demo_execution_approved is False
     assert evidence.execution_kill_switch_enabled is True
+
+
+def test_unconsumed_authorization_is_read_without_mutation(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    expected = _write_authorization(config.demo_authorization_path)
+
+    evidence = _collect(config)
+
+    assert evidence.authorization_consumed is False
+    assert evidence.validation_passed is True
+    assert config.demo_authorization_path.read_bytes() == expected
+
+
+def test_consumed_authorization_blocks_without_mutation(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    expected = _write_authorization(
+        config.demo_authorization_path,
+        consumed_at=NOW.isoformat(),
+        consumed_intent_key="a" * 64,
+    )
+
+    evidence = _collect(config)
+
+    assert evidence.authorization_consumed is True
+    assert evidence.validation_passed is False
+    assert "Existing demo execution authorization has already been consumed." in (
+        evidence.reasons
+    )
+    assert config.demo_authorization_path.read_bytes() == expected
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"{not-valid-json",
+        json.dumps({"schema_version": 999}).encode("utf-8"),
+    ],
+)
+def test_unreadable_authorization_fails_closed_without_mutation(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    config = _config(tmp_path)
+    config.demo_authorization_path.write_bytes(payload)
+
+    with pytest.raises(
+        ConnectedDemoCanaryPreflightError,
+        match="could not safely read the existing demo execution authorization",
+    ):
+        _collect(config)
+
+    assert config.demo_authorization_path.read_bytes() == payload
+
+
+
+def test_missing_authorization_with_consumption_lock_fails_closed(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    assert config.demo_authorization_path.exists() is False
+    lock = LocalExecutionLock(
+        build_execution_lock_path(
+            config.demo_authorization_path,
+            scope="authorization-consumption",
+        ),
+        purpose="demo authorization consumption",
+    )
+    owner = lock.acquire()
+    try:
+        with pytest.raises(
+            ConnectedDemoCanaryPreflightError,
+            match="could not safely read the existing demo execution authorization",
+        ):
+            _collect(config)
+        assert config.demo_authorization_path.exists() is False
+    finally:
+        lock.release(owner)
+
+
+def test_authorization_consumption_lock_conflict_fails_closed_without_mutation(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    expected = _write_authorization(config.demo_authorization_path)
+    lock = LocalExecutionLock(
+        build_execution_lock_path(
+            config.demo_authorization_path,
+            scope="authorization-consumption",
+        ),
+        purpose="demo authorization consumption",
+    )
+    owner = lock.acquire()
+    try:
+        with pytest.raises(
+            ConnectedDemoCanaryPreflightError,
+            match="could not safely read the existing demo execution authorization",
+        ):
+            _collect(config)
+        assert config.demo_authorization_path.read_bytes() == expected
+    finally:
+        lock.release(owner)
+
+
+def test_preflight_never_consumes_authorization_or_mutates_broker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    expected = _write_authorization(config.demo_authorization_path)
+
+    def fail_authorization_consumption(
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        del args, kwargs
+        pytest.fail("preflight must not consume demo authorization")
+
+    monkeypatch.setattr(
+        authorization_module,
+        "consume_demo_execution_authorization",
+        fail_authorization_consumption,
+    )
+    monkeypatch.setattr(
+        preflight_module,
+        "consume_demo_execution_authorization",
+        fail_authorization_consumption,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        preflight_module.mt5,
+        "order_check",
+        lambda *args, **kwargs: pytest.fail("preflight must not call order_check"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        preflight_module.mt5,
+        "order_send",
+        lambda *args, **kwargs: pytest.fail("preflight must not call order_send"),
+        raising=False,
+    )
+
+    evidence = _collect(config)
+
+    assert evidence.validation_passed is True
+    assert evidence.authorization_consumed is False
+    assert config.demo_authorization_path.read_bytes() == expected
 
 
 @pytest.mark.parametrize(
@@ -119,8 +304,9 @@ def test_connected_preflight_fails_closed_on_broker_state(
     value: object,
     reason: str,
 ) -> None:
+    config = _config(tmp_path)
     evidence = collect_connected_demo_canary_preflight_evidence(
-        config=_config(tmp_path),
+        config=config,
         as_of=NOW,
         probe_runner=lambda **kwargs: _probe(**{field: value}),
         symbol_reader=lambda symbol: _symbol(),
@@ -147,12 +333,7 @@ def test_connected_preflight_detects_persisted_partial_fill(
         )
     )
 
-    evidence = collect_connected_demo_canary_preflight_evidence(
-        config=config,
-        as_of=NOW,
-        probe_runner=lambda **kwargs: _probe(),
-        symbol_reader=lambda symbol: _symbol(),
-    )
+    evidence = _collect(config)
 
     assert evidence.validation_passed is False
     assert evidence.unresolved_partial_fill is True
@@ -166,6 +347,7 @@ def test_connected_preflight_requires_safe_execution_flags(
         live_execution_enabled=True,
         demo_execution_approved=False,
         execution_kill_switch_enabled=True,
+        demo_authorization_path=tmp_path / "authorization.json",
         partial_fill_state_path=tmp_path / "partial.json",
         execution_intent_state_path=tmp_path / "intent.json",
     )
