@@ -527,6 +527,7 @@ class LiveTradingEngine:
         minimum_lot: float | None = None,
         maximum_lot: float | None = None,
         warmup: bool = False,
+        parity_source_histories: Mapping[Timeframe, Sequence[MarketBar]] | None = None,
     ) -> LiveTradingResult:
         """Process the same synchronized MTF evidence used by backtesting."""
 
@@ -566,7 +567,11 @@ class LiveTradingEngine:
             pipeline_result=pipeline_result,
             warmup=warmup,
             parity_context=(
-                bars_by_timeframe,
+                (
+                    parity_source_histories
+                    if parity_source_histories is not None
+                    else bars_by_timeframe
+                ),
                 account_balance,
                 stop_loss_distance,
                 pip_value,

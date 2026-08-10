@@ -257,12 +257,24 @@ class LiveParityReporter:
     def _replay(self, evidence: LiveParityEvidence) -> PipelineObservationAudit:
         config = self._replay_config()
         engine = LiveTradingEngine(config)
-        buffer = LiveMultiTimeframeBuffer(
-            window_bars=max(
-                len(values) for values in evidence.bars_by_timeframe.values()
-            )
+        source_timeframes = (
+            Timeframe.M5,
+            Timeframe.M15,
+            Timeframe.H1,
+            Timeframe.H4,
         )
-        for timeframe in (Timeframe.M5, Timeframe.M15, Timeframe.H1, Timeframe.H4):
+        source_capacities = {
+            timeframe: max(
+                config.history_window_bars,
+                len(evidence.bars_by_timeframe[timeframe]),
+            )
+            for timeframe in source_timeframes
+        }
+        buffer = LiveMultiTimeframeBuffer(
+            window_bars=config.history_window_bars,
+            source_capacity_bars=source_capacities,
+        )
+        for timeframe in source_timeframes:
             buffer.load(timeframe, evidence.bars_by_timeframe[timeframe])
 
         target_processed = False

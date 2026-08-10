@@ -303,6 +303,7 @@ class TradingPlatform:
                         lot_step=symbol_spec.lot_step,
                         minimum_lot=symbol_spec.minimum_lot,
                         maximum_lot=symbol_spec.maximum_lot,
+                        parity_source_histories=buffer.histories,
                     )
                     time.sleep(config.poll_interval_seconds)
 
