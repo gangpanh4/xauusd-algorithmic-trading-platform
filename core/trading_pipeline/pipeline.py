@@ -9,7 +9,7 @@ broker connectivity.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import isfinite
 from statistics import fmean
 
@@ -170,9 +170,14 @@ class TradingPipeline:
         if bar is None:
             raise ValueError("bar cannot be None")
 
-        regime = self.regime_detector.process_bar(
-            bar,
-        )
+        analytical_available_at = bar.timestamp + timedelta(minutes=5)
+        if isinstance(self.regime_detector, MarketRegimeDetector):
+            regime = self.regime_detector.process_bar(
+                bar,
+                computation_timestamp=analytical_available_at,
+            )
+        else:
+            regime = self.regime_detector.process_bar(bar)
 
         if market_structure_result is None:
             market_structure = self.market_structure.process(
@@ -226,12 +231,22 @@ class TradingPipeline:
             signal_confidence=probability.confidence,
             risk_reward_ratio=trade_quality_evidence.risk_reward_ratio,
         )
+        if isinstance(self.trade_quality, TradeQualityManager):
+            trade_quality.timestamp = analytical_available_at
 
-        decision = self.decision_engine.evaluate(
-            regime=regime,
-            confluence=confluence,
-            probability=probability,
-        )
+        if isinstance(self.decision_engine, DecisionEngine):
+            decision = self.decision_engine.evaluate(
+                regime=regime,
+                confluence=confluence,
+                probability=probability,
+                timestamp=analytical_available_at,
+            )
+        else:
+            decision = self.decision_engine.evaluate(
+                regime=regime,
+                confluence=confluence,
+                probability=probability,
+            )
 
         signal_state_snapshot = (
             (
@@ -936,4 +951,8 @@ class TradingPipeline:
         # ``TradingSignal`` is intentionally mutable for backward compatibility.
         # Keeping this assignment in the pipeline avoids changing its public model
         # while ensuring historical risk state uses event time, not wall-clock time.
-        setattr(signal, "timestamp", observation_timestamp)
+        setattr(  # noqa: B010 - mutable compatibility model
+            signal,
+            "timestamp",
+            observation_timestamp,
+        )

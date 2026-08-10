@@ -4,6 +4,7 @@ Decision Engine.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from math import isfinite
 from numbers import Real
 
@@ -39,6 +40,7 @@ class DecisionEngine:
         regime: MarketRegime,
         confluence: ConfluenceResult | None = None,
         probability: ProbabilityResult | None = None,
+        timestamp: datetime | None = None,
     ) -> DecisionResult:
         """Evaluate the current market and produce a decision."""
 
@@ -67,6 +69,7 @@ class DecisionEngine:
             decision_score=decision_score,
             regime_score=regime_score,
             supporting_evidence_score=supporting_evidence_score,
+            timestamp=timestamp,
         )
 
     def _evaluate_regime(self, regime: MarketRegime) -> float:
@@ -149,6 +152,7 @@ class DecisionEngine:
         decision_score: float,
         regime_score: float,
         supporting_evidence_score: float,
+        timestamp: datetime | None = None,
     ) -> DecisionResult:
         """Convert a validated score into BUY, SELL, or HOLD."""
 
@@ -165,7 +169,11 @@ class DecisionEngine:
         else:
             decision = DecisionType.HOLD
 
+        result_timestamp = (
+            datetime.now(UTC) if timestamp is None else timestamp
+        )
         return DecisionResult(
+            timestamp=result_timestamp,
             decision=decision,
             approved=decision is not DecisionType.HOLD,
             confidence=decision_score,

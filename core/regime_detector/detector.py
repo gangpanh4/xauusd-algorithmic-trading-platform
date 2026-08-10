@@ -4,21 +4,18 @@ Market Regime Detection Engine.
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
+from core.data.models import MarketBar
 
 from .config import RegimeDetectorConfig
 from .indicators.adx import ADXIndicator
 from .indicators.atr import ATRIndicator
-from .indicators.efficiency_ratio import EfficiencyRatioIndicator
-from .indicators.momentum import MomentumIndicator
 from .indicators.choppiness import ChoppinessIndicator
+from .indicators.efficiency_ratio import EfficiencyRatioIndicator
 from .indicators.ema import EMAIndicator
 from .indicators.ema_slope import EMASlopeIndicator
-
-from core.data.models import (
-    MarketBar,
-)
+from .indicators.momentum import MomentumIndicator
 from .models import (
     ConfidenceTier,
     FeatureSet,
@@ -27,7 +24,6 @@ from .models import (
     StatusFlag,
     TransitionRecord,
 )
-
 from .state import DetectorState
 
 
@@ -61,7 +57,12 @@ class MarketRegimeDetector:
     # INPUT PIPELINE
     # =========================================================
 
-    def process_bar(self, bar: MarketBar) -> MarketRegime:
+    def process_bar(
+        self,
+        bar: MarketBar,
+        *,
+        computation_timestamp: datetime | None = None,
+    ) -> MarketRegime:
         """Process one completed bar and return the confirmed regime.
 
         The raw indicator assessment is treated as a candidate.  A candidate
@@ -71,12 +72,18 @@ class MarketRegimeDetector:
 
         self._validate_input(bar)
 
+        result_available_at = (
+            datetime.now(UTC)
+            if computation_timestamp is None
+            else computation_timestamp
+        )
+
         features = self._compute_features(bar)
 
         if not self._is_warmup_complete():
             candidate = MarketRegime(
                 observation_timestamp=bar.timestamp,
-                computation_timestamp=datetime.now(UTC),
+                computation_timestamp=result_available_at,
                 primary_regime=RegimeLabel.UNKNOWN,
                 confidence=0.0,
                 confidence_tier=ConfidenceTier.LOW,
@@ -87,6 +94,7 @@ class MarketRegimeDetector:
                 bar=bar,
                 features=features,
             )
+            candidate.computation_timestamp = result_available_at
 
         confirmed = self._update_state(bar, candidate)
 
@@ -191,16 +199,14 @@ class MarketRegimeDetector:
 
     def _calculate_ema_slope_score(self, features: FeatureSet) -> float:
         score = 0.0
-        if all(
-            slope > 0
-            for slope in (
-                features.ema20_slope,
-                features.ema50_slope,
-                features.ema200_slope,
-            )
+        slopes = (
+            features.ema20_slope,
+            features.ema50_slope,
+            features.ema200_slope,
+        )
+        if all(slope > 0 for slope in slopes) or all(
+            slope < 0 for slope in slopes
         ):
-            score += 1.0
-        elif features.ema20_slope < 0 and features.ema50_slope < 0 and features.ema200_slope < 0:
             score += 1.0
         return score
 
@@ -216,7 +222,11 @@ class MarketRegimeDetector:
     # REGIME ENGINE
     # =========================================================
 
-    def _evaluate_regime(self, bar: MarketBar, features: FeatureSet) -> MarketRegime:
+    def _evaluate_regime(
+        self,
+        bar: MarketBar,
+        features: FeatureSet,
+    ) -> MarketRegime:
         if features.choppiness > self.config.choppiness.veto_threshold:
             regime = RegimeLabel.RANGING
             confidence = 0.60
@@ -477,7 +487,7 @@ class MarketRegimeDetector:
 
         return MarketRegime(
             observation_timestamp=bar.timestamp,
-            computation_timestamp=datetime.now(UTC),
+            computation_timestamp=candidate.computation_timestamp,
             primary_regime=current_label,
             confidence=source.confidence,
             confidence_tier=source.confidence_tier,
