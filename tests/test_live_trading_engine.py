@@ -373,7 +373,9 @@ def test_multi_timeframe_records_analysis_only_parity_evidence(
 ) -> None:
     from core.live_trading import engine as live_trading_engine_module
     from core.live_trading.parity_provenance import (
+        CURRENT_PARITY_HISTORY_CONTRACT_VERSION,
         M5_ANALYTICAL_CONTRACT_V1,
+        PARITY_EVIDENCE_SCHEMA_VERSION,
         ParityAnalyticalProvenance,
     )
     from core.multi_timeframe.enums import Timeframe
@@ -436,17 +438,18 @@ def test_multi_timeframe_records_analysis_only_parity_evidence(
 
     assert result.trade_executed is False
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == PARITY_EVIDENCE_SCHEMA_VERSION
     assert (
         payload["analytical_contract_version"]
         == M5_ANALYTICAL_CONTRACT_V1
     )
     assert payload["source_commit"] == source_commit
     assert payload["pipeline_config_fingerprint"] == config_fingerprint
+    assert payload["history_contract_version"] == (
+        CURRENT_PARITY_HISTORY_CONTRACT_VERSION
+    )
     assert payload["observation_timestamp"] == bar.timestamp.isoformat()
     assert payload["live_execution_enabled"] is False
     assert payload["shadow_only"] is True
     assert payload["trade_executed"] is False
-    assert set(payload["bars_by_timeframe"]) == {
-        timeframe.value for timeframe in Timeframe
-    }
+    assert set(payload["bars_by_timeframe"]) == {"M5", "M15", "H1", "H4"}

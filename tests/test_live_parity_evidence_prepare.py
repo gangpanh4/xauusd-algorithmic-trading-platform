@@ -22,7 +22,9 @@ from core.live_trading.parity_evidence_prepare import (
     retire_incompatible_parity_evidence,
 )
 from core.live_trading.parity_provenance import (
+    CURRENT_PARITY_HISTORY_CONTRACT_VERSION,
     M5_ANALYTICAL_CONTRACT_V1,
+    PARITY_EVIDENCE_SCHEMA_VERSION,
     pipeline_config_fingerprint,
 )
 from core.multi_timeframe.enums import Timeframe
@@ -80,20 +82,37 @@ def _audit() -> PipelineObservationAudit:
 
 
 def _evidence(*, schema_version: int) -> LiveParityEvidence:
+    source_timeframes = (
+        Timeframe.M5,
+        Timeframe.M15,
+        Timeframe.H1,
+        Timeframe.H4,
+    )
+    required_timeframes = (
+        source_timeframes
+        if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION
+        else tuple(Timeframe)
+    )
     histories = {
         timeframe: (
             _bar(_TIMESTAMP - timedelta(minutes=5)),
             _bar(_TIMESTAMP),
         )
-        for timeframe in Timeframe
+        for timeframe in required_timeframes
     }
+    versioned = schema_version in {2, PARITY_EVIDENCE_SCHEMA_VERSION}
     return LiveParityEvidence(
         schema_version=schema_version,
         analytical_contract_version=(
-            M5_ANALYTICAL_CONTRACT_V1 if schema_version == 2 else None
+            M5_ANALYTICAL_CONTRACT_V1 if versioned else None
         ),
-        source_commit=_SOURCE_COMMIT if schema_version == 2 else None,
-        pipeline_config_fingerprint=_FINGERPRINT if schema_version == 2 else None,
+        source_commit=_SOURCE_COMMIT if versioned else None,
+        pipeline_config_fingerprint=_FINGERPRINT if versioned else None,
+        history_contract_version=(
+            CURRENT_PARITY_HISTORY_CONTRACT_VERSION
+            if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION
+            else None
+        ),
         captured_at=_TIMESTAMP + timedelta(minutes=5),
         observation_timestamp=_TIMESTAMP,
         symbol="XAUUSD",
@@ -258,12 +277,34 @@ def test_active_directory_fsync_failure_rolls_back_original(
     assert active.read_bytes() == exact
 
 
-def test_current_compatible_schema_v2_is_not_retired(
-    monkeypatch: pytest.MonkeyPatch,
+def test_previous_schema_v2_is_archived_as_incompatible(
     tmp_path: Path,
 ) -> None:
     active, archive = _paths(tmp_path)
     exact = _row_bytes(_evidence(schema_version=2))
+    active.write_bytes(exact)
+
+    result = retire_incompatible_parity_evidence(
+        config=_config(tmp_path),
+        active_path=active,
+        archive_root=archive,
+    )
+
+    assert result.retired is True
+    assert result.evidence_count == 1
+    assert result.legacy_unversioned_count == 0
+    assert result.provenance_mismatch_count == 1
+    assert result.archive_path is not None
+    assert result.archive_path.read_bytes() == exact
+    assert active.read_bytes() == b""
+
+
+def test_current_compatible_schema_v3_is_not_retired(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    active, archive = _paths(tmp_path)
+    exact = _row_bytes(_evidence(schema_version=PARITY_EVIDENCE_SCHEMA_VERSION))
     active.write_bytes(exact)
     monkeypatch.setattr(
         provenance_module,

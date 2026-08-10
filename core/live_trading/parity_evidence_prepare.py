@@ -16,7 +16,10 @@ from . import parity_provenance
 from .config import LiveTradingConfig
 from .execution_concurrency import ExecutionConcurrencyError
 from .parity_evidence import LiveParityEvidence, _parity_evidence_lifecycle_lock
-from .parity_provenance import PARITY_EVIDENCE_SCHEMA_VERSION, ParityAnalyticalProvenance
+from .parity_provenance import (
+    PARITY_EVIDENCE_SCHEMA_VERSION,
+    ParityAnalyticalProvenance,
+)
 
 _ACTIVE_PATH: Final = Path("runtime/live_parity_evidence.jsonl")
 _ARCHIVE_ROOT: Final = Path("runtime/archive/live_parity_evidence")
@@ -160,6 +163,17 @@ def _require_only_incompatible_rows(
             legacy_count += 1
             continue
 
+        if schema == 2:
+            try:
+                LiveParityEvidence.from_payload(payload)
+            except (TypeError, ValueError) as exc:
+                raise ParityEvidenceLifecycleError(
+                    f"Schema-v2 parity evidence line {line_number} is malformed."
+                ) from exc
+            evidence_count += 1
+            provenance_mismatch_count += 1
+            continue
+
         if schema != PARITY_EVIDENCE_SCHEMA_VERSION:
             raise ParityEvidenceLifecycleError(
                 f"Parity evidence line {line_number} has unknown schema."
@@ -168,7 +182,8 @@ def _require_only_incompatible_rows(
             LiveParityEvidence.from_payload(payload)
         except (TypeError, ValueError) as exc:
             raise ParityEvidenceLifecycleError(
-                f"Schema-v2 parity evidence line {line_number} is malformed."
+                f"Schema-v{PARITY_EVIDENCE_SCHEMA_VERSION} parity evidence "
+                f"line {line_number} is malformed."
             ) from exc
 
         if current is None:
@@ -176,15 +191,15 @@ def _require_only_incompatible_rows(
                 current = parity_provenance.current_parity_provenance(config.pipeline)
             except (RuntimeError, TypeError, ValueError) as exc:
                 raise ParityEvidenceLifecycleError(
-                    "Current analytical provenance cannot be trusted, so schema-v2 "
-                    "evidence cannot be retired."
+                    "Current analytical provenance cannot be trusted, so current "
+                    "schema evidence cannot be retired."
                 ) from exc
 
         assessment = parity_provenance.assess_payload_provenance(payload, current)
         if assessment.compatible:
             raise ParityEvidenceLifecycleError(
-                "Current-compatible schema-v2 parity evidence is active and must "
-                "not be retired automatically."
+                "Current-compatible parity evidence is active and must not be "
+                "retired automatically."
             )
         if assessment.classification is None:
             raise ParityEvidenceLifecycleError(

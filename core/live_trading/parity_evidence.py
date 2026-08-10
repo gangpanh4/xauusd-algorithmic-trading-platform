@@ -21,12 +21,24 @@ from core.trading_pipeline.models import (
 
 from .execution_concurrency import LocalExecutionLock, build_execution_lock_path
 from .parity_provenance import (
+    CURRENT_PARITY_HISTORY_CONTRACT_VERSION,
     PARITY_EVIDENCE_SCHEMA_VERSION,
+    validate_history_contract_version,
     validate_pipeline_config_fingerprint,
     validate_source_commit,
 )
 
-_REQUIRED_TIMEFRAMES = tuple(Timeframe)
+_LEGACY_REQUIRED_TIMEFRAMES = tuple(Timeframe)
+PARITY_SOURCE_TIMEFRAMES = (
+    Timeframe.M5,
+    Timeframe.M15,
+    Timeframe.H1,
+    Timeframe.H4,
+)
+_DERIVED_TIMEFRAMES = (
+    Timeframe.DAILY,
+    Timeframe.WEEKLY,
+)
 
 
 def _require_aware_utc(value: datetime, name: str) -> datetime:
@@ -191,6 +203,7 @@ class LiveParityEvidence:
     analytical_contract_version: str | None = None
     source_commit: str | None = None
     pipeline_config_fingerprint: str | None = None
+    history_contract_version: str | None = None
     live_execution_enabled: bool = False
     shadow_only: bool = True
     trade_executed: bool = False
@@ -212,7 +225,11 @@ class LiveParityEvidence:
         )
         if not isinstance(self.symbol, str) or not self.symbol.strip():
             raise ValueError("symbol must be a non-empty string")
-        if self.schema_version not in {1, PARITY_EVIDENCE_SCHEMA_VERSION}:
+        if self.schema_version not in {
+            1,
+            2,
+            PARITY_EVIDENCE_SCHEMA_VERSION,
+        }:
             raise ValueError("unsupported parity evidence schema_version")
 
         if self.schema_version == 1:
@@ -222,6 +239,7 @@ class LiveParityEvidence:
                     self.analytical_contract_version,
                     self.source_commit,
                     self.pipeline_config_fingerprint,
+                    self.history_contract_version,
                 )
             ):
                 raise ValueError(
@@ -234,10 +252,12 @@ class LiveParityEvidence:
                 _require_contract(self.analytical_contract_version),
             )
             if self.source_commit is None:
-                raise ValueError("source_commit is required for schema-v2 evidence")
+                raise ValueError(
+                    "source_commit is required for versioned parity evidence"
+                )
             if self.pipeline_config_fingerprint is None:
                 raise ValueError(
-                    "pipeline_config_fingerprint is required for schema-v2 evidence"
+                    "pipeline_config_fingerprint is required for versioned parity evidence"
                 )
             object.__setattr__(
                 self,
@@ -252,11 +272,41 @@ class LiveParityEvidence:
                 ),
             )
 
+            if self.schema_version == 2:
+                if self.history_contract_version is not None:
+                    raise ValueError(
+                        "schema-v2 evidence cannot claim the V3 history contract"
+                    )
+            else:
+                history_contract_version = self.history_contract_version
+                if history_contract_version is None:
+                    history_contract_version = (
+                        CURRENT_PARITY_HISTORY_CONTRACT_VERSION
+                    )
+                object.__setattr__(
+                    self,
+                    "history_contract_version",
+                    validate_history_contract_version(history_contract_version),
+                )
+
         if self.live_execution_enabled or not self.shadow_only or self.trade_executed:
             raise ValueError("parity evidence must remain analysis-only")
 
+        required_timeframes = (
+            PARITY_SOURCE_TIMEFRAMES
+            if self.schema_version == PARITY_EVIDENCE_SCHEMA_VERSION
+            else _LEGACY_REQUIRED_TIMEFRAMES
+        )
+        if self.schema_version == PARITY_EVIDENCE_SCHEMA_VERSION:
+            for timeframe in _DERIVED_TIMEFRAMES:
+                if tuple(self.bars_by_timeframe.get(timeframe, ())):
+                    raise ValueError(
+                        f"{timeframe.value} parity history is derived and "
+                        "cannot be persisted as a V3 source history"
+                    )
+
         normalized: dict[Timeframe, tuple[MarketBar, ...]] = {}
-        for timeframe in _REQUIRED_TIMEFRAMES:
+        for timeframe in required_timeframes:
             values = tuple(self.bars_by_timeframe.get(timeframe, ()))
             if not values:
                 raise ValueError(f"missing {timeframe.value} parity history")
@@ -328,7 +378,7 @@ class LiveParityEvidence:
             "shadow_only": self.shadow_only,
             "trade_executed": self.trade_executed,
         }
-        if self.schema_version == PARITY_EVIDENCE_SCHEMA_VERSION:
+        if self.schema_version in {2, PARITY_EVIDENCE_SCHEMA_VERSION}:
             payload.update(
                 {
                     "analytical_contract_version": self.analytical_contract_version,
@@ -336,6 +386,8 @@ class LiveParityEvidence:
                     "pipeline_config_fingerprint": self.pipeline_config_fingerprint,
                 }
             )
+        if self.schema_version == PARITY_EVIDENCE_SCHEMA_VERSION:
+            payload["history_contract_version"] = self.history_contract_version
         return payload
 
     @classmethod
@@ -345,11 +397,27 @@ class LiveParityEvidence:
             if isinstance(raw_schema, bool) or not isinstance(raw_schema, int):
                 raise TypeError("schema_version must be an integer")
             schema_version = raw_schema
+            if schema_version not in {1, 2, PARITY_EVIDENCE_SCHEMA_VERSION}:
+                raise ValueError("unsupported parity evidence schema_version")
             raw_histories = payload["bars_by_timeframe"]
             if not isinstance(raw_histories, Mapping):
                 raise TypeError("bars_by_timeframe must be a mapping")
+
+            required_timeframes = (
+                PARITY_SOURCE_TIMEFRAMES
+                if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION
+                else _LEGACY_REQUIRED_TIMEFRAMES
+            )
+            if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION:
+                for timeframe in _DERIVED_TIMEFRAMES:
+                    if timeframe.value in raw_histories:
+                        raise ValueError(
+                            f"{timeframe.value} cannot be persisted in "
+                            "schema-v3 source history"
+                        )
+
             histories: dict[Timeframe, tuple[MarketBar, ...]] = {}
-            for timeframe in _REQUIRED_TIMEFRAMES:
+            for timeframe in required_timeframes:
                 raw_values = raw_histories.get(timeframe.value)
                 if not isinstance(raw_values, Sequence) or isinstance(
                     raw_values,
@@ -370,7 +438,8 @@ class LiveParityEvidence:
             analytical_contract_version: str | None = None
             source_commit: str | None = None
             pipeline_config_fingerprint: str | None = None
-            if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION:
+            history_contract_version: str | None = None
+            if schema_version in {2, PARITY_EVIDENCE_SCHEMA_VERSION}:
                 raw_contract = payload["analytical_contract_version"]
                 raw_commit = payload["source_commit"]
                 raw_fingerprint = payload["pipeline_config_fingerprint"]
@@ -383,12 +452,18 @@ class LiveParityEvidence:
                 analytical_contract_version = raw_contract
                 source_commit = raw_commit
                 pipeline_config_fingerprint = raw_fingerprint
+            if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION:
+                raw_history_contract = payload["history_contract_version"]
+                if not isinstance(raw_history_contract, str):
+                    raise TypeError("history_contract_version must be a string")
+                history_contract_version = raw_history_contract
 
             return cls(
                 schema_version=schema_version,
                 analytical_contract_version=analytical_contract_version,
                 source_commit=source_commit,
                 pipeline_config_fingerprint=pipeline_config_fingerprint,
+                history_contract_version=history_contract_version,
                 captured_at=datetime.fromisoformat(str(payload["captured_at"])),
                 observation_timestamp=datetime.fromisoformat(
                     str(payload["observation_timestamp"])

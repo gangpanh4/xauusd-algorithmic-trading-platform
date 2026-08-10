@@ -12,7 +12,9 @@ from core.data.models import MarketBar
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
 from core.live_trading.parity_provenance import (
+    CURRENT_PARITY_HISTORY_CONTRACT_VERSION,
     M5_ANALYTICAL_CONTRACT_V1,
+    PARITY_EVIDENCE_SCHEMA_VERSION,
     ParityAnalyticalProvenance,
     ParityProvenanceError,
     pipeline_config_fingerprint,
@@ -148,7 +150,7 @@ def _audit(timestamp: datetime) -> PipelineObservationAudit:
     )
 
 
-def test_engine_records_schema_v2_authoritative_provenance(
+def test_engine_records_schema_v3_authoritative_provenance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -175,12 +177,18 @@ def test_engine_records_schema_v2_authoritative_provenance(
         "append_parity_evidence",
         lambda path, evidence: recorded.append((path, evidence)),
     )
+    source_timeframes = (
+        Timeframe.M5,
+        Timeframe.M15,
+        Timeframe.H1,
+        Timeframe.H4,
+    )
     histories = {
         timeframe: (
             _bar(timestamp - timedelta(minutes=5)),
             _bar(timestamp),
         )
-        for timeframe in Timeframe
+        for timeframe in source_timeframes
     }
 
     engine._record_parity_evidence(
@@ -200,10 +208,15 @@ def test_engine_records_schema_v2_authoritative_provenance(
     assert len(recorded) == 1
     path, evidence = recorded[0]
     assert path == config.parity_evidence_path
-    assert evidence.schema_version == 2
+    assert evidence.schema_version == PARITY_EVIDENCE_SCHEMA_VERSION
     assert evidence.analytical_contract_version == M5_ANALYTICAL_CONTRACT_V1
     assert evidence.source_commit == _SOURCE_COMMIT
     assert evidence.pipeline_config_fingerprint == _FINGERPRINT
+    assert (
+        evidence.history_contract_version
+        == CURRENT_PARITY_HISTORY_CONTRACT_VERSION
+    )
+    assert tuple(evidence.bars_by_timeframe) == source_timeframes
     assert evidence.live_execution_enabled is False
     assert evidence.shadow_only is True
     assert evidence.trade_executed is False

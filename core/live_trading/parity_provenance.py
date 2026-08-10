@@ -15,7 +15,11 @@ from typing import Final
 
 from core.trading_pipeline.config import TradingPipelineConfig
 
-PARITY_EVIDENCE_SCHEMA_VERSION: Final = 2
+PARITY_EVIDENCE_SCHEMA_VERSION: Final = 3
+PARITY_HISTORY_CONTRACT_V1: Final = (
+    "SOURCE_M5_M15_H1_H4_DERIVE_D1_W1_FROM_H4_V1"
+)
+CURRENT_PARITY_HISTORY_CONTRACT_VERSION: Final = PARITY_HISTORY_CONTRACT_V1
 M5_ANALYTICAL_CONTRACT_V1: Final = "M5_ANALYTICAL_CONTRACT_V1"
 CURRENT_ANALYTICAL_CONTRACT_VERSION: Final = M5_ANALYTICAL_CONTRACT_V1
 _PIPELINE_CONFIG_FINGERPRINT_CONTRACT: Final = "TRADING_PIPELINE_ANALYTICAL_CONFIG_V1"
@@ -186,6 +190,10 @@ def assess_payload_provenance(
         ("analytical_contract_version", current.analytical_contract_version),
         ("source_commit", current.source_commit),
         ("pipeline_config_fingerprint", current.pipeline_config_fingerprint),
+        (
+            "history_contract_version",
+            CURRENT_PARITY_HISTORY_CONTRACT_VERSION,
+        ),
     )
     for field_name, expected in required:
         observed = payload.get(field_name)
@@ -231,6 +239,14 @@ def assess_payload_provenance(
             diagnostics=tuple(diagnostics),
         )
     return ProvenanceAssessment(compatible=True, classification=None, diagnostics=())
+
+
+def validate_history_contract_version(value: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(
+            "history_contract_version must be a non-empty exact string"
+        )
+    return value
 
 
 def validate_source_commit(value: str) -> str:

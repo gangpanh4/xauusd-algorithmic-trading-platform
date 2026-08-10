@@ -91,6 +91,7 @@ from .execution_reconciliation_audit import (
 )
 from .models import LiveTradingResult
 from .parity_evidence import (
+    PARITY_SOURCE_TIMEFRAMES,
     LiveParityEvidence,
     append_parity_evidence,
 )
@@ -1254,7 +1255,7 @@ class LiveTradingEngine:
         ) = parity_context
         histories = {
             timeframe: tuple(bars_by_timeframe.get(timeframe, ()))
-            for timeframe in Timeframe
+            for timeframe in PARITY_SOURCE_TIMEFRAMES
         }
         provenance = current_parity_provenance(self.config.pipeline)
         evidence = LiveParityEvidence(

@@ -11,7 +11,9 @@ from core.data.models import MarketBar
 from core.live_trading import parity_provenance
 from core.live_trading.parity_evidence import LiveParityEvidence
 from core.live_trading.parity_provenance import (
+    CURRENT_PARITY_HISTORY_CONTRACT_VERSION,
     M5_ANALYTICAL_CONTRACT_V1,
+    PARITY_EVIDENCE_SCHEMA_VERSION,
     ParityResultClassification,
     pipeline_config_fingerprint,
 )
@@ -72,22 +74,42 @@ def _bar(timestamp: datetime) -> MarketBar:
     )
 
 
-def _evidence(*, schema_version: int = 2) -> LiveParityEvidence:
+def _evidence(
+    *,
+    schema_version: int = PARITY_EVIDENCE_SCHEMA_VERSION,
+) -> LiveParityEvidence:
     audit = _audit()
+    source_timeframes = (
+        Timeframe.M5,
+        Timeframe.M15,
+        Timeframe.H1,
+        Timeframe.H4,
+    )
+    required_timeframes = (
+        source_timeframes
+        if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION
+        else tuple(Timeframe)
+    )
     histories = {
         timeframe: (
             _bar(audit.timestamp - timedelta(minutes=5)),
             _bar(audit.timestamp),
         )
-        for timeframe in Timeframe
+        for timeframe in required_timeframes
     }
+    versioned = schema_version in {2, PARITY_EVIDENCE_SCHEMA_VERSION}
     return LiveParityEvidence(
         schema_version=schema_version,
         analytical_contract_version=(
-            M5_ANALYTICAL_CONTRACT_V1 if schema_version == 2 else None
+            M5_ANALYTICAL_CONTRACT_V1 if versioned else None
         ),
-        source_commit=_SOURCE_COMMIT if schema_version == 2 else None,
-        pipeline_config_fingerprint=_FINGERPRINT if schema_version == 2 else None,
+        source_commit=_SOURCE_COMMIT if versioned else None,
+        pipeline_config_fingerprint=_FINGERPRINT if versioned else None,
+        history_contract_version=(
+            CURRENT_PARITY_HISTORY_CONTRACT_VERSION
+            if schema_version == PARITY_EVIDENCE_SCHEMA_VERSION
+            else None
+        ),
         captured_at=audit.timestamp + timedelta(minutes=5),
         observation_timestamp=audit.timestamp,
         symbol="XAUUSD",
@@ -186,7 +208,7 @@ def test_partial_row_does_not_hide_later_valid_evidence(
     assert report["results"][1]["classification"] == "PARITY_MATCH"
 
 
-def test_matching_v2_provenance_permits_replay_and_can_pass(
+def test_matching_v3_provenance_permits_replay_and_can_pass(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -260,7 +282,7 @@ def test_provenance_mismatch_blocks_replay(
     assert report["validation_passed"] is False
 
 
-def test_missing_v2_provenance_fails_before_replay(
+def test_missing_v3_provenance_fails_before_replay(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -276,6 +298,25 @@ def test_missing_v2_provenance_fails_before_replay(
     assert report["provenance_mismatch_count"] == 1
     assert report["parse_error_count"] == 0
     assert report["validation_passed"] is False
+
+
+def test_schema_v2_is_incompatible_and_never_replayed(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous = _evidence(schema_version=2)
+    reporter = _reporter(tmp_path, [previous.to_payload()])
+    replay = Mock()
+    monkeypatch.setattr(reporter, "_replay", replay)
+
+    report = reporter.calculate()
+
+    replay.assert_not_called()
+    assert report["compatible_evidence_count"] == 0
+    assert report["provenance_mismatch_count"] == 1
+    assert report["parse_error_count"] == 0
+    assert report["validation_passed"] is False
+    assert report["results"][0]["classification"] == "PROVENANCE_MISMATCH"
 
 
 def test_schema_v1_is_legacy_and_never_replayed(
