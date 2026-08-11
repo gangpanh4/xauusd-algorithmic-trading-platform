@@ -12,6 +12,7 @@ from core.live_trading.config import LiveTradingConfig
 from core.live_trading.demo_execution_authorization import (
     DemoExecutionAuthorization,
 )
+from core.risk_manager.models import RiskDecision
 
 NOW = datetime(2026, 8, 10, 7, 0, tzinfo=UTC)
 
@@ -79,7 +80,7 @@ def test_initial_authorization_refuses_non_canary_scope(
         )
 
 
-def test_expired_authorization_is_rejected_before_mt5_connection(
+def test_expired_authorization_does_not_front_load_the_signal_gate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -96,18 +97,57 @@ def test_expired_authorization_is_rejected_before_mt5_connection(
         encoding="utf-8",
     )
     monkeypatch.setattr(launcher, "_utc_now", lambda: NOW)
-    initialize = Mock(return_value=True)
+    initialize = Mock(return_value=False)
     monkeypatch.setattr(launcher.mt5, "initialize", initialize)
 
-    with pytest.raises(RuntimeError, match="expired"):
+    with pytest.raises(
+        launcher.DemoCanaryLauncherError,
+        match="Unable to initialize MT5",
+    ):
         launcher._run_one_shot_demo_canary(config)
 
-    initialize.assert_not_called()
+    initialize.assert_called_once()
     loaded = json.loads(
         config.demo_authorization_path.read_text(encoding="utf-8")
     )
     assert loaded["consumed_at"] is None
     assert loaded["consumed_intent_key"] is None
+
+
+def test_canary_candidate_caps_only_down_to_fixed_001() -> None:
+    original = SimpleNamespace(
+        signal=SimpleNamespace(direction=SimpleNamespace(name="BUY")),
+        trade_plan=SimpleNamespace(
+            decision=RiskDecision.APPROVE,
+            position_size=0.25,
+            metadata={"source": "strategy"},
+        ),
+    )
+
+    candidate = launcher._build_canary_execution_candidate(original)  # type: ignore[arg-type]
+
+    assert original.trade_plan.position_size == pytest.approx(0.25)
+    assert candidate.trade_plan.position_size == pytest.approx(0.01)
+    assert candidate.trade_plan.metadata["demo_canary_original_position_size"] == pytest.approx(0.25)
+    assert candidate.trade_plan.metadata["demo_canary_execution_volume"] == pytest.approx(0.01)
+    assert candidate.trade_plan.metadata["demo_canary_volume_capped"] is True
+
+
+def test_canary_candidate_never_increases_strategy_risk() -> None:
+    original = SimpleNamespace(
+        signal=SimpleNamespace(direction=SimpleNamespace(name="BUY")),
+        trade_plan=SimpleNamespace(
+            decision=RiskDecision.APPROVE,
+            position_size=0.005,
+            metadata={},
+        ),
+    )
+
+    with pytest.raises(
+        launcher.DemoCanaryLauncherError,
+        match="below the fixed 0.01-lot",
+    ):
+        launcher._build_canary_execution_candidate(original)  # type: ignore[arg-type]
 
 
 def test_parity_is_established_only_from_verified_attestation(

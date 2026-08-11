@@ -1,9 +1,10 @@
-"""Dedicated one-shot authorized MT5 demo-canary launcher.
+"""Signal-gated one-shot MT5 demo-canary launcher.
 
-This module is intentionally separate from the ordinary indefinite live mode.
-It enables execution controls only inside this short-lived process, requires an
-existing durable one-shot demo authorization, waits for a genuine production
-APPROVE TradePlan, permits at most one executor invocation, and then terminates.
+The process warms and waits for a genuine production APPROVE while execution
+remains disabled. Only after that exact approved observation exists may the
+operator acknowledge one demo order, a fresh short-lived authorization be
+created, and the frozen approved result enter the ordinary execution safety
+path.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from math import isclose, isfinite
@@ -33,11 +35,13 @@ from core.multi_timeframe.history_alignment import (
     visible_bars,
 )
 from core.risk_manager.models import RiskDecision
+from core.trading_pipeline.models import PipelineResult
 
 from .config import LiveTradingConfig
 from .connected_demo_canary_preflight import (
     ConnectedDemoCanaryPreflightEvidence,
     collect_connected_demo_canary_preflight_evidence,
+    export_connected_demo_canary_preflight_evidence,
 )
 from .demo_execution_authorization import (
     DemoExecutionAuthorization,
@@ -45,6 +49,9 @@ from .demo_execution_authorization import (
     load_demo_execution_authorization,
     validate_demo_execution_authorization_scope,
     validate_demo_execution_authorization_time_window,
+)
+from .demo_execution_authorization_prepare import (
+    prepare_fresh_demo_authorization_from_preflight,
 )
 from .engine import LiveTradingEngine
 from .execution_intent_store import ExecutionIntentStateError
@@ -58,6 +65,9 @@ from .partial_fill_store import PartialFillStateError
 _CANARY_SYMBOL = "XAUUSD"
 _CANARY_VOLUME = 0.01
 _VOLUME_TOLERANCE = 1e-12
+_REQUIRED_ACKNOWLEDGEMENT = "I AUTHORIZE ONE DEMO ORDER"
+_APPROVED_CANDIDATE_MAX_AGE_SECONDS = 120.0
+_PREFLIGHT_PATH = Path("output/live_execution_reconciliation/connected_demo_canary_preflight.json")
 
 _CLEAR_RECONCILIATION_STATES = {
     "",
@@ -386,23 +396,6 @@ def _require_runtime_clear(engine: LiveTradingEngine) -> None:
         )
 
 
-def _load_wait_authorization(
-    path: Path,
-    initial: DemoExecutionAuthorization,
-    *,
-    now: datetime,
-) -> DemoExecutionAuthorization:
-    current = load_demo_execution_authorization(path)
-    if current.consumed:
-        return current
-    validate_demo_execution_authorization_time_window(current, now=now)
-    if current != initial:
-        raise DemoCanaryLauncherError(
-            "Demo execution authorization changed while the canary was waiting."
-        )
-    return current
-
-
 def _terminal_result(
     engine: LiveTradingEngine,
     *,
@@ -425,36 +418,127 @@ def _terminal_result(
     )
 
 
-def _sleep_without_crossing_expiry(
-    config: LiveTradingConfig,
-    authorization: DemoExecutionAuthorization,
+def _build_canary_execution_candidate(
+    pipeline_result: PipelineResult,
+) -> PipelineResult:
+    """Freeze one approved result and cap demo exposure to exactly 0.01 lot."""
+
+    signal = pipeline_result.signal
+    trade_plan = pipeline_result.trade_plan
+    if signal is None or trade_plan is None:
+        raise DemoCanaryLauncherError(
+            "Genuine canary approval requires a signal and trade plan."
+        )
+    if trade_plan.decision is not RiskDecision.APPROVE:
+        raise DemoCanaryLauncherError(
+            "Only a genuine RiskDecision.APPROVE may enter the canary handoff."
+        )
+
+    original_volume = float(trade_plan.position_size)
+    if (
+        not isfinite(original_volume)
+        or original_volume <= 0.0
+        or original_volume < _CANARY_VOLUME - _VOLUME_TOLERANCE
+    ):
+        raise DemoCanaryLauncherError(
+            "Approved risk size is below the fixed 0.01-lot canary volume."
+        )
+
+    candidate = deepcopy(pipeline_result)
+    candidate_plan = candidate.trade_plan
+    if candidate_plan is None:
+        raise DemoCanaryLauncherError(
+            "Frozen canary candidate lost its approved trade plan."
+        )
+    metadata = dict(candidate_plan.metadata)
+    metadata.update(
+        {
+            "demo_canary_original_position_size": original_volume,
+            "demo_canary_execution_volume": _CANARY_VOLUME,
+            "demo_canary_volume_capped": (
+                original_volume > _CANARY_VOLUME + _VOLUME_TOLERANCE
+            ),
+        }
+    )
+    candidate_plan.metadata = metadata
+    candidate_plan.position_size = _CANARY_VOLUME
+    return candidate
+
+
+def _require_fresh_approved_candidate(
+    observation_bar: MarketBar,
     *,
     now: datetime,
 ) -> None:
-    remaining = (
-        authorization.expires_at.astimezone(UTC) - now.astimezone(UTC)
-    ).total_seconds()
-    if remaining <= 0.0:
-        return
-    time.sleep(min(float(config.poll_interval_seconds), remaining))
-
-
-def _expired_result(
-    engine: LiveTradingEngine,
-    exc: DemoExecutionAuthorizationError,
-) -> DemoCanaryLaunchResult:
-    return _terminal_result(
-        engine,
-        outcome="AUTHORIZATION_EXPIRED_NO_SUBMISSION",
-        authorization_consumed=False,
-        last_error=str(exc),
+    decision_available_at = observation_bar.timestamp.astimezone(UTC) + timedelta(
+        minutes=5
     )
+    age_seconds = (now.astimezone(UTC) - decision_available_at).total_seconds()
+    if age_seconds < 0.0:
+        raise DemoCanaryLauncherError(
+            "Approved canary observation is not causally available yet."
+        )
+    if age_seconds > _APPROVED_CANDIDATE_MAX_AGE_SECONDS:
+        raise DemoCanaryLauncherError(
+            "Approved canary observation became stale before authorization."
+        )
+
+
+def _require_same_latest_m5(
+    service: MarketDataService,
+    approved_bar: MarketBar,
+) -> None:
+    latest = service.get_latest_closed_bar()
+    if latest is None or latest.timestamp != approved_bar.timestamp:
+        raise DemoCanaryLauncherError(
+            "A newer completed M5 bar appeared before canary submission."
+        )
+
+
+def _print_genuine_approval(
+    observation_bar: MarketBar,
+    pipeline_result: PipelineResult,
+) -> None:
+    signal = pipeline_result.signal
+    trade_plan = pipeline_result.trade_plan
+    if signal is None or trade_plan is None:
+        raise DemoCanaryLauncherError(
+            "Approved canary candidate is missing execution fields."
+        )
+    direction = getattr(signal.direction, "name", str(signal.direction))
+    print(
+        json.dumps(
+            {
+                "event": "GENUINE_PRODUCTION_APPROVAL_DETECTED",
+                "observation_timestamp": observation_bar.timestamp.astimezone(
+                    UTC
+                ).isoformat(),
+                "direction": direction,
+                "decision": trade_plan.decision.value,
+                "strategy_position_size": trade_plan.position_size,
+                "canary_execution_volume": _CANARY_VOLUME,
+                "entry_price": trade_plan.entry_price,
+                "stop_loss": trade_plan.stop_loss,
+                "take_profit": trade_plan.take_profit,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def _read_post_signal_acknowledgement() -> str:
+    print(
+        'Type exactly "I AUTHORIZE ONE DEMO ORDER" now to open the short '
+        "one-shot demo authorization window."
+    )
+    return input("acknowledgement> ").strip()
 
 
 def _run_one_shot_demo_canary(
     safe_config: LiveTradingConfig,
 ) -> DemoCanaryLaunchResult:
-    """Run one dedicated canary using an existing durable authorization."""
+    """Wait safely for a genuine approval, then authorize and execute it."""
 
     if safe_config.symbol != _CANARY_SYMBOL:
         raise DemoCanaryLauncherError("Demo canary is restricted to XAUUSD.")
@@ -467,16 +551,9 @@ def _run_one_shot_demo_canary(
             "Demo canary must begin from safe-disabled production controls."
         )
 
-    initial_authorization = load_demo_execution_authorization(
-        safe_config.demo_authorization_path
-    )
-    _validate_initial_authorization(
-        initial_authorization,
-        now=_utc_now(),
-    )
-
     initialized = False
-    engine: LiveTradingEngine | None = None
+    analysis_engine: LiveTradingEngine | None = None
+    execution_engine: LiveTradingEngine | None = None
     try:
         if not mt5.initialize():
             raise DemoCanaryLauncherError(
@@ -484,42 +561,20 @@ def _run_one_shot_demo_canary(
             )
         initialized = True
 
-        preflight = collect_connected_demo_canary_preflight_evidence(
-            config=safe_config,
-            lookback_hours=24,
-        )
-        _validate_preflight_binding(preflight, initial_authorization)
-
-        account = get_account_info()
-        if (
-            account.login != preflight.account_login
-            or account.server != preflight.account_server
-            or account.trade_mode != preflight.account_trade_mode
-        ):
-            raise DemoCanaryLauncherError(
-                "Connected account changed after the safe-disabled preflight."
-            )
-
-        active_config = _build_active_canary_config(
-            safe_config,
-            initial_authorization,
-        )
-        validate_demo_execution_authorization_scope(
-            initial_authorization,
-            config=active_config,
-            account=account,
-            now=_utc_now(),
-        )
-
-        services = _build_services(active_config)
-        engine = LiveTradingEngine(active_config)
-        engine.start()
+        services = _build_services(safe_config)
+        analysis_engine = LiveTradingEngine(safe_config)
+        analysis_engine.start()
 
         services[Timeframe.M5].validate_clock_alignment()
-        engine.record_clock_normalization_validated()
-        _establish_parity_validation(engine, active_config)
+        analysis_engine.record_clock_normalization_validated()
+        _establish_parity_validation(analysis_engine, safe_config)
+        _require_runtime_clear(analysis_engine)
 
-        _require_runtime_clear(engine)
+        bootstrap_account = get_account_info()
+        if bootstrap_account.trade_mode != 0:
+            raise DemoCanaryLauncherError(
+                "Signal-gated canary requires an MT5 demo account."
+            )
 
         bootstrap_m5 = services[Timeframe.M5].get_latest_closed_bar()
         if bootstrap_m5 is None:
@@ -529,24 +584,25 @@ def _run_one_shot_demo_canary(
         histories, capacities = _load_aligned_live_histories(
             services=services,
             latest_m5=bootstrap_m5,
-            analysis_window_bars=active_config.history_window_bars,
+            analysis_window_bars=safe_config.history_window_bars,
         )
         buffer = LiveMultiTimeframeBuffer(
-            window_bars=active_config.history_window_bars,
+            window_bars=safe_config.history_window_bars,
             source_capacity_bars=capacities,
         )
         for timeframe, history in histories.items():
             buffer.load(timeframe, history)
 
-        account = get_account_info()
-        engine.reconcile_realized_deals(
-            account_balance=account.balance,
+        analysis_engine.reconcile_realized_deals(
+            account_balance=bootstrap_account.balance,
             initialize_only=True,
         )
-        engine.pipeline.synchronize_account_balance(account.balance)
+        analysis_engine.pipeline.synchronize_account_balance(
+            bootstrap_account.balance
+        )
 
         symbol_spec: LiveSymbolSpecification = get_live_symbol_specification(
-            active_config.symbol
+            safe_config.symbol
         )
         if symbol_spec.symbol != _CANARY_SYMBOL:
             raise DemoCanaryLauncherError(
@@ -562,55 +618,22 @@ def _run_one_shot_demo_canary(
 
         warmup_snapshots = []
         for m5_bar in buffer.histories[Timeframe.M5]:
-            try:
-                current_authorization = _load_wait_authorization(
-                    active_config.demo_authorization_path,
-                    initial_authorization,
-                    now=_utc_now(),
-                )
-            except DemoExecutionAuthorizationError as exc:
-                if "expired" in str(exc).lower():
-                    return _expired_result(engine, exc)
-                raise
-            if current_authorization.consumed:
-                return _terminal_result(
-                    engine,
-                    outcome="AUTHORIZATION_CONSUMED_DURING_BOOTSTRAP",
-                    authorization_consumed=True,
-                )
-
             boundary = m5_bar.timestamp + timedelta(minutes=5)
             snapshot = buffer.snapshot(boundary)
             if snapshot is not None:
                 warmup_snapshots.append(snapshot)
 
-        if len(warmup_snapshots) < active_config.warmup_bars:
+        if len(warmup_snapshots) < safe_config.warmup_bars:
             raise DemoCanaryLauncherError(
                 "Insufficient complete synchronized M5 warm-up snapshots: "
-                f"required={active_config.warmup_bars} "
+                f"required={safe_config.warmup_bars} "
                 f"available={len(warmup_snapshots)}."
             )
 
         for snapshot in warmup_snapshots:
-            try:
-                current_authorization = _load_wait_authorization(
-                    active_config.demo_authorization_path,
-                    initial_authorization,
-                    now=_utc_now(),
-                )
-            except DemoExecutionAuthorizationError as exc:
-                if "expired" in str(exc).lower():
-                    return _expired_result(engine, exc)
-                raise
-            if current_authorization.consumed:
-                return _terminal_result(
-                    engine,
-                    outcome="AUTHORIZATION_CONSUMED_DURING_WARMUP",
-                    authorization_consumed=True,
-                )
-            engine.process_multi_timeframe(
+            analysis_engine.process_multi_timeframe(
                 snapshot,
-                account_balance=account.balance,
+                account_balance=bootstrap_account.balance,
                 stop_loss_distance=symbol_spec.minimum_stop_distance,
                 pip_value=symbol_spec.tick_value_per_lot,
                 tick_size=symbol_spec.tick_size,
@@ -620,35 +643,18 @@ def _run_one_shot_demo_canary(
                 warmup=True,
             )
 
+        print(
+            "Signal-gated canary is armed in SAFE-DISABLED mode. "
+            "No authorization exists and no order can be submitted while "
+            "waiting for a genuine production APPROVE."
+        )
+
         while True:
-            now = _utc_now()
-            try:
-                current_authorization = _load_wait_authorization(
-                    active_config.demo_authorization_path,
-                    initial_authorization,
-                    now=now,
-                )
-            except DemoExecutionAuthorizationError as exc:
-                if "expired" in str(exc).lower():
-                    return _expired_result(engine, exc)
-                raise
-
-            if current_authorization.consumed:
-                return _terminal_result(
-                    engine,
-                    outcome="AUTHORIZATION_CONSUMED",
-                    authorization_consumed=True,
-                )
-
-            _require_runtime_clear(engine)
+            _require_runtime_clear(analysis_engine)
 
             m5_bar = services[Timeframe.M5].get_latest_closed_bar()
             if m5_bar is None:
-                _sleep_without_crossing_expiry(
-                    active_config,
-                    current_authorization,
-                    now=now,
-                )
+                time.sleep(float(safe_config.poll_interval_seconds))
                 continue
 
             for timeframe in (
@@ -661,40 +667,32 @@ def _run_one_shot_demo_canary(
                     buffer.append(timeframe, completed)
 
             if not buffer.append(Timeframe.M5, m5_bar):
-                _sleep_without_crossing_expiry(
-                    active_config,
-                    current_authorization,
-                    now=now,
-                )
+                time.sleep(float(safe_config.poll_interval_seconds))
                 continue
 
             boundary = m5_bar.timestamp + timedelta(minutes=5)
             snapshot = buffer.snapshot(boundary)
             if snapshot is None:
-                _sleep_without_crossing_expiry(
-                    active_config,
-                    current_authorization,
-                    now=now,
-                )
+                time.sleep(float(safe_config.poll_interval_seconds))
                 continue
 
             account = get_account_info()
             if (
-                account.login != active_config.approved_account_login
-                or account.server != active_config.approved_account_server
+                account.login != bootstrap_account.login
+                or account.server != bootstrap_account.server
                 or account.trade_mode != 0
             ):
                 raise DemoCanaryLauncherError(
                     "Connected demo account identity changed while waiting."
                 )
 
-            engine.reconcile_realized_deals(
+            analysis_engine.reconcile_realized_deals(
                 account_balance=account.balance,
                 as_of=boundary,
             )
-            _require_runtime_clear(engine)
+            _require_runtime_clear(analysis_engine)
 
-            result = engine.process_multi_timeframe(
+            analysis_result = analysis_engine.process_multi_timeframe(
                 snapshot,
                 account_balance=account.balance,
                 stop_loss_distance=symbol_spec.minimum_stop_distance,
@@ -704,23 +702,120 @@ def _run_one_shot_demo_canary(
                 minimum_lot=symbol_spec.minimum_lot,
                 maximum_lot=symbol_spec.maximum_lot,
             )
+            trade_plan = analysis_result.pipeline_result.trade_plan
+            if trade_plan is None or trade_plan.decision is not RiskDecision.APPROVE:
+                time.sleep(float(safe_config.poll_interval_seconds))
+                continue
 
-            execution_result = result.execution_result
-            if engine.state.order_submissions_this_session > 0:
+            audit = analysis_engine.pipeline.last_observation_audit
+            if (
+                audit is None
+                or audit.timestamp != m5_bar.timestamp.astimezone(UTC)
+                or not audit.accepted
+            ):
+                raise DemoCanaryLauncherError(
+                    "Genuine approval is not backed by the matching accepted "
+                    "pipeline audit."
+                )
+
+            _print_genuine_approval(m5_bar, analysis_result.pipeline_result)
+            candidate = _build_canary_execution_candidate(
+                analysis_result.pipeline_result
+            )
+
+            acknowledgement = _read_post_signal_acknowledgement()
+            if acknowledgement != _REQUIRED_ACKNOWLEDGEMENT:
+                return _terminal_result(
+                    analysis_engine,
+                    outcome="POST_SIGNAL_AUTHORIZATION_DECLINED",
+                    authorization_consumed=False,
+                    last_error="Exact demo authorization acknowledgement was not supplied.",
+                )
+
+            _require_fresh_approved_candidate(m5_bar, now=_utc_now())
+            _require_same_latest_m5(services[Timeframe.M5], m5_bar)
+
+            preflight = collect_connected_demo_canary_preflight_evidence(
+                config=safe_config,
+                lookback_hours=24,
+            )
+            export_connected_demo_canary_preflight_evidence(
+                _PREFLIGHT_PATH,
+                preflight,
+            )
+            if not preflight.validation_passed:
+                raise DemoCanaryLauncherError(
+                    "Post-signal connected preflight failed: "
+                    + "; ".join(preflight.reasons)
+                )
+
+            _require_fresh_approved_candidate(m5_bar, now=_utc_now())
+            _require_same_latest_m5(services[Timeframe.M5], m5_bar)
+
+            preparation = prepare_fresh_demo_authorization_from_preflight(
+                config=safe_config,
+                preflight_path=_PREFLIGHT_PATH,
+                acknowledgement=acknowledgement,
+                now=_utc_now(),
+            )
+            authorization = preparation.authorization
+            _validate_initial_authorization(authorization, now=_utc_now())
+            _validate_preflight_binding(preflight, authorization)
+
+            active_config = _build_active_canary_config(
+                safe_config,
+                authorization,
+            )
+            account = get_account_info()
+            if (
+                account.login != authorization.account_login
+                or account.server != authorization.account_server
+                or account.trade_mode != 0
+            ):
+                raise DemoCanaryLauncherError(
+                    "Connected demo account changed after authorization."
+                )
+            validate_demo_execution_authorization_scope(
+                authorization,
+                config=active_config,
+                account=account,
+                now=_utc_now(),
+            )
+
+            execution_engine = LiveTradingEngine(active_config)
+            execution_engine.start()
+            services[Timeframe.M5].validate_clock_alignment()
+            execution_engine.record_clock_normalization_validated()
+            _establish_parity_validation(execution_engine, active_config)
+            execution_engine.reconcile_realized_deals(
+                account_balance=account.balance,
+                initialize_only=True,
+            )
+            execution_engine.pipeline.synchronize_account_balance(account.balance)
+            _require_runtime_clear(execution_engine)
+
+            _require_fresh_approved_candidate(m5_bar, now=_utc_now())
+            _require_same_latest_m5(services[Timeframe.M5], m5_bar)
+
+            execution_result = execution_engine.execute_precomputed_approved_observation(
+                observation_bar=m5_bar,
+                pipeline_result=candidate,
+            )
+
+            broker_result = execution_result.execution_result
+            if execution_engine.state.order_submissions_this_session > 0:
                 consumed = load_demo_execution_authorization(
                     active_config.demo_authorization_path
                 ).consumed
                 return _terminal_result(
-                    engine,
+                    execution_engine,
                     outcome="ONE_SUBMISSION_ATTEMPT_COMPLETED",
                     authorization_consumed=consumed,
                     execution_status=(
-                        None
-                        if execution_result is None
-                        else execution_result.status.value
+                        None if broker_result is None else broker_result.status.value
                     ),
-                    trade_executed=result.trade_executed,
-                    last_error=engine.state.last_error,
+                    trade_executed=execution_result.trade_executed,
+                    last_error=execution_engine.state.last_error,
                 )
 
             post_authorization = load_demo_execution_authorization(
@@ -728,34 +823,24 @@ def _run_one_shot_demo_canary(
             )
             if post_authorization.consumed:
                 return _terminal_result(
-                    engine,
+                    execution_engine,
                     outcome="AUTHORIZATION_CONSUMED_WITHOUT_EXECUTOR_ATTEMPT",
                     authorization_consumed=True,
-                    last_error=engine.state.last_error,
+                    last_error=execution_engine.state.last_error,
                 )
 
-            trade_plan = result.pipeline_result.trade_plan
-            if (
-                trade_plan is not None
-                and trade_plan.decision is RiskDecision.APPROVE
-                and engine.state.last_error
-            ):
-                return _terminal_result(
-                    engine,
-                    outcome="SAFETY_ABORT_AFTER_GENUINE_APPROVAL",
-                    authorization_consumed=False,
-                    last_error=engine.state.last_error,
-                )
-
-            _sleep_without_crossing_expiry(
-                active_config,
-                post_authorization,
-                now=_utc_now(),
+            return _terminal_result(
+                execution_engine,
+                outcome="SAFETY_ABORT_AFTER_GENUINE_APPROVAL",
+                authorization_consumed=False,
+                last_error=execution_engine.state.last_error,
             )
 
     finally:
-        if engine is not None:
-            engine.stop()
+        if execution_engine is not None:
+            execution_engine.stop()
+        if analysis_engine is not None:
+            analysis_engine.stop()
         if initialized:
             mt5.shutdown()
 

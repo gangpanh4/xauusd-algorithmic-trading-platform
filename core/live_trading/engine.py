@@ -583,6 +583,40 @@ class LiveTradingEngine:
             ),
         )
 
+    def execute_precomputed_approved_observation(
+        self,
+        *,
+        observation_bar: MarketBar,
+        pipeline_result: PipelineResult,
+    ) -> LiveTradingResult:
+        """Execute one already-approved observation without re-running analysis.
+
+        The analytical pipeline must have produced the supplied APPROVE result
+        while execution was disabled. This method performs chronology and the
+        ordinary execution safety path only; it does not call TradingPipeline.
+        """
+
+        if not self.config.live_execution_enabled:
+            raise RuntimeError(
+                "Precomputed approved execution requires live execution to be enabled."
+            )
+        if pipeline_result.signal is None or pipeline_result.trade_plan is None:
+            raise ValueError(
+                "Precomputed approved execution requires a signal and trade plan."
+            )
+        if pipeline_result.trade_plan.decision is not RiskDecision.APPROVE:
+            raise ValueError(
+                "Precomputed execution is restricted to RiskDecision.APPROVE."
+            )
+
+        self._require_new_observation_timestamp(observation_bar.timestamp)
+        return self._finalize_observation(
+            observation_bar=observation_bar,
+            pipeline_result=pipeline_result,
+            warmup=False,
+            parity_context=None,
+        )
+
     def _finalize_observation(
         self,
         *,
