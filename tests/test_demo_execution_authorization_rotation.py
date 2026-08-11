@@ -33,6 +33,17 @@ NOW = datetime(2026, 8, 10, 8, 0, tzinfo=UTC)
 ACK = "I AUTHORIZE ONE DEMO ORDER"
 
 
+@pytest.fixture(autouse=True)
+def _assume_verified_parity_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        prepare_module,
+        "verify_parity_validation_attestation",
+        lambda **_kwargs: None,
+    )
+
+
 def _config(tmp_path: Path) -> LiveTradingConfig:
     return LiveTradingConfig(
         demo_authorization_path=tmp_path / "demo_execution_authorization.json",
@@ -451,6 +462,37 @@ def _preflight_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def test_preparation_rejects_missing_or_incompatible_parity_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+
+    def fail(**_kwargs: object) -> None:
+        raise prepare_module.ParityValidationAttestationError(
+            "injected attestation failure"
+        )
+
+    monkeypatch.setattr(
+        prepare_module,
+        "verify_parity_validation_attestation",
+        fail,
+    )
+
+    with pytest.raises(
+        prepare_module.DemoAuthorizationPreparationError,
+        match="parity attestation",
+    ):
+        prepare_module.prepare_fresh_demo_authorization_from_preflight(
+            config=config,
+            preflight_path=tmp_path / "unused-preflight.json",
+            acknowledgement=ACK,
+            now=NOW,
+        )
+
+    assert config.demo_authorization_path.exists() is False
 
 
 def test_production_preparation_uses_fresh_connected_preflight_binding(

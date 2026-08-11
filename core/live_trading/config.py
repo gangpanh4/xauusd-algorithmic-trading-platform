@@ -83,6 +83,10 @@ class LiveTradingConfig:
         "output/live_parity"
     )
 
+    parity_validation_attestation_path: Path = Path(
+        "runtime/live_parity_validation_attestation.json"
+    )
+
     partial_fill_state_path: Path = Path(
         "runtime/live_partial_fill_state.json"
     )

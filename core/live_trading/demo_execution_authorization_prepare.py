@@ -21,6 +21,10 @@ from .demo_execution_authorization import (
     DemoExecutionAuthorizationError,
     create_fresh_demo_execution_authorization,
 )
+from .parity_validation_attestation import (
+    ParityValidationAttestationError,
+    verify_parity_validation_attestation,
+)
 
 _PREFLIGHT_PATH: Final = Path(
     "output/live_execution_reconciliation/connected_demo_canary_preflight.json"
@@ -44,6 +48,12 @@ def prepare_fresh_demo_authorization_from_preflight(
     now: datetime,
 ) -> DemoAuthorizationPreparationResult:
     observed_at = _aware_utc(now, "now")
+    try:
+        verify_parity_validation_attestation(config=config)
+    except ParityValidationAttestationError as exc:
+        raise DemoAuthorizationPreparationError(
+            "Current live parity attestation is missing or incompatible."
+        ) from exc
     payload = _load_preflight_payload(preflight_path)
     account_login, account_server, account_trade_mode = _validate_preflight_payload(
         payload,

@@ -110,52 +110,52 @@ def test_expired_authorization_is_rejected_before_mt5_connection(
     assert loaded["consumed_intent_key"] is None
 
 
-def test_parity_is_established_only_from_production_report(
+def test_parity_is_established_only_from_verified_attestation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     config = LiveTradingConfig(
         parity_evidence_path=tmp_path / "parity.jsonl",
         parity_report_directory=tmp_path / "out",
+        parity_validation_attestation_path=tmp_path / "attestation.json",
     )
     engine = SimpleNamespace(record_parity_validation_passed=Mock())
-
-    class PassingReporter:
-        def __init__(self, **kwargs: object) -> None:
-            self.kwargs = kwargs
-
-        def calculate(self) -> dict[str, object]:
-            return {"validation_passed": True}
-
-    monkeypatch.setattr(launcher, "LiveParityReporter", PassingReporter)
+    verifier = Mock()
+    monkeypatch.setattr(
+        launcher,
+        "verify_parity_validation_attestation",
+        verifier,
+    )
 
     launcher._establish_parity_validation(engine, config)  # type: ignore[arg-type]
 
+    verifier.assert_called_once_with(config=config)
     engine.record_parity_validation_passed.assert_called_once_with()
 
 
-def test_failed_parity_never_records_runtime_validation(
+def test_failed_attestation_never_records_runtime_validation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     config = LiveTradingConfig(
         parity_evidence_path=tmp_path / "parity.jsonl",
         parity_report_directory=tmp_path / "out",
+        parity_validation_attestation_path=tmp_path / "attestation.json",
     )
     engine = SimpleNamespace(record_parity_validation_passed=Mock())
-
-    class FailingReporter:
-        def __init__(self, **kwargs: object) -> None:
-            self.kwargs = kwargs
-
-        def calculate(self) -> dict[str, object]:
-            return {"validation_passed": False}
-
-    monkeypatch.setattr(launcher, "LiveParityReporter", FailingReporter)
+    monkeypatch.setattr(
+        launcher,
+        "verify_parity_validation_attestation",
+        Mock(
+            side_effect=launcher.ParityValidationAttestationError(
+                "injected attestation failure"
+            )
+        ),
+    )
 
     with pytest.raises(
         launcher.DemoCanaryLauncherError,
-        match="parity validation did not pass",
+        match="parity attestation validation did not pass",
     ):
         launcher._establish_parity_validation(engine, config)  # type: ignore[arg-type]
 

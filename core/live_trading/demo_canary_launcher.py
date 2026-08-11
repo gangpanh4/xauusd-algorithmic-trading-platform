@@ -49,7 +49,10 @@ from .demo_execution_authorization import (
 from .engine import LiveTradingEngine
 from .execution_intent_store import ExecutionIntentStateError
 from .multi_timeframe_buffer import LiveMultiTimeframeBuffer
-from .parity_report import LiveParityReporter
+from .parity_validation_attestation import (
+    ParityValidationAttestationError,
+    verify_parity_validation_attestation,
+)
 from .partial_fill_store import PartialFillStateError
 
 _CANARY_SYMBOL = "XAUUSD"
@@ -242,16 +245,14 @@ def _establish_parity_validation(
     engine: LiveTradingEngine,
     config: LiveTradingConfig,
 ) -> None:
-    """Run the production parity reporter before recording the runtime flag."""
+    """Verify the pre-authorization parity proof before recording runtime state."""
 
-    report = LiveParityReporter(
-        input_path=config.parity_evidence_path,
-        output_directory=config.parity_report_directory,
-    ).calculate()
-    if report.get("validation_passed") is not True:
+    try:
+        verify_parity_validation_attestation(config=config)
+    except ParityValidationAttestationError as exc:
         raise DemoCanaryLauncherError(
-            "Production live-versus-replay parity validation did not pass."
-        )
+            "Pre-authorization parity attestation validation did not pass."
+        ) from exc
     engine.record_parity_validation_passed()
 
 
