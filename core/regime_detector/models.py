@@ -5,9 +5,10 @@ Core data models for the Market Regime Detection module.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
 
 class RegimeLabel(Enum):
     UNKNOWN = "UNKNOWN"
@@ -117,6 +118,11 @@ class MarketRegime:
         """
 
         self.label = self.primary_regime
+
+    @property
+    def confirmed(self) -> bool:
+        """Return whether the canonical regime label is confirmed."""
+        return self.primary_regime is not RegimeLabel.UNKNOWN
 
 @dataclass(frozen=True)
 class TransitionRecord:

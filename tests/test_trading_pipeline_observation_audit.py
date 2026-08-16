@@ -19,7 +19,6 @@ from core.trading_pipeline.models import (
 )
 from core.trading_pipeline.pipeline import TradingPipeline
 
-
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
@@ -88,6 +87,41 @@ def _result(
         signal=signal,
         trade_plan=trade_plan,
     )
+
+
+def test_pipeline_result_approved_accepts_confirmed_regime() -> None:
+    result = _result()
+
+    assert result.regime.confirmed is True
+    assert result.approved is True
+
+
+def test_pipeline_result_approved_rejects_unknown_regime() -> None:
+    result = _result(regime=RegimeLabel.UNKNOWN)
+
+    assert result.regime.confirmed is False
+    assert result.approved is False
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        (RegimeLabel.TRENDING_BULL, True),
+        (RegimeLabel.UNKNOWN, False),
+    ],
+)
+def test_pipeline_audit_regime_confirmation_matches_result(
+    label: RegimeLabel,
+    expected: bool,
+) -> None:
+    result = _result(regime=label)
+    audit = TradingPipeline._build_observation_audit(
+        timestamp=NOW,
+        result=result,
+    )
+
+    assert result.regime.confirmed is expected
+    assert audit.regime_confirmed is result.regime.confirmed
 
 
 def test_accepted_observation_records_all_final_facts() -> None:

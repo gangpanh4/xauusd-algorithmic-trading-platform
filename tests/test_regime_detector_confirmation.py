@@ -15,7 +15,6 @@ from core.regime_detector.models import (
     StatusFlag,
 )
 
-
 _BASE_TIME = datetime(2025, 1, 1, tzinfo=UTC)
 _FEATURES = FeatureSet(
     adx=30.0,
@@ -99,6 +98,16 @@ def _script_detector(
     return detector
 
 
+
+@pytest.mark.parametrize("label", tuple(RegimeLabel))
+def test_confirmed_property_matches_canonical_regime_label(
+    label: RegimeLabel,
+) -> None:
+    regime = MarketRegime(primary_regime=label)
+
+    assert regime.confirmed is (label is not RegimeLabel.UNKNOWN)
+
+
 def test_initial_trend_is_hidden_until_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -119,6 +128,9 @@ def test_initial_trend_is_hidden_until_confirmation(
     assert first.primary_regime is RegimeLabel.UNKNOWN
     assert second.primary_regime is RegimeLabel.UNKNOWN
     assert third.primary_regime is RegimeLabel.TRENDING_BULL
+    assert first.confirmed is False
+    assert second.confirmed is False
+    assert third.confirmed is True
     assert detector.state.current_regime is RegimeLabel.TRENDING_BULL
     assert len(detector.state.transition_history) == 1
 
@@ -146,6 +158,8 @@ def test_pending_candidate_does_not_leak_its_confidence_or_scores(
     assert held_bull.total_score == pytest.approx(6.0)
     assert StatusFlag.OSCILLATION_SUPPRESSION in held_bull.status_flags
     assert StatusFlag.REDUCED_CONFIDENCE in held_bull.status_flags
+    assert confirmed_bull.confirmed is True
+    assert held_bull.confirmed is True
     assert detector.state.pending_regime is RegimeLabel.TRENDING_BEAR
     assert detector.state.pending_regime_count == 1
     assert detector.state.last_result is held_bull
@@ -249,4 +263,5 @@ def test_unknown_candidate_does_not_replace_established_regime(
     assert held.primary_regime is RegimeLabel.TRENDING_BULL
     assert StatusFlag.DATA_QUALITY_WARNING in held.status_flags
     assert StatusFlag.REDUCED_CONFIDENCE in held.status_flags
+    assert held.confirmed is True
     assert detector.state.current_regime is RegimeLabel.TRENDING_BULL
