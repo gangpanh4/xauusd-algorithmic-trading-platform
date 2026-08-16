@@ -45,6 +45,7 @@ from .models import (
     PriceActionV1,
     ProbabilityEvidenceV1,
     ProbabilityV1,
+    QuoteV1,
     RegimeV1,
     ResearchComparisonV1,
     ResearchEventV1,
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
     from core.backtesting.models import BacktestResult
     from core.backtesting.strategy_comparison import BacktestStrategyComparison
     from core.data.models import MarketBar
+    from core.data.quote import MarketQuote
     from core.live_trading.config import LiveTradingConfig
     from core.live_trading.state import LiveTradingState
     from core.mt5_execution.models import SymbolInfo
@@ -190,6 +192,46 @@ def project_market(
         ),
     )
 
+
+
+def project_quote(
+    quote: MarketQuote | None,
+    *,
+    symbol_info: SymbolInfo | None,
+    generated_at_utc: datetime,
+) -> QuoteV1:
+    """Project one validated quote without inventing freshness thresholds."""
+
+    if quote is None:
+        return QuoteV1(available=False)
+
+    if generated_at_utc.tzinfo is None or generated_at_utc.utcoffset() is None:
+        raise ValueError("generated_at_utc must be timezone-aware")
+    generated_at = generated_at_utc.astimezone(quote.timestamp_utc.tzinfo)
+    age_ms: float | None = None
+    if quote.timestamp_utc <= generated_at:
+        age_ms = max(
+            0.0,
+            (generated_at - quote.timestamp_utc).total_seconds() * 1000.0,
+        )
+
+    spread_points: float | None = None
+    if symbol_info is not None:
+        point = float(symbol_info.point)
+        if isfinite(point) and point > 0.0:
+            spread_points = quote.spread_price / point
+
+    return QuoteV1(
+        available=True,
+        bid=quote.bid,
+        ask=quote.ask,
+        mid=quote.mid,
+        spread_price=quote.spread_price,
+        spread_points=spread_points,
+        observed_at_utc=quote.timestamp_utc,
+        age_ms=age_ms,
+        stale=None,
+    )
 
 def _project_mtf_frame(state: TimeframeState) -> MultiTimeframeFrameV1:
     return MultiTimeframeFrameV1(

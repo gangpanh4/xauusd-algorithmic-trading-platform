@@ -64,7 +64,7 @@ def test_snapshot_inputs_have_no_news_ai_diagnostic_or_engine_authority_inputs()
     from core.aurum_presentation.builder import AurumSnapshotInputs
 
     names = {field.name for field in fields(AurumSnapshotInputs)}
-    assert "quote" not in names
+    assert "quote" in names
     assert "news" not in names
     assert "ai" not in names
     assert "methodology" not in names
@@ -72,3 +72,29 @@ def test_snapshot_inputs_have_no_news_ai_diagnostic_or_engine_authority_inputs()
     assert "trading_pipeline" not in names
     assert "decision_engine" not in names
     assert "signal_generator" not in names
+
+
+def test_only_designated_quote_adapter_imports_metatrader5() -> None:
+    quote_source = (PACKAGE.parents[0] / "data" / "quote.py").read_text(encoding="utf-8")
+    presentation_source = _source()
+
+    assert "import MetaTrader5 as mt5" in quote_source
+    assert "MetaTrader5" not in presentation_source
+
+
+def test_publication_has_no_network_mt5_or_analytical_engine_surface() -> None:
+    source = (PACKAGE / "publication.py").read_text(encoding="utf-8")
+    forbidden = (
+        "MetaTrader5",
+        "requests",
+        "socket",
+        "urllib",
+        "aiohttp",
+        "TradingPipeline",
+        "MarketStructureEngine",
+        "MarketRegimeDetector",
+        "DecisionEngine",
+        "SignalGenerator",
+    )
+    for token in forbidden:
+        assert token not in source

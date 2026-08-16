@@ -23,7 +23,6 @@ from .models import (
     NewsV1,
     OperatorStateV1,
     PipelineConsistencyV1,
-    QuoteV1,
     ResearchProvenanceV1,
     StrategyV1,
     TradePlanV1,
@@ -40,6 +39,7 @@ from .projections import (
     project_pipeline_consistency,
     project_price_action,
     project_probability,
+    project_quote,
     project_regime,
     project_research,
     project_risk,
@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from core.backtesting.models import BacktestResult
     from core.backtesting.strategy_comparison import BacktestStrategyComparison
     from core.data.models import MarketBar
+    from core.data.quote import MarketQuote
     from core.live_trading.config import LiveTradingConfig
     from core.live_trading.state import LiveTradingState
     from core.mt5_execution.models import SymbolInfo
@@ -87,6 +88,7 @@ class AurumSnapshotInputs:
     live_config: LiveTradingConfig | None = None
     symbol_info: SymbolInfo | None = None
     symbol_info_observed_at_utc: datetime | None = None
+    quote: MarketQuote | None = None
     research_result: BacktestResult | None = None
     research_comparison: BacktestStrategyComparison | None = None
     research_provenance: ResearchProvenanceV1 | None = None
@@ -147,7 +149,7 @@ def _atomic_observation_valid(
         plan.timestamp,
         observation_time,
         name="trade_plan.timestamp",
-    ) 
+    )
 
 
 def _causal_timestamp_valid(
@@ -165,6 +167,13 @@ def _causal_timestamp_valid(
         return False
     return generated_at >= observation_time
 
+
+
+def _quote_integrity_valid(inputs: AurumSnapshotInputs, generated_at: datetime) -> bool:
+    quote = inputs.quote
+    if quote is None:
+        return True
+    return quote.timestamp_utc <= generated_at
 
 def _upstream_directional_path(inputs: AurumSnapshotInputs) -> bool:
     result = inputs.pipeline_result
@@ -286,6 +295,7 @@ def _derive_operator_state(
     *,
     atomic_valid: bool,
     causal_valid: bool,
+    quote_integrity_valid: bool,
     consistency: PipelineConsistencyV1,
     freshness_valid: bool,
     runtime_safety_valid: bool,
@@ -301,6 +311,11 @@ def _derive_operator_state(
         return _blocked(
             code="CAUSAL_TIMESTAMP_VIOLATION",
             reason="Decision chronology violates the M5 +5 minute availability rule.",
+        )
+    if not quote_integrity_valid:
+        return _blocked(
+            code="QUOTE_TIMESTAMP_IN_FUTURE",
+            reason="Quote timestamp is later than snapshot generation time.",
         )
     if not consistency.approval_consistent:
         return _blocked(
@@ -497,6 +512,7 @@ def _capabilities(
     execution_available: bool,
     research_available: bool,
     symbol_spec_available: bool,
+    quote_available: bool,
 ) -> tuple[CapabilityFlagV1, ...]:
     facts = {
         "ai": False,
@@ -511,7 +527,7 @@ def _capabilities(
         "news": False,
         "price_action": price_action_available,
         "probability": probability_available,
-        "quote": False,
+        "quote": quote_available,
         "regime": True,
         "research": research_available,
         "signal": signal_available,
@@ -550,6 +566,7 @@ class AurumReadModelBuilder:
 
         atomic_valid = _atomic_observation_valid(inputs, observation_time)
         causal_valid = _causal_timestamp_valid(inputs, observation_time, generated_at)
+        quote_integrity_valid = _quote_integrity_valid(inputs, generated_at)
         consistency = project_pipeline_consistency(
             inputs.pipeline_result,
             inputs.pipeline_audit,
@@ -563,6 +580,7 @@ class AurumReadModelBuilder:
             inputs,
             atomic_valid=atomic_valid,
             causal_valid=causal_valid,
+            quote_integrity_valid=quote_integrity_valid,
             consistency=consistency,
             freshness_valid=freshness_valid,
             runtime_safety_valid=runtime_safety_valid,
@@ -601,12 +619,19 @@ class AurumReadModelBuilder:
             symbol_info=inputs.symbol_info,
             symbol_info_observed_at_utc=inputs.symbol_info_observed_at_utc,
         )
+        quote = project_quote(
+            inputs.quote,
+            symbol_info=inputs.symbol_info,
+            generated_at_utc=generated_at,
+        )
 
         reasons: list[str] = []
         if not atomic_valid:
             reasons.append("SNAPSHOT_PROVENANCE_MISMATCH")
         if not causal_valid:
             reasons.append("CAUSAL_TIMESTAMP_VIOLATION")
+        if not quote_integrity_valid:
+            reasons.append("QUOTE_TIMESTAMP_IN_FUTURE")
         if not consistency.approval_consistent:
             reasons.append("PIPELINE_APPROVAL_INCONSISTENCY")
         if not freshness_valid:
@@ -633,6 +658,7 @@ class AurumReadModelBuilder:
             execution_available=execution.available,
             research_available=research.available,
             symbol_spec_available=market.symbol_spec.available,
+            quote_available=quote.available,
         )
 
         return AurumReadModelV1(
@@ -656,7 +682,7 @@ class AurumReadModelBuilder:
                 capabilities=capabilities,
             ),
             market=market,
-            quote=QuoteV1(available=False),
+            quote=quote,
             bars=bars,
             multi_timeframe=multi_timeframe,
             structure=structure,
