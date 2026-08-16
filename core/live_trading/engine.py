@@ -563,7 +563,7 @@ class LiveTradingEngine:
             minimum_lot=minimum_lot,
             maximum_lot=maximum_lot,
         )
-        return self._finalize_observation(
+        finalized = self._finalize_observation(
             observation_bar=observation_bar,
             pipeline_result=pipeline_result,
             warmup=warmup,
@@ -581,6 +581,10 @@ class LiveTradingEngine:
                 minimum_lot,
                 maximum_lot,
             ),
+        )
+        return replace(
+            finalized,
+            multi_timeframe_result=mtf_result,
         )
 
     def execute_precomputed_approved_observation(

@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Mapping
-from datetime import datetime, timedelta
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 
 import MetaTrader5 as mt5
 
+from core.aurum_presentation import (
+    AurumDataMode,
+    AurumReadModelBuilder,
+    AurumSnapshotInputs,
+    AurumSnapshotPublication,
+    FreshnessAssessment,
+)
 from core.backtesting.config import BacktestConfig, BacktestExecutionModel
 from core.backtesting.runner import BacktestRunner
 from core.data.market_data import MarketDataService
 from core.data.models import MarketBar
+from core.data.quote import QuoteReader
 from core.execution_economics.profiles import (
     pinned_xauusd_research_profile,
 )
@@ -21,7 +29,11 @@ from core.live_trading.engine import LiveTradingEngine
 from core.live_trading.execution_reconciliation_report import (
     ExecutionReconciliationReporter,
 )
+from core.live_trading.models import LiveTradingResult
 from core.live_trading.multi_timeframe_buffer import LiveMultiTimeframeBuffer
+from core.live_trading.parity_provenance import (
+    current_parity_provenance,
+)
 from core.live_trading.parity_report import LiveParityReporter
 from core.live_trading.shadow_observation_report import (
     ShadowObservationReporter,
@@ -250,6 +262,12 @@ class TradingPlatform:
                 config.shadow_observation_path,
             )
 
+            quote_reader = QuoteReader(
+                config.symbol,
+                server_utc_offset_hours=config.mt5_server_utc_offset_hours,
+            )
+            aurum_publication = AurumSnapshotPublication()
+
             try:
                 while True:
                     m5_bar = services[Timeframe.M5].get_latest_closed_bar()
@@ -292,7 +310,7 @@ class TradingPlatform:
                     engine.synchronize_open_positions()
                     engine.synchronize_active_orders()
 
-                    engine.process_multi_timeframe(
+                    live_result = engine.process_multi_timeframe(
                         snapshot,
                         account_balance=account.balance,
                         stop_loss_distance=(
@@ -305,6 +323,13 @@ class TradingPlatform:
                         maximum_lot=symbol_spec.maximum_lot,
                         parity_source_histories=buffer.histories,
                     )
+                    self._try_publish_aurum_live_snapshot(
+                        engine=engine,
+                        bars_by_timeframe=snapshot,
+                        live_result=live_result,
+                        quote_reader=quote_reader,
+                        publication=aurum_publication,
+                    )
                     time.sleep(config.poll_interval_seconds)
 
             except KeyboardInterrupt:
@@ -315,6 +340,115 @@ class TradingPlatform:
             if mt5_started:
                 mt5.shutdown()
             logger.info("Live Trading Engine stopped.")
+
+    @staticmethod
+    def _try_publish_aurum_live_snapshot(
+        *,
+        engine: LiveTradingEngine,
+        bars_by_timeframe: Mapping[Timeframe, Sequence[MarketBar]],
+        live_result: LiveTradingResult,
+        quote_reader: QuoteReader,
+        publication: AurumSnapshotPublication,
+    ) -> None:
+        """Publish Aurum presentation state without affecting trading results."""
+
+        try:
+            TradingPlatform._publish_aurum_live_snapshot(
+                engine=engine,
+                bars_by_timeframe=bars_by_timeframe,
+                live_result=live_result,
+                quote_reader=quote_reader,
+                publication=publication,
+            )
+        except Exception:
+            logger.exception(
+                "Aurum live snapshot publication failed after authoritative "
+                "trading processing completed."
+            )
+
+    @staticmethod
+    def _publish_aurum_live_snapshot(
+        *,
+        engine: LiveTradingEngine,
+        bars_by_timeframe: Mapping[Timeframe, Sequence[MarketBar]],
+        live_result: LiveTradingResult,
+        quote_reader: QuoteReader,
+        publication: AurumSnapshotPublication,
+    ) -> None:
+        """Build and publish one same-observation read-only Aurum snapshot."""
+
+        multi_timeframe_result = live_result.multi_timeframe_result
+        if multi_timeframe_result is None:
+            raise RuntimeError(
+                "Aurum publication requires the completed live MTF result."
+            )
+
+        m5_bars = bars_by_timeframe.get(Timeframe.M5)
+        if not m5_bars:
+            raise RuntimeError(
+                "Aurum publication requires completed M5 observation bars."
+            )
+        observation_bar = m5_bars[-1]
+        observation_time = observation_bar.timestamp
+        if observation_time.tzinfo is None or observation_time.utcoffset() is None:
+            raise ValueError(
+                "Aurum observation timestamp must be timezone-aware."
+            )
+        observation_time = observation_time.astimezone(UTC)
+
+        mtf_time = multi_timeframe_result.m5.timestamp
+        if mtf_time.tzinfo is None or mtf_time.utcoffset() is None:
+            raise ValueError(
+                "Aurum MTF observation timestamp must be timezone-aware."
+            )
+        if mtf_time.astimezone(UTC) != observation_time:
+            raise RuntimeError(
+                "Aurum MTF result does not match the completed M5 observation."
+            )
+
+        pipeline_audit = engine.pipeline.last_observation_audit
+        if pipeline_audit is None:
+            raise RuntimeError(
+                "Aurum publication requires the authoritative pipeline audit."
+            )
+        audit_time = pipeline_audit.timestamp
+        if audit_time.tzinfo is None or audit_time.utcoffset() is None:
+            raise ValueError(
+                "Aurum pipeline audit timestamp must be timezone-aware."
+            )
+        if audit_time.astimezone(UTC) != observation_time:
+            raise RuntimeError(
+                "Aurum pipeline audit does not match the completed M5 observation."
+            )
+
+        quote = quote_reader.read()
+        provenance = current_parity_provenance(engine.pipeline.config)
+        generated_at = datetime.now(UTC)
+        snapshot = AurumReadModelBuilder.build(
+            AurumSnapshotInputs(
+                mode=AurumDataMode.REAL_READ_ONLY,
+                symbol=engine.config.symbol,
+                generated_at_utc=generated_at,
+                backend_commit=provenance.source_commit,
+                observation_bar=observation_bar,
+                bars_by_timeframe=bars_by_timeframe,
+                multi_timeframe_result=multi_timeframe_result,
+                pipeline_result=live_result.pipeline_result,
+                pipeline_audit=pipeline_audit,
+                freshness=FreshnessAssessment(
+                    policy_id=None,
+                    valid=False,
+                    critical_failure=True,
+                    reason_code="LIVE_FRESHNESS_POLICY_UNAVAILABLE",
+                    reason="No approved live freshness policy is configured.",
+                ),
+                risk_state=engine.pipeline.risk_manager.state,
+                live_state=engine.state,
+                live_config=engine.config,
+                quote=quote,
+            )
+        )
+        publication.publish(snapshot)
 
     @staticmethod
     def _load_aligned_live_histories(
