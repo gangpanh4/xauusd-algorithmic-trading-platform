@@ -16,6 +16,7 @@ from core.aurum_presentation import (
     AurumSnapshotPublication,
     FreshnessAssessment,
 )
+from core.aurum_transport import AurumSnapshotHttpTransport
 from core.backtesting.config import BacktestConfig, BacktestExecutionModel
 from core.backtesting.runner import BacktestRunner
 from core.data.market_data import MarketDataService
@@ -113,6 +114,7 @@ class TradingPlatform:
         )
         engine = LiveTradingEngine(config)
         mt5_started = False
+        aurum_transport: AurumSnapshotHttpTransport | None = None
 
         services = {
             Timeframe.M5: MarketDataService(
@@ -267,6 +269,9 @@ class TradingPlatform:
                 server_utc_offset_hours=config.mt5_server_utc_offset_hours,
             )
             aurum_publication = AurumSnapshotPublication()
+            aurum_transport = self._try_start_aurum_transport(
+                aurum_publication
+            )
 
             try:
                 while True:
@@ -336,10 +341,44 @@ class TradingPlatform:
                 logger.info("Stopping live trading...")
 
         finally:
+            self._try_stop_aurum_transport(aurum_transport)
             engine.stop()
             if mt5_started:
                 mt5.shutdown()
             logger.info("Live Trading Engine stopped.")
+
+    @staticmethod
+    def _try_start_aurum_transport(
+        publication: AurumSnapshotPublication,
+    ) -> AurumSnapshotHttpTransport | None:
+        """Start read-only Aurum delivery without controlling live trading."""
+
+        try:
+            transport = AurumSnapshotHttpTransport(publication)
+            transport.start()
+        except Exception:
+            logger.exception(
+                "Aurum read-only HTTP transport failed to start; "
+                "authoritative live trading will continue."
+            )
+            return None
+        return transport
+
+    @staticmethod
+    def _try_stop_aurum_transport(
+        transport: AurumSnapshotHttpTransport | None,
+    ) -> None:
+        """Stop read-only Aurum delivery without blocking engine cleanup."""
+
+        if transport is None:
+            return
+        try:
+            transport.stop()
+        except Exception:
+            logger.exception(
+                "Aurum read-only HTTP transport shutdown failed; "
+                "continuing live engine cleanup."
+            )
 
     @staticmethod
     def _try_publish_aurum_live_snapshot(

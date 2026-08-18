@@ -334,3 +334,119 @@ def test_pass6d_adds_no_broker_mutation_or_mt5_lifecycle_calls() -> None:
 
     assert run_live_source.count("mt5." + "initialize(") == 1
     assert run_live_source.count("mt5." + "shutdown(") == 1
+
+
+def test_transport_receives_same_publication_instance_used_for_pass6d() -> None:
+    publication = Mock()
+    transport = Mock()
+
+    with patch.object(
+        platform_engine,
+        "AurumSnapshotHttpTransport",
+        return_value=transport,
+    ) as transport_type:
+        started = TradingPlatform._try_start_aurum_transport(publication)
+
+    assert started is transport
+    assert transport_type.call_count == 1
+    assert transport_type.call_args.args[0] is publication
+    transport.start.assert_called_once_with()
+
+    run_live_source = inspect.getsource(TradingPlatform.run_live)
+    assert run_live_source.count(
+        "aurum_publication = AurumSnapshotPublication()"
+    ) == 1
+    assert (
+        "self._try_start_aurum_transport(\n"
+        "                aurum_publication\n"
+        "            )"
+        in run_live_source
+    )
+    assert "publication=aurum_publication" in run_live_source
+
+
+def test_transport_startup_failure_is_isolated_from_live_processing() -> None:
+    publication = Mock()
+    transport = Mock()
+    transport.start.side_effect = RuntimeError("bind failed")
+
+    with patch.object(
+        platform_engine,
+        "AurumSnapshotHttpTransport",
+        return_value=transport,
+    ):
+        started = TradingPlatform._try_start_aurum_transport(publication)
+
+    assert started is None
+    start_source = inspect.getsource(
+        TradingPlatform._try_start_aurum_transport
+    )
+    stop_source = inspect.getsource(
+        TradingPlatform._try_stop_aurum_transport
+    )
+    assert tuple(
+        inspect.signature(
+            TradingPlatform._try_start_aurum_transport
+        ).parameters
+    ) == ("publication",)
+    assert tuple(
+        inspect.signature(
+            TradingPlatform._try_stop_aurum_transport
+        ).parameters
+    ) == ("transport",)
+    assert "live_result" not in start_source
+    assert "live_result" not in stop_source
+
+
+def test_transport_shutdown_failure_is_best_effort() -> None:
+    transport = Mock()
+    transport.stop.side_effect = RuntimeError("shutdown failed")
+
+    TradingPlatform._try_stop_aurum_transport(transport)
+
+    transport.stop.assert_called_once_with()
+
+
+def test_transport_lifecycle_starts_after_warmup_and_preserves_quote_reader() -> None:
+    source = inspect.getsource(TradingPlatform.run_live)
+    warmup_position = source.index("warmup=True")
+    quote_reader_position = source.index("quote_reader = QuoteReader(")
+    publication_position = source.index(
+        "aurum_publication = AurumSnapshotPublication()"
+    )
+    transport_position = source.index("self._try_start_aurum_transport(")
+    live_loop_position = source.index("while True:")
+
+    assert (
+        warmup_position
+        < quote_reader_position
+        < publication_position
+        < transport_position
+        < live_loop_position
+    )
+    assert source.count("quote_reader = QuoteReader(") == 1
+    assert source.count("self._try_start_aurum_transport(") == 1
+    assert source.count("self._try_stop_aurum_transport(") == 1
+
+
+def test_pass6e_transport_adds_no_broker_or_mt5_authority() -> None:
+    transport_source = inspect.getsource(
+        platform_engine.AurumSnapshotHttpTransport
+    )
+    helper_source = inspect.getsource(
+        TradingPlatform._try_start_aurum_transport
+    ) + inspect.getsource(TradingPlatform._try_stop_aurum_transport)
+
+    prohibited_tokens = (
+        "order_" + "send",
+        "order_" + "check",
+        "positions_" + "get",
+        "orders_" + "get",
+        "mt5." + "initialize",
+        "mt5." + "shutdown",
+        "QuoteReader",
+        "AurumReadModelBuilder",
+    )
+    for prohibited in prohibited_tokens:
+        assert prohibited not in transport_source
+        assert prohibited not in helper_source
