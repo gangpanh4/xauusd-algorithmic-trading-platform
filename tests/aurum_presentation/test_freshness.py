@@ -1,4 +1,5 @@
 from core.aurum_presentation import (
+    AURUM_LIVE_FRESHNESS_V1,
     AurumDataMode,
     AurumOperatorState,
     AurumReadModelBuilder,
@@ -48,3 +49,32 @@ def test_critical_freshness_failure_precedes_normal_hold() -> None:
     )
     assert model.operator_state.state is AurumOperatorState.BLOCKED
     assert model.operator_state.reason_code == "CRITICAL_STALE"
+
+
+def test_builder_projects_live_freshness_policy_identity() -> None:
+    assessment = FreshnessAssessment(
+        policy_id=AURUM_LIVE_FRESHNESS_V1,
+        valid=True,
+    )
+
+    model = AurumReadModelBuilder.build(make_inputs(freshness=assessment))
+
+    assert model.meta.freshness_policy_id == AURUM_LIVE_FRESHNESS_V1
+
+
+def test_live_quote_unavailable_fails_closed_without_fabricated_prices() -> None:
+    assessment = FreshnessAssessment(
+        policy_id=AURUM_LIVE_FRESHNESS_V1,
+        valid=False,
+        critical_failure=True,
+        reason_code="LIVE_QUOTE_UNAVAILABLE",
+        reason="A current live quote is unavailable.",
+    )
+
+    model = AurumReadModelBuilder.build(make_inputs(freshness=assessment))
+
+    assert model.operator_state.state is AurumOperatorState.BLOCKED
+    assert model.operator_state.reason_code == "LIVE_QUOTE_UNAVAILABLE"
+    assert model.quote.available is False
+    assert model.quote.bid is None
+    assert model.quote.ask is None

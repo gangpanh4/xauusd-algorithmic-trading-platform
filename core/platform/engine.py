@@ -11,10 +11,11 @@ import MetaTrader5 as mt5
 
 from core.aurum_presentation import (
     AurumDataMode,
+    AurumLiveFreshnessPolicyV1,
     AurumReadModelBuilder,
     AurumSnapshotInputs,
     AurumSnapshotPublication,
-    FreshnessAssessment,
+    FreshnessContext,
 )
 from core.aurum_transport import AurumSnapshotHttpTransport
 from core.backtesting.config import BacktestConfig, BacktestExecutionModel
@@ -460,9 +461,35 @@ class TradingPlatform:
                 "Aurum pipeline audit does not match the completed M5 observation."
             )
 
-        quote = quote_reader.read()
+        try:
+            quote = quote_reader.read()
+        except Exception:
+            logger.exception(
+                "Aurum presentation quote unavailable; publishing a "
+                "fail-closed read-only snapshot."
+            )
+            quote = None
         provenance = current_parity_provenance(engine.pipeline.config)
         generated_at = datetime.now(UTC)
+        freshness = AurumLiveFreshnessPolicyV1().evaluate(
+            FreshnessContext(
+                mode=AurumDataMode.REAL_READ_ONLY,
+                symbol=engine.config.symbol,
+                generated_at_utc=generated_at,
+                observation_time_utc=observation_time,
+                decision_available_at_utc=(
+                    observation_time + timedelta(minutes=5)
+                ),
+                quote_available=quote is not None,
+                quote_timestamp_utc=(
+                    quote.timestamp_utc if quote is not None else None
+                ),
+                bar_timestamps_by_timeframe={
+                    timeframe: tuple(bar.timestamp for bar in bars)
+                    for timeframe, bars in bars_by_timeframe.items()
+                },
+            )
+        )
         snapshot = AurumReadModelBuilder.build(
             AurumSnapshotInputs(
                 mode=AurumDataMode.REAL_READ_ONLY,
@@ -474,13 +501,7 @@ class TradingPlatform:
                 multi_timeframe_result=multi_timeframe_result,
                 pipeline_result=live_result.pipeline_result,
                 pipeline_audit=pipeline_audit,
-                freshness=FreshnessAssessment(
-                    policy_id=None,
-                    valid=False,
-                    critical_failure=True,
-                    reason_code="LIVE_FRESHNESS_POLICY_UNAVAILABLE",
-                    reason="No approved live freshness policy is configured.",
-                ),
+                freshness=freshness,
                 risk_state=engine.pipeline.risk_manager.state,
                 live_state=engine.state,
                 live_config=engine.config,

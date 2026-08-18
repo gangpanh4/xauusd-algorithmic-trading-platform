@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock, Thread
 
+from core.aurum_presentation.live_freshness import (
+    evaluate_live_snapshot_currentness,
+)
 from core.aurum_presentation.publication import AurumSnapshotPublication
 from core.aurum_presentation.serializer import to_json
 
@@ -15,6 +20,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_AURUM_HTTP_HOST = "127.0.0.1"
 DEFAULT_AURUM_HTTP_PORT = 8765
 AURUM_LATEST_PATH = "/aurum/v1/latest"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class _AurumThreadingHTTPServer(ThreadingHTTPServer):
@@ -154,6 +163,22 @@ class AurumSnapshotHttpTransport:
                             '{"error":"AURUM_SNAPSHOT_UNAVAILABLE"}',
                         )
                         return
+                    currentness = evaluate_live_snapshot_currentness(
+                        snapshot,
+                        now_utc=_utc_now(),
+                    )
+                    if not currentness.current:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            json.dumps(
+                                {
+                                    "error": "AURUM_SNAPSHOT_NOT_CURRENT",
+                                    "reason_code": currentness.reason_code,
+                                },
+                                separators=(",", ":"),
+                            ),
+                        )
+                        return
                     payload = to_json(snapshot)
                 except Exception:
                     logger.exception("Aurum HTTP snapshot request failed")
@@ -198,6 +223,7 @@ class AurumSnapshotHttpTransport:
                 try:
                     self.send_response(status.value)
                     self.send_header("Content-Type", "application/json")
+                    self.send_header("Cache-Control", "no-store")
                     self.send_header("Content-Length", str(len(body)))
                     if allow is not None:
                         self.send_header("Allow", allow)

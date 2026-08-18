@@ -6,6 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import core.platform.engine as platform_engine
+from core.aurum_presentation import (
+    AURUM_LIVE_FRESHNESS_V1,
+    FreshnessAssessment,
+    FreshnessContext,
+)
 from core.data.models import MarketBar
 from core.live_trading.config import LiveTradingConfig
 from core.live_trading.engine import LiveTradingEngine
@@ -33,7 +38,32 @@ def _live_publication_case() -> tuple[
     Mock,
 ]:
     observation_bar = _bar()
-    bars = {Timeframe.M5: (observation_bar,)}
+    bars = {
+        Timeframe.WEEKLY: (
+            _bar(datetime(2026, 8, 3, 0, 0, tzinfo=UTC)),
+        ),
+        Timeframe.DAILY: (
+            _bar(datetime(2026, 8, 15, 0, 0, tzinfo=UTC)),
+        ),
+        Timeframe.H4: (
+            _bar(datetime(2026, 8, 3, 0, 0, tzinfo=UTC)),
+            _bar(datetime(2026, 8, 10, 0, 0, tzinfo=UTC)),
+            _bar(datetime(2026, 8, 15, 20, 0, tzinfo=UTC)),
+            _bar(datetime(2026, 8, 16, 8, 0, tzinfo=UTC)),
+        ),
+        Timeframe.H1: (
+            _bar(datetime(2026, 8, 16, 11, 0, tzinfo=UTC)),
+        ),
+        Timeframe.M15: (
+            _bar(datetime(2026, 8, 16, 11, 45, tzinfo=UTC)),
+        ),
+        Timeframe.M5: (
+            _bar(datetime(2026, 8, 16, 8, 0, tzinfo=UTC)),
+            _bar(datetime(2026, 8, 16, 11, 0, tzinfo=UTC)),
+            _bar(datetime(2026, 8, 16, 11, 45, tzinfo=UTC)),
+            observation_bar,
+        ),
+    }
     mtf_result = SimpleNamespace(
         m5=SimpleNamespace(
             timestamp=observation_bar.timestamp,
@@ -64,7 +94,13 @@ def _live_publication_case() -> tuple[
         trade_executed=False,
         multi_timeframe_result=mtf_result,
     )
-    quote_reader = SimpleNamespace(read=Mock(return_value=SimpleNamespace()))
+    quote_reader = SimpleNamespace(
+        read=Mock(
+            return_value=SimpleNamespace(
+                timestamp_utc=observation_bar.timestamp + timedelta(minutes=5)
+            )
+        )
+    )
     publication = Mock()
     return engine, bars, live_result, quote_reader, publication
 
@@ -118,6 +154,10 @@ def test_publication_uses_same_observation_objects_without_mutation() -> None:
     original_state = engine.state
     original_risk_state = engine.pipeline.risk_manager.state
     original_config = engine.config
+    freshness = FreshnessAssessment(
+        policy_id=AURUM_LIVE_FRESHNESS_V1,
+        valid=True,
+    )
 
     with (
         patch.object(
@@ -125,6 +165,11 @@ def test_publication_uses_same_observation_objects_without_mutation() -> None:
             "current_parity_provenance",
             return_value=SimpleNamespace(source_commit="a" * 40),
         ),
+        patch.object(
+            platform_engine.AurumLiveFreshnessPolicyV1,
+            "evaluate",
+            return_value=freshness,
+        ) as evaluate_freshness,
         patch.object(
             platform_engine.AurumReadModelBuilder,
             "build",
@@ -152,12 +197,12 @@ def test_publication_uses_same_observation_objects_without_mutation() -> None:
     assert engine.state is original_state
     assert engine.pipeline.risk_manager.state is original_risk_state
     assert engine.config is original_config
-    assert inputs.freshness.valid is False
-    assert inputs.freshness.critical_failure is True
-    assert (
-        inputs.freshness.reason_code
-        == "LIVE_FRESHNESS_POLICY_UNAVAILABLE"
-    )
+    assert evaluate_freshness.call_count == 1
+    assert quote_reader.read.call_count == 1
+    assert inputs.freshness is freshness
+    assert inputs.freshness.valid is True
+    assert inputs.freshness.critical_failure is False
+    assert inputs.freshness.policy_id == AURUM_LIVE_FRESHNESS_V1
 
 
 def test_mtf_timestamp_mismatch_fails_before_quote_or_publication() -> None:
@@ -231,23 +276,48 @@ def test_warmup_has_no_aurum_publication_call_site() -> None:
     assert publication_position > warmup_position
 
 
-def test_quote_failure_is_isolated_after_trading_processing() -> None:
+def test_quote_failure_is_published_as_unavailable_after_trading_processing() -> None:
     engine, bars, live_result, quote_reader, publication = (
         _live_publication_case()
     )
     quote_reader.read.side_effect = RuntimeError("quote failed")
+    built_snapshot = SimpleNamespace()
     original_state = engine.state
+    original_mtf_result = live_result.multi_timeframe_result
+    original_pipeline_result = live_result.pipeline_result
 
-    TradingPlatform._try_publish_aurum_live_snapshot(
-        engine=engine,
-        bars_by_timeframe=bars,
-        live_result=live_result,
-        quote_reader=quote_reader,
-        publication=publication,
-    )
+    with (
+        patch.object(
+            platform_engine,
+            "current_parity_provenance",
+            return_value=SimpleNamespace(source_commit="a" * 40),
+        ),
+        patch.object(
+            platform_engine.AurumReadModelBuilder,
+            "build",
+            return_value=built_snapshot,
+        ) as build,
+    ):
+        TradingPlatform._try_publish_aurum_live_snapshot(
+            engine=engine,
+            bars_by_timeframe=bars,
+            live_result=live_result,
+            quote_reader=quote_reader,
+            publication=publication,
+        )
 
     assert engine.state is original_state
-    publication.publish.assert_not_called()
+    assert live_result.multi_timeframe_result is original_mtf_result
+    assert live_result.pipeline_result is original_pipeline_result
+    assert quote_reader.read.call_count == 1
+    assert build.call_count == 1
+    inputs = build.call_args.args[0]
+    assert inputs.quote is None
+    assert inputs.freshness.policy_id == AURUM_LIVE_FRESHNESS_V1
+    assert inputs.freshness.valid is False
+    assert inputs.freshness.critical_failure is True
+    assert inputs.freshness.reason_code == "LIVE_QUOTE_UNAVAILABLE"
+    publication.publish.assert_called_once_with(built_snapshot)
 
 
 def test_builder_failure_is_isolated_after_trading_processing() -> None:
@@ -450,3 +520,179 @@ def test_pass6e_transport_adds_no_broker_or_mt5_authority() -> None:
     for prohibited in prohibited_tokens:
         assert prohibited not in transport_source
         assert prohibited not in helper_source
+
+
+def test_live_publication_uses_approved_freshness_policy() -> None:
+    source = inspect.getsource(TradingPlatform._publish_aurum_live_snapshot)
+
+    assert "LIVE_FRESHNESS_POLICY_UNAVAILABLE" not in source
+    assert "AurumLiveFreshnessPolicyV1" in source
+    assert "FreshnessContext" in source
+
+
+def test_stale_quote_assessment_reaches_builder_without_extra_quote_read() -> None:
+    engine, bars, live_result, quote_reader, publication = (
+        _live_publication_case()
+    )
+    freshness = FreshnessAssessment(
+        policy_id=AURUM_LIVE_FRESHNESS_V1,
+        valid=False,
+        critical_failure=True,
+        reason_code="LIVE_QUOTE_STALE",
+        reason="Live quote age exceeds 15 seconds.",
+    )
+
+    with (
+        patch.object(
+            platform_engine,
+            "current_parity_provenance",
+            return_value=SimpleNamespace(source_commit="a" * 40),
+        ),
+        patch.object(
+            platform_engine.AurumLiveFreshnessPolicyV1,
+            "evaluate",
+            return_value=freshness,
+        ),
+        patch.object(
+            platform_engine.AurumReadModelBuilder,
+            "build",
+            return_value=SimpleNamespace(),
+        ) as build,
+    ):
+        TradingPlatform._publish_aurum_live_snapshot(
+            engine=engine,
+            bars_by_timeframe=bars,
+            live_result=live_result,
+            quote_reader=quote_reader,
+            publication=publication,
+        )
+
+    assert quote_reader.read.call_count == 1
+    assert build.call_args.args[0].freshness is freshness
+
+
+def test_stale_m5_assessment_reaches_builder() -> None:
+    engine, bars, live_result, quote_reader, publication = (
+        _live_publication_case()
+    )
+    freshness = FreshnessAssessment(
+        policy_id=AURUM_LIVE_FRESHNESS_V1,
+        valid=False,
+        critical_failure=True,
+        reason_code="LIVE_M5_STALE",
+        reason="M5 decision delay exceeds 30 seconds.",
+    )
+
+    with (
+        patch.object(
+            platform_engine,
+            "current_parity_provenance",
+            return_value=SimpleNamespace(source_commit="a" * 40),
+        ),
+        patch.object(
+            platform_engine.AurumLiveFreshnessPolicyV1,
+            "evaluate",
+            return_value=freshness,
+        ),
+        patch.object(
+            platform_engine.AurumReadModelBuilder,
+            "build",
+            return_value=SimpleNamespace(),
+        ) as build,
+    ):
+        TradingPlatform._publish_aurum_live_snapshot(
+            engine=engine,
+            bars_by_timeframe=bars,
+            live_result=live_result,
+            quote_reader=quote_reader,
+            publication=publication,
+        )
+
+    assert quote_reader.read.call_count == 1
+    assert build.call_args.args[0].freshness is freshness
+
+
+def test_freshness_context_uses_same_synchronized_bar_timestamps() -> None:
+    engine, bars, live_result, quote_reader, publication = (
+        _live_publication_case()
+    )
+    freshness = FreshnessAssessment(
+        policy_id=AURUM_LIVE_FRESHNESS_V1,
+        valid=True,
+    )
+    contexts: list[FreshnessContext] = []
+
+    def evaluate(context: FreshnessContext) -> FreshnessAssessment:
+        contexts.append(context)
+        return freshness
+
+    with (
+        patch.object(
+            platform_engine,
+            "current_parity_provenance",
+            return_value=SimpleNamespace(source_commit="a" * 40),
+        ),
+        patch.object(
+            platform_engine.AurumLiveFreshnessPolicyV1,
+            "evaluate",
+            side_effect=evaluate,
+        ),
+        patch.object(
+            platform_engine.AurumReadModelBuilder,
+            "build",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        TradingPlatform._publish_aurum_live_snapshot(
+            engine=engine,
+            bars_by_timeframe=bars,
+            live_result=live_result,
+            quote_reader=quote_reader,
+            publication=publication,
+        )
+
+    assert len(contexts) == 1
+    context = contexts[0]
+    assert context.bar_timestamps_by_timeframe == {
+        timeframe: tuple(bar.timestamp for bar in timeframe_bars)
+        for timeframe, timeframe_bars in bars.items()
+    }
+    assert context.observation_time_utc == bars[Timeframe.M5][-1].timestamp
+    assert quote_reader.read.call_count == 1
+
+
+def test_freshness_integration_adds_no_analysis_or_market_data_reads() -> None:
+    helper_source = inspect.getsource(
+        TradingPlatform._publish_aurum_live_snapshot
+    )
+    run_live_source = inspect.getsource(TradingPlatform.run_live)
+
+    assert "process_multi_timeframe" not in helper_source
+    assert "get_latest_closed_bar" not in helper_source
+    assert "get_historical_bars" not in helper_source
+    assert "MarketDataService" not in helper_source
+    assert run_live_source.count("MarketDataService(") == 4
+    assert "Timeframe.DAILY: MarketDataService(" not in run_live_source
+    assert "Timeframe.WEEKLY: MarketDataService(" not in run_live_source
+
+
+def test_freshness_integration_adds_no_mt5_lifecycle() -> None:
+    helper_source = inspect.getsource(
+        TradingPlatform._publish_aurum_live_snapshot
+    )
+    run_live_source = inspect.getsource(TradingPlatform.run_live)
+
+    assert "mt5." not in helper_source
+    assert run_live_source.count("mt5." + "initialize(") == 1
+    assert run_live_source.count("mt5." + "shutdown(") == 1
+
+
+def test_quote_unavailable_conversion_adds_no_second_read_or_reader() -> None:
+    helper_source = inspect.getsource(
+        TradingPlatform._publish_aurum_live_snapshot
+    )
+
+    assert helper_source.count("quote_reader.read()") == 1
+    assert "QuoteReader(" not in helper_source
+    assert "MarketDataService(" not in helper_source
+    assert "process_multi_timeframe(" not in helper_source

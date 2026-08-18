@@ -4,7 +4,7 @@ import inspect
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
 from threading import Thread
 from unittest.mock import Mock, patch
@@ -57,9 +57,20 @@ from core.aurum_transport.http import (
     AurumSnapshotHttpTransport,
 )
 
+_HTTP_BASE = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
 
-def _snapshot(tag: str, *, direction: str) -> AurumReadModelV1:
-    timestamp = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+
+def _snapshot(
+    tag: str,
+    *,
+    direction: str,
+    ready: bool = False,
+    decision_available_at: datetime | None = None,
+    quote_timestamp: datetime | None = None,
+) -> AurumReadModelV1:
+    timestamp = _HTTP_BASE
+    decision_available = decision_available_at or timestamp
+    observed_quote_at = quote_timestamp or timestamp
     frames = TimeframeMapV1(
         W1=None,
         D1=None,
@@ -83,7 +94,7 @@ def _snapshot(tag: str, *, direction: str) -> AurumReadModelV1:
             read_only=True,
             decision_timeframe="M5",
             observation_time_utc=timestamp,
-            decision_available_at_utc=timestamp,
+            decision_available_at_utc=decision_available,
             snapshot_id=f"snapshot-{tag}",
             observation_id=f"observation-{tag}",
             freshness_policy_id=None,
@@ -95,7 +106,7 @@ def _snapshot(tag: str, *, direction: str) -> AurumReadModelV1:
             analysis_timestamp_utc=timestamp,
             symbol_spec=SymbolSpecificationV1(available=False),
         ),
-        quote=QuoteV1(),
+        quote=QuoteV1(available=True, observed_at_utc=observed_quote_at),
         bars=BarsV1(frames=frames),
         multi_timeframe=MultiTimeframeV1(
             timestamp_utc=timestamp,
@@ -140,12 +151,18 @@ def _snapshot(tag: str, *, direction: str) -> AurumReadModelV1:
             suppression_reason=f"snapshot {tag}",
         ),
         operator_state=OperatorStateV1(
-            state=AurumOperatorState.BLOCKED,
-            direction=None,
-            ready=False,
-            blocked=True,
-            reason_code=f"BLOCKED_{tag}",
-            reason=f"snapshot {tag}",
+            state=(
+                AurumOperatorState.READY_BUY
+                if ready and direction == "BUY"
+                else AurumOperatorState.READY_SELL
+                if ready
+                else AurumOperatorState.BLOCKED
+            ),
+            direction=direction if ready else None,
+            ready=ready,
+            blocked=not ready,
+            reason_code=None if ready else f"BLOCKED_{tag}",
+            reason=None if ready else f"snapshot {tag}",
             blocking_stage=None,
         ),
         execution=ExecutionV1(
@@ -174,17 +191,20 @@ def _running_transport(
     publication: AurumSnapshotPublication,
     *,
     allowed_origin: str | None = None,
+    clock: Mock | None = None,
 ) -> Iterator[AurumSnapshotHttpTransport]:
     transport = AurumSnapshotHttpTransport(
         publication,
         port=0,
         allowed_origin=allowed_origin,
     )
-    transport.start()
-    try:
-        yield transport
-    finally:
-        transport.stop()
+    effective_clock = clock or Mock(return_value=_HTTP_BASE)
+    with patch.object(transport_http, "_utc_now", effective_clock):
+        transport.start()
+        try:
+            yield transport
+        finally:
+            transport.stop()
 
 
 def _request(
@@ -212,6 +232,7 @@ def test_no_snapshot_returns_503_transport_error() -> None:
 
     assert status == 503
     assert headers["Content-Type"] == "application/json"
+    assert headers["Cache-Control"] == "no-store"
     assert json.loads(body) == {"error": "AURUM_SNAPSHOT_UNAVAILABLE"}
     assert publication.latest() is None
 
@@ -226,6 +247,7 @@ def test_published_snapshot_returns_exact_existing_serializer_representation() -
 
     assert status == 200
     assert headers["Content-Type"] == "application/json"
+    assert headers["Cache-Control"] == "no-store"
     assert body.decode("utf-8") == to_json(snapshot)
     assert json.loads(body) == json.loads(to_json(snapshot))
 
@@ -425,16 +447,18 @@ def test_serializer_failure_is_request_local_and_publication_remains_usable() ->
             "core.aurum_transport.http.to_json",
             side_effect=RuntimeError("serializer failed"),
         ):
-            failed_status, _, failed_body = _request(transport)
+            failed_status, failed_headers, failed_body = _request(transport)
 
-        recovered_status, _, recovered_body = _request(transport)
+        recovered_status, recovered_headers, recovered_body = _request(transport)
 
     assert failed_status == 500
     assert json.loads(failed_body) == {
         "error": "AURUM_SNAPSHOT_TRANSPORT_ERROR"
     }
+    assert failed_headers["Cache-Control"] == "no-store"
     assert publication.latest() is snapshot
     assert recovered_status == 200
+    assert recovered_headers["Cache-Control"] == "no-store"
     assert recovered_body.decode("utf-8") == to_json(snapshot)
 
 
@@ -458,3 +482,92 @@ def test_transport_module_has_no_trading_execution_or_mt5_authority() -> None:
 
     for prohibited in prohibited_tokens:
         assert prohibited not in source
+
+
+def test_same_ready_snapshot_expires_at_read_time_without_mutation() -> None:
+    publication = AurumSnapshotPublication()
+    snapshot = _snapshot("expiring", direction="BUY", ready=True)
+    publication.publish(snapshot)
+    before = to_json(snapshot)
+    clock = Mock(return_value=_HTTP_BASE + timedelta(seconds=10))
+
+    with (
+        patch(
+            "core.aurum_transport.http.to_json",
+            wraps=to_json,
+        ) as serializer,
+        _running_transport(publication, clock=clock) as transport,
+    ):
+        current_status, current_headers, current_body = _request(transport)
+        clock.return_value = _HTTP_BASE + timedelta(seconds=16)
+        expired_status, expired_headers, expired_body = _request(transport)
+
+    assert serializer.call_count == 1
+    assert current_status == 200
+    assert current_headers["Cache-Control"] == "no-store"
+    assert current_body.decode("utf-8") == before
+    assert expired_status == 503
+    assert expired_headers["Cache-Control"] == "no-store"
+    assert json.loads(expired_body) == {
+        "error": "AURUM_SNAPSHOT_NOT_CURRENT",
+        "reason_code": "LIVE_QUOTE_STALE",
+    }
+    assert publication.latest() is snapshot
+    assert to_json(snapshot) == before
+    assert snapshot.meta.snapshot_id == "snapshot-expiring"
+    assert snapshot.meta.observation_id == "observation-expiring"
+    assert snapshot.operator_state.state is AurumOperatorState.READY_BUY
+    assert snapshot.operator_state.ready is True
+
+
+def test_no_snapshot_and_expired_snapshot_503_are_distinct() -> None:
+    publication = AurumSnapshotPublication()
+    clock = Mock(return_value=_HTTP_BASE + timedelta(seconds=16))
+
+    with _running_transport(publication, clock=clock) as transport:
+        missing_status, _, missing_body = _request(transport)
+        publication.publish(_snapshot("stale", direction="BUY"))
+        expired_status, _, expired_body = _request(transport)
+
+    assert missing_status == 503
+    assert json.loads(missing_body) == {"error": "AURUM_SNAPSHOT_UNAVAILABLE"}
+    assert expired_status == 503
+    assert json.loads(expired_body) == {
+        "error": "AURUM_SNAPSHOT_NOT_CURRENT",
+        "reason_code": "LIVE_QUOTE_STALE",
+    }
+
+
+def test_transport_m5_currentness_boundary_uses_sanctioned_evaluator() -> None:
+    publication = AurumSnapshotPublication()
+    boundary_now = _HTTP_BASE + timedelta(seconds=30)
+    snapshot = _snapshot(
+        "m5-boundary",
+        direction="BUY",
+        decision_available_at=_HTTP_BASE,
+        quote_timestamp=boundary_now,
+    )
+    publication.publish(snapshot)
+    clock = Mock(return_value=boundary_now)
+
+    with _running_transport(publication, clock=clock) as transport:
+        current_status, _, _ = _request(transport)
+        clock.return_value = boundary_now + timedelta(microseconds=1)
+        stale_status, _, stale_body = _request(transport)
+
+    assert current_status == 200
+    assert stale_status == 503
+    assert json.loads(stale_body) == {
+        "error": "AURUM_SNAPSHOT_NOT_CURRENT",
+        "reason_code": "LIVE_M5_STALE",
+    }
+
+
+def test_http_uses_currentness_helper_without_threshold_ownership() -> None:
+    source = inspect.getsource(transport_http)
+
+    assert "evaluate_live_snapshot_currentness" in source
+    assert "MAX_QUOTE_AGE_SECONDS" not in source
+    assert "MAX_M5_DECISION_DELAY_SECONDS" not in source
+    assert "15.0" not in source
+    assert "30.0" not in source
