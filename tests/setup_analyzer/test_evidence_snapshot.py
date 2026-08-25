@@ -29,13 +29,31 @@ from core.setup_analyzer.evidence.models import (
 )
 from tests.aurum_presentation.conftest import T, make_inputs
 
+_SOURCE_INSTANCE = "fixture-source"
+
 
 def _model(**kwargs: object):
     return AurumReadModelBuilder.build(make_inputs(**kwargs))
 
 
+def _snapshot(model=None, **kwargs: object):
+    return build_market_evidence_snapshot(
+        model or _model(),
+        configuration_identity="cfg-v1",
+        source_instance_identity=_SOURCE_INSTANCE,
+        **kwargs,
+    )
+
+
 def _source(symbol: str = "XAUUSD") -> SourceIdentity:
-    return SourceIdentity("repo", "commit", symbol, "RESEARCH_REPLAY", "obs")
+    return SourceIdentity(
+        "repo",
+        "commit",
+        symbol,
+        _SOURCE_INSTANCE,
+        "RESEARCH_REPLAY",
+        "obs",
+    )
 
 
 def _node(
@@ -74,8 +92,8 @@ def _node(
 
 def test_deterministic_snapshot_and_evidence_identity() -> None:
     model = _model()
-    first = build_market_evidence_snapshot(model, configuration_identity="cfg-v1")
-    second = build_market_evidence_snapshot(model, configuration_identity="cfg-v1")
+    first = _snapshot(model)
+    second = _snapshot(model)
     assert first.snapshot_id == second.snapshot_id
     assert first.snapshot_fingerprint == second.snapshot_fingerprint
     assert [node.evidence_id for node in first.evidence_nodes] == [
@@ -84,6 +102,28 @@ def test_deterministic_snapshot_and_evidence_identity() -> None:
     assert [node.evidence_fingerprint for node in first.evidence_nodes] == [
         node.evidence_fingerprint for node in second.evidence_nodes
     ]
+
+
+def test_source_instance_is_part_of_deterministic_identity() -> None:
+    model = _model()
+    first = _snapshot(model)
+    second = build_market_evidence_snapshot(
+        model,
+        configuration_identity="cfg-v1",
+        source_instance_identity="other-terminal-history",
+    )
+    assert first.source_identity.source_instance_identity == _SOURCE_INSTANCE
+    assert first.snapshot_fingerprint != second.snapshot_fingerprint
+    assert first.candle_bundle_fingerprint != second.candle_bundle_fingerprint
+
+
+def test_source_instance_identity_is_mandatory() -> None:
+    with pytest.raises(ValueError, match="source_instance_identity"):
+        build_market_evidence_snapshot(
+            _model(),
+            configuration_identity="cfg-v1",
+            source_instance_identity="",
+        )
 
 
 def test_runtime_generated_at_does_not_contaminate_factual_identity() -> None:
@@ -95,20 +135,15 @@ def test_runtime_generated_at_does_not_contaminate_factual_identity() -> None:
             generated_at_utc=model.meta.generated_at_utc + timedelta(seconds=1),
         ),
     )
-    first = build_market_evidence_snapshot(model, configuration_identity="cfg-v1")
-    second = build_market_evidence_snapshot(later, configuration_identity="cfg-v1")
+    first = _snapshot(model)
+    second = _snapshot(later)
     assert first.generated_at_utc != second.generated_at_utc
     assert first.snapshot_fingerprint == second.snapshot_fingerprint
     assert first.snapshot_id == second.snapshot_id
 
 
 def test_source_identity_is_preserved_and_mismatch_fails_closed() -> None:
-    model = _model()
-    snapshot = build_market_evidence_snapshot(
-        model,
-        configuration_identity="cfg-v1",
-        expected_source_symbol="XAUUSDm",
-    )
+    snapshot = _snapshot(expected_source_symbol="XAUUSDm")
     assert snapshot.source_identity.symbol == "XAUUSD"
     assert snapshot.symbol == "XAUUSD"
     assert any(
@@ -119,7 +154,7 @@ def test_source_identity_is_preserved_and_mismatch_fails_closed() -> None:
 
 
 def test_available_at_is_conservative_decision_boundary_and_not_backdated() -> None:
-    snapshot = build_market_evidence_snapshot(_model(), configuration_identity="cfg-v1")
+    snapshot = _snapshot()
     assert snapshot.evidence_nodes
     assert all(
         node.available_at_utc == snapshot.decision_available_at_utc
@@ -133,8 +168,7 @@ def test_available_at_is_conservative_decision_boundary_and_not_backdated() -> N
 
 
 def test_mixed_m5_frontier_remains_auditable_non_readiness() -> None:
-    model = _model(m5_time=T - timedelta(minutes=5))
-    snapshot = build_market_evidence_snapshot(model, configuration_identity="cfg-v1")
+    snapshot = _snapshot(_model(m5_time=T - timedelta(minutes=5)))
     assert any(
         item.code == "BLOCKED_UPSTREAM"
         and "M5" in item.detail
@@ -145,10 +179,7 @@ def test_mixed_m5_frontier_remains_auditable_non_readiness() -> None:
 
 def test_same_legal_prefix_is_replay_equivalent() -> None:
     model = _model()
-    snapshots = [
-        build_market_evidence_snapshot(model, configuration_identity="cfg-v1")
-        for _ in range(3)
-    ]
+    snapshots = [_snapshot(model) for _ in range(3)]
     assert len({item.snapshot_fingerprint for item in snapshots}) == 1
     assert len({item.candle_bundle_fingerprint for item in snapshots}) == 1
 
@@ -271,8 +302,8 @@ def test_substantive_cross_source_parent_is_fatal() -> None:
 
 def test_candle_bundle_fingerprint_is_deterministic() -> None:
     model = _model()
-    first = build_market_evidence_snapshot(model, configuration_identity="cfg-v1")
-    second = build_market_evidence_snapshot(model, configuration_identity="cfg-v1")
+    first = _snapshot(model)
+    second = _snapshot(model)
     assert first.candle_bundle_id == second.candle_bundle_id
     assert first.candle_bundle_fingerprint == second.candle_bundle_fingerprint
     assert all(manifest.completed_only for manifest in first.timeframe_manifests)
@@ -288,7 +319,7 @@ def test_adapter_consumes_projected_facts_without_detector_recomputation() -> No
         "core.multi_timeframe.models",
     )
     assert all(item not in source for item in prohibited_imports)
-    snapshot = build_market_evidence_snapshot(_model(), configuration_identity="cfg-v1")
+    snapshot = _snapshot()
     assert any(
         node.evidence_family == "STRUCTURE_BOS"
         for node in snapshot.evidence_nodes
