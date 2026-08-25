@@ -50,7 +50,11 @@ def validate_lineage(
             raise FatalLineageError(f"required parent absent: {relation.parent_evidence_id}")
         if relation.edge_type not in _SUBSTANTIVE:
             continue
-        if parent.available_at_utc > child.available_at_utc:
+        if (
+            parent.available_at_utc is not None
+            and child.available_at_utc is not None
+            and parent.available_at_utc > child.available_at_utc
+        ):
             raise FatalLineageError(
                 f"illegal future parent {parent.evidence_id} for {child.evidence_id}"
             )
