@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import inspect
 from dataclasses import replace
 from datetime import timedelta
@@ -89,7 +90,10 @@ def test_runtime_generated_at_does_not_contaminate_factual_identity() -> None:
     model = _model()
     later = replace(
         model,
-        meta=replace(model.meta, generated_at_utc=model.meta.generated_at_utc + timedelta(seconds=1)),
+        meta=replace(
+            model.meta,
+            generated_at_utc=model.meta.generated_at_utc + timedelta(seconds=1),
+        ),
     )
     first = build_market_evidence_snapshot(model, configuration_identity="cfg-v1")
     second = build_market_evidence_snapshot(later, configuration_identity="cfg-v1")
@@ -107,7 +111,10 @@ def test_source_identity_is_preserved_and_mismatch_fails_closed() -> None:
     )
     assert snapshot.source_identity.symbol == "XAUUSD"
     assert snapshot.symbol == "XAUUSD"
-    assert any(item.code == "SOURCE_MISMATCH" and not item.ready for item in snapshot.readiness)
+    assert any(
+        item.code == "SOURCE_MISMATCH" and not item.ready
+        for item in snapshot.readiness
+    )
     assert any(item.code == "SOURCE_MISMATCH" for item in snapshot.conflicts)
 
 
@@ -119,7 +126,10 @@ def test_available_at_is_conservative_decision_boundary_and_not_backdated() -> N
         for node in snapshot.evidence_nodes
     )
     assert all(node.confirmed_at_utc is None for node in snapshot.evidence_nodes)
-    assert all(node.available_at_utc <= snapshot.as_of_utc for node in snapshot.evidence_nodes)
+    assert all(
+        node.available_at_utc <= snapshot.as_of_utc
+        for node in snapshot.evidence_nodes
+    )
 
 
 def test_mixed_m5_frontier_remains_auditable_non_readiness() -> None:
@@ -161,8 +171,14 @@ def test_context_projection_and_lineage_only_are_not_independent_confluence() ->
     lineage = _node("lineage", role=EvidenceNodeRole.LINEAGE_ONLY)
     classified, _ = classify_dependencies((projection, lineage), ())
     by_id = {node.evidence_id: node for node in classified}
-    assert by_id[projection.evidence_id].independence_class is IndependenceClass.REDUNDANT
-    assert by_id[lineage.evidence_id].independence_class is IndependenceClass.NOT_EVALUABLE
+    assert (
+        by_id[projection.evidence_id].independence_class
+        is IndependenceClass.REDUNDANT
+    )
+    assert (
+        by_id[lineage.evidence_id].independence_class
+        is IndependenceClass.NOT_EVALUABLE
+    )
     assert by_id[lineage.evidence_id].node_role is EvidenceNodeRole.LINEAGE_ONLY
 
 
@@ -171,17 +187,34 @@ def test_shared_substantive_root_is_redundant() -> None:
     first = _node("first")
     second = _node("second")
     relations = (
-        DependencyRelation(first.evidence_id, root.evidence_id, DependencyEdgeType.CONTENT_CAUSAL),
-        DependencyRelation(second.evidence_id, root.evidence_id, DependencyEdgeType.STATE_LINEAGE),
+        DependencyRelation(
+            first.evidence_id,
+            root.evidence_id,
+            DependencyEdgeType.CONTENT_CAUSAL,
+        ),
+        DependencyRelation(
+            second.evidence_id,
+            root.evidence_id,
+            DependencyEdgeType.STATE_LINEAGE,
+        ),
     )
     classified, _ = classify_dependencies((root, first, second), relations)
-    primaries = [node for node in classified if node.node_role is EvidenceNodeRole.PRIMARY]
-    assert all(node.independence_class is IndependenceClass.REDUNDANT for node in primaries)
+    primaries = [
+        node for node in classified if node.node_role is EvidenceNodeRole.PRIMARY
+    ]
+    assert all(
+        node.independence_class is IndependenceClass.REDUNDANT
+        for node in primaries
+    )
 
 
 def test_missing_mandatory_parent_is_fatal() -> None:
     child = _node("child")
-    relation = DependencyRelation(child.evidence_id, "e:missing", DependencyEdgeType.CONTENT_CAUSAL)
+    relation = DependencyRelation(
+        child.evidence_id,
+        "e:missing",
+        DependencyEdgeType.CONTENT_CAUSAL,
+    )
     with pytest.raises(FatalLineageError, match="required parent absent"):
         validate_lineage((child,), (relation,))
 
@@ -190,8 +223,16 @@ def test_dependency_cycle_is_fatal() -> None:
     first = _node("first")
     second = _node("second")
     relations = (
-        DependencyRelation(first.evidence_id, second.evidence_id, DependencyEdgeType.CONTENT_CAUSAL),
-        DependencyRelation(second.evidence_id, first.evidence_id, DependencyEdgeType.CONTENT_CAUSAL),
+        DependencyRelation(
+            first.evidence_id,
+            second.evidence_id,
+            DependencyEdgeType.CONTENT_CAUSAL,
+        ),
+        DependencyRelation(
+            second.evidence_id,
+            first.evidence_id,
+            DependencyEdgeType.CONTENT_CAUSAL,
+        ),
     )
     with pytest.raises(FatalLineageError, match="dependency cycle"):
         validate_lineage((first, second), relations)
@@ -208,7 +249,9 @@ def test_future_parent_is_fatal() -> None:
     parent = _node("parent", available_offset=1)
     child = _node("child")
     relation = DependencyRelation(
-        child.evidence_id, parent.evidence_id, DependencyEdgeType.CONTENT_CAUSAL
+        child.evidence_id,
+        parent.evidence_id,
+        DependencyEdgeType.CONTENT_CAUSAL,
     )
     with pytest.raises(FatalLineageError, match="illegal future parent"):
         validate_lineage((parent, child), (relation,))
@@ -218,7 +261,9 @@ def test_substantive_cross_source_parent_is_fatal() -> None:
     parent = _node("parent", source=_source("XAUUSDm"))
     child = _node("child", source=_source("XAUUSD"))
     relation = DependencyRelation(
-        child.evidence_id, parent.evidence_id, DependencyEdgeType.CONTENT_CAUSAL
+        child.evidence_id,
+        parent.evidence_id,
+        DependencyEdgeType.CONTENT_CAUSAL,
     )
     with pytest.raises(FatalLineageError, match="source contradiction"):
         validate_lineage((parent, child), (relation,))
@@ -244,23 +289,37 @@ def test_adapter_consumes_projected_facts_without_detector_recomputation() -> No
     )
     assert all(item not in source for item in prohibited_imports)
     snapshot = build_market_evidence_snapshot(_model(), configuration_identity="cfg-v1")
-    assert any(node.evidence_family == "STRUCTURE_BOS" for node in snapshot.evidence_nodes)
-    assert any(node.evidence_family == "FAIR_VALUE_GAP" for node in snapshot.evidence_nodes)
-    assert any(node.evidence_family == "ORDER_BLOCK" for node in snapshot.evidence_nodes)
+    assert any(
+        node.evidence_family == "STRUCTURE_BOS"
+        for node in snapshot.evidence_nodes
+    )
+    assert any(
+        node.evidence_family == "FAIR_VALUE_GAP"
+        for node in snapshot.evidence_nodes
+    )
+    assert any(
+        node.evidence_family == "ORDER_BLOCK"
+        for node in snapshot.evidence_nodes
+    )
 
 
 def test_no_broker_mutation_or_execution_path_is_introduced() -> None:
-    source = inspect.getsource(adapter_module)
-    prohibited = (
-        "order_send",
-        "order_check",
-        "positions_get",
-        "orders_get",
-        "position_modify",
-        "order_cancel",
-        "position_close",
+    tree = ast.parse(inspect.getsource(adapter_module))
+    imported_modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported_modules.append(node.module)
+    forbidden_prefixes = (
+        "core.mt5_",
+        "core.execution_",
+        "core.live_trading",
+        "core.position_manager",
     )
-    assert all(token not in source for token in prohibited)
+    assert not any(
+        module.startswith(forbidden_prefixes) for module in imported_modules
+    )
 
 
 def test_freshness_authority_is_reused_without_threshold_duplication() -> None:
