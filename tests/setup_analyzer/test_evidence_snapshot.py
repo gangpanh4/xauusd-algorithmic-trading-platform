@@ -90,6 +90,15 @@ def _node(
     )
 
 
+def _by_family(snapshot, family: str, timeframe: str | None = None):
+    return [
+        node
+        for node in snapshot.evidence_nodes
+        if node.evidence_family == family
+        and (timeframe is None or node.timeframe == timeframe)
+    ]
+
+
 def test_deterministic_snapshot_and_evidence_identity() -> None:
     model = _model()
     first = _snapshot(model)
@@ -104,6 +113,59 @@ def test_deterministic_snapshot_and_evidence_identity() -> None:
     ]
 
 
+def test_stable_logical_evidence_id_is_independent_of_mutable_payload() -> None:
+    model = _model()
+    swing = model.structure.frames.M5.last_swing
+    assert swing is not None
+    changed = replace(swing, price=swing.price + 0.5)
+
+    first_collector = adapter_module._NodeCollector(_source())
+    first_id = adapter_module._add_swing(
+        first_collector,
+        model,
+        "M5",
+        swing,
+        EvidenceNodeRole.PRIMARY,
+    )
+    second_collector = adapter_module._NodeCollector(_source())
+    second_id = adapter_module._add_swing(
+        second_collector,
+        model,
+        "M5",
+        changed,
+        EvidenceNodeRole.PRIMARY,
+    )
+
+    assert first_id == second_id
+    assert (
+        first_collector.node(first_id).evidence_fingerprint
+        != second_collector.node(second_id).evidence_fingerprint
+    )
+
+
+def test_contradictory_contents_for_same_logical_record_are_fatal() -> None:
+    model = _model()
+    swing = model.structure.frames.M5.last_swing
+    assert swing is not None
+    changed = replace(swing, price=swing.price + 0.5)
+    collector = adapter_module._NodeCollector(_source())
+    adapter_module._add_swing(
+        collector,
+        model,
+        "M5",
+        swing,
+        EvidenceNodeRole.PRIMARY,
+    )
+    with pytest.raises(FatalLineageError, match="contradictory fingerprint"):
+        adapter_module._add_swing(
+            collector,
+            model,
+            "M5",
+            changed,
+            EvidenceNodeRole.PRIMARY,
+        )
+
+
 def test_source_instance_is_part_of_deterministic_identity() -> None:
     model = _model()
     first = _snapshot(model)
@@ -115,6 +177,9 @@ def test_source_instance_is_part_of_deterministic_identity() -> None:
     assert first.source_identity.source_instance_identity == _SOURCE_INSTANCE
     assert first.snapshot_fingerprint != second.snapshot_fingerprint
     assert first.candle_bundle_fingerprint != second.candle_bundle_fingerprint
+    assert {node.evidence_id for node in first.evidence_nodes} != {
+        node.evidence_id for node in second.evidence_nodes
+    }
 
 
 def test_source_instance_identity_is_mandatory() -> None:
@@ -142,6 +207,53 @@ def test_runtime_generated_at_does_not_contaminate_factual_identity() -> None:
     assert first.snapshot_id == second.snapshot_id
 
 
+def test_unchanged_record_availability_is_stable_across_later_analysis_cut() -> None:
+    model = _model()
+    later = replace(
+        model,
+        meta=replace(
+            model.meta,
+            decision_available_at_utc=(
+                model.meta.decision_available_at_utc + timedelta(minutes=5)
+            ),
+            generated_at_utc=model.meta.generated_at_utc + timedelta(minutes=5),
+            observation_id="later-analysis-cut",
+        ),
+    )
+    first = _snapshot(model)
+    second = _snapshot(later)
+    first_regime = _by_family(first, "REGIME_CONTEXT")[0]
+    second_regime = _by_family(second, "REGIME_CONTEXT")[0]
+    assert first_regime.evidence_id == second_regime.evidence_id
+    assert first_regime.evidence_fingerprint == second_regime.evidence_fingerprint
+    assert first_regime.available_at_utc == second_regime.available_at_utc
+    assert first_regime.available_at_utc == model.regime.computation_time_utc
+
+
+def test_unprovable_record_availability_is_explicit_and_not_backdated() -> None:
+    snapshot = _snapshot()
+    swing = _by_family(snapshot, "STRUCTURE_SWING", "M5")[0]
+    assert swing.confirmed_at_utc is None
+    assert swing.available_at_utc is None
+    assert swing.status is EvidenceStatus.BLOCKED_UPSTREAM
+    assert any(
+        item.code == "BLOCKED_UPSTREAM"
+        and swing.evidence_id in item.evidence_ids
+        for item in snapshot.readiness
+    )
+
+
+def test_direct_regime_availability_uses_upstream_computation_time() -> None:
+    model = _model()
+    snapshot = _snapshot(model)
+    regime = _by_family(snapshot, "REGIME_CONTEXT")[0]
+    assert regime.available_at_utc == model.regime.computation_time_utc
+    assert regime.event_time_utc == model.regime.observation_time_utc
+    assert regime.available_at_utc is not None
+    assert regime.event_time_utc is not None
+    assert regime.available_at_utc >= regime.event_time_utc
+
+
 def test_source_identity_is_preserved_and_mismatch_fails_closed() -> None:
     snapshot = _snapshot(expected_source_symbol="XAUUSDm")
     assert snapshot.source_identity.symbol == "XAUUSD"
@@ -151,20 +263,6 @@ def test_source_identity_is_preserved_and_mismatch_fails_closed() -> None:
         for item in snapshot.readiness
     )
     assert any(item.code == "SOURCE_MISMATCH" for item in snapshot.conflicts)
-
-
-def test_available_at_is_conservative_decision_boundary_and_not_backdated() -> None:
-    snapshot = _snapshot()
-    assert snapshot.evidence_nodes
-    assert all(
-        node.available_at_utc == snapshot.decision_available_at_utc
-        for node in snapshot.evidence_nodes
-    )
-    assert all(node.confirmed_at_utc is None for node in snapshot.evidence_nodes)
-    assert all(
-        node.available_at_utc <= snapshot.as_of_utc
-        for node in snapshot.evidence_nodes
-    )
 
 
 def test_mixed_m5_frontier_remains_auditable_non_readiness() -> None:
@@ -184,6 +282,48 @@ def test_same_legal_prefix_is_replay_equivalent() -> None:
     assert len({item.candle_bundle_fingerprint for item in snapshots}) == 1
 
 
+def test_context_projection_reaches_underlying_factual_roots() -> None:
+    snapshot = _snapshot()
+    context = _by_family(snapshot, "PRICE_ACTION_CONTEXT", "M5")[0]
+    relations = [
+        relation
+        for relation in snapshot.dependency_relations
+        if relation.child_evidence_id == context.evidence_id
+    ]
+    assert relations
+    assert all(
+        relation.edge_type is DependencyEdgeType.CONTEXT_PROJECTION
+        for relation in relations
+    )
+    by_id = {node.evidence_id: node for node in snapshot.evidence_nodes}
+    parents = [by_id[relation.parent_evidence_id] for relation in relations]
+    assert all(parent.node_role is EvidenceNodeRole.PRIMARY for parent in parents)
+    parent_roots = {
+        root
+        for parent in parents
+        for root in parent.dependency_root_ids
+    }
+    assert set(context.dependency_root_ids) == parent_roots
+    assert context.independence_class is IndependenceClass.REDUNDANT
+
+
+def test_mtf_context_projection_is_transitively_redundant() -> None:
+    snapshot = _snapshot()
+    mtf = _by_family(snapshot, "MTF_CONTEXT", "M5")[0]
+    relations = [
+        relation
+        for relation in snapshot.dependency_relations
+        if relation.child_evidence_id == mtf.evidence_id
+    ]
+    assert relations
+    assert all(
+        relation.edge_type is DependencyEdgeType.CONTEXT_PROJECTION
+        for relation in relations
+    )
+    assert mtf.dependency_root_ids
+    assert mtf.independence_class is IndependenceClass.REDUNDANT
+
+
 def test_boundary_only_does_not_create_substantive_dependency_root() -> None:
     parent = _node("parent")
     child = _node("child")
@@ -195,6 +335,52 @@ def test_boundary_only_does_not_create_substantive_dependency_root() -> None:
     classified, _ = classify_dependencies((parent, child), (relation,))
     roots = {node.evidence_id: node.dependency_root_ids for node in classified}
     assert roots[child.evidence_id] == (child.evidence_id,)
+
+
+def test_protected_high_and_low_survive_as_factual_references() -> None:
+    snapshot = _snapshot()
+    protected = [
+        *_by_family(snapshot, "PROTECTED_HIGH_REFERENCE", "M5"),
+        *_by_family(snapshot, "PROTECTED_LOW_REFERENCE", "M5"),
+    ]
+    assert {node.evidence_family for node in protected} == {
+        "PROTECTED_HIGH_REFERENCE",
+        "PROTECTED_LOW_REFERENCE",
+    }
+    by_id = {node.evidence_id: node for node in snapshot.evidence_nodes}
+    for reference in protected:
+        relations = [
+            relation
+            for relation in snapshot.dependency_relations
+            if relation.child_evidence_id == reference.evidence_id
+        ]
+        assert len(relations) == 1
+        assert relations[0].edge_type is DependencyEdgeType.STATE_LINEAGE
+        parent = by_id[relations[0].parent_evidence_id]
+        assert parent.evidence_family == "STRUCTURE_SWING"
+        assert parent.evidence_id in reference.dependency_root_ids
+
+
+def test_protected_references_do_not_create_a2_geometry() -> None:
+    snapshot = _snapshot()
+    protected = [
+        node
+        for node in snapshot.evidence_nodes
+        if node.evidence_family
+        in {"PROTECTED_HIGH_REFERENCE", "PROTECTED_LOW_REFERENCE"}
+    ]
+    assert protected
+    for reference in protected:
+        payload = dict(reference.payload)
+        assert set(payload) == {"reference_role", "target_evidence_id"}
+        assert not {
+            "entry",
+            "entry_price",
+            "stop",
+            "stop_loss",
+            "take_profit",
+            "target",
+        }.intersection(payload)
 
 
 def test_context_projection_and_lineage_only_are_not_independent_confluence() -> None:
