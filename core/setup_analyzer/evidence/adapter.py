@@ -79,7 +79,10 @@ class _NodeCollector:
         evidence_fingerprint = fingerprint(factual_basis)
         edges = tuple(
             DependencyEdge(parent_evidence_id=parent_id, edge_type=edge_type)
-            for parent_id, edge_type in sorted(parents, key=lambda item: (item[0], item[1].value))
+            for parent_id, edge_type in sorted(
+                parents,
+                key=lambda item: (item[0], item[1].value),
+            )
         )
         node = EvidenceNode(
             evidence_id=evidence_id,
@@ -109,7 +112,10 @@ class _NodeCollector:
                 raise FatalLineageError(
                     f"contradictory fingerprint for evidence identity {evidence_id}"
                 )
-            if existing.node_role is EvidenceNodeRole.LINEAGE_ONLY and role is EvidenceNodeRole.PRIMARY:
+            if (
+                existing.node_role is EvidenceNodeRole.LINEAGE_ONLY
+                and role is EvidenceNodeRole.PRIMARY
+            ):
                 node = replace(node, node_role=EvidenceNodeRole.PRIMARY)
             else:
                 node = existing
@@ -133,11 +139,15 @@ class _NodeCollector:
             )
 
 
-def _source_identity(model: AurumReadModelV1) -> SourceIdentity:
+def _source_identity(
+    model: AurumReadModelV1,
+    source_instance_identity: str,
+) -> SourceIdentity:
     return SourceIdentity(
         repository=model.meta.backend_repository,
         platform_commit=model.meta.backend_commit,
         symbol=model.market.symbol,
+        source_instance_identity=source_instance_identity,
         data_mode=model.meta.data_mode.value,
         observation_id=model.meta.observation_id,
     )
@@ -196,7 +206,13 @@ def _quote(
     quote = model.quote
     if not quote.available:
         return None
-    values = (quote.observed_at_utc, quote.bid, quote.ask, quote.mid, quote.spread_price)
+    values = (
+        quote.observed_at_utc,
+        quote.bid,
+        quote.ask,
+        quote.mid,
+        quote.spread_price,
+    )
     if any(value is None for value in values):
         return None
     timestamp = quote.observed_at_utc
@@ -257,7 +273,12 @@ def _add_break(
     event: Any,
     role: EvidenceNodeRole,
 ) -> str:
-    swing_id = _add_swing(collector, timeframe, event.swing_point, EvidenceNodeRole.LINEAGE_ONLY)
+    swing_id = _add_swing(
+        collector,
+        timeframe,
+        event.swing_point,
+        EvidenceNodeRole.LINEAGE_ONLY,
+    )
     payload = asdict(event)
     payload.pop("swing_point", None)
     return collector.add(
@@ -279,7 +300,12 @@ def _add_liquidity_level(
     level: Any,
     role: EvidenceNodeRole,
 ) -> str:
-    swing_id = _add_swing(collector, timeframe, level.swing_point, EvidenceNodeRole.LINEAGE_ONLY)
+    swing_id = _add_swing(
+        collector,
+        timeframe,
+        level.swing_point,
+        EvidenceNodeRole.LINEAGE_ONLY,
+    )
     payload = asdict(level)
     payload.pop("swing_point", None)
     return collector.add(
@@ -302,7 +328,10 @@ def _add_liquidity_sweep(
     role: EvidenceNodeRole,
 ) -> str:
     level_id = _add_liquidity_level(
-        collector, timeframe, sweep.liquidity_level, EvidenceNodeRole.LINEAGE_ONLY
+        collector,
+        timeframe,
+        sweep.liquidity_level,
+        EvidenceNodeRole.LINEAGE_ONLY,
     )
     payload = asdict(sweep)
     payload.pop("liquidity_level", None)
@@ -325,10 +354,16 @@ def _add_order_block(
     block: Any,
 ) -> str:
     origin_id = _add_swing(
-        collector, timeframe, block.origin_swing, EvidenceNodeRole.LINEAGE_ONLY
+        collector,
+        timeframe,
+        block.origin_swing,
+        EvidenceNodeRole.LINEAGE_ONLY,
     )
     break_id = _add_break(
-        collector, timeframe, block.trigger_break, EvidenceNodeRole.LINEAGE_ONLY
+        collector,
+        timeframe,
+        block.trigger_break,
+        EvidenceNodeRole.LINEAGE_ONLY,
     )
     parents: list[tuple[str, DependencyEdgeType]] = [
         (origin_id, DependencyEdgeType.CONTENT_CAUSAL),
@@ -371,7 +406,11 @@ def _collect_nodes(
             mtf_id = collector.add(
                 family="MTF_CONTEXT",
                 kind="MultiTimeframeFrameV1",
-                upstream_id=_record_id("MultiTimeframeFrameV1", timeframe, asdict(mtf)),
+                upstream_id=_record_id(
+                    "MultiTimeframeFrameV1",
+                    timeframe,
+                    asdict(mtf),
+                ),
                 timeframe=timeframe,
                 direction=mtf.bias,
                 role=EvidenceNodeRole.CONTEXT_PROJECTION,
@@ -386,19 +425,28 @@ def _collect_nodes(
             if structure.last_swing is not None:
                 structure_primary.append(
                     _add_swing(
-                        collector, timeframe, structure.last_swing, EvidenceNodeRole.PRIMARY
+                        collector,
+                        timeframe,
+                        structure.last_swing,
+                        EvidenceNodeRole.PRIMARY,
                     )
                 )
             if structure.last_bos is not None:
                 structure_primary.append(
                     _add_break(
-                        collector, timeframe, structure.last_bos, EvidenceNodeRole.PRIMARY
+                        collector,
+                        timeframe,
+                        structure.last_bos,
+                        EvidenceNodeRole.PRIMARY,
                     )
                 )
             if structure.last_choch is not None:
                 structure_primary.append(
                     _add_break(
-                        collector, timeframe, structure.last_choch, EvidenceNodeRole.PRIMARY
+                        collector,
+                        timeframe,
+                        structure.last_choch,
+                        EvidenceNodeRole.PRIMARY,
                     )
                 )
             if structure.latest_liquidity_sweep is not None:
@@ -413,7 +461,10 @@ def _collect_nodes(
             for level in structure.tracked_liquidity_levels:
                 structure_primary.append(
                     _add_liquidity_level(
-                        collector, timeframe, level, EvidenceNodeRole.PRIMARY
+                        collector,
+                        timeframe,
+                        level,
+                        EvidenceNodeRole.PRIMARY,
                     )
                 )
             structure_payload = asdict(structure)
@@ -430,7 +481,11 @@ def _collect_nodes(
             context_id = collector.add(
                 family="STRUCTURE_CONTEXT",
                 kind="StructureFrameV1",
-                upstream_id=_record_id("StructureFrameV1", timeframe, structure_payload),
+                upstream_id=_record_id(
+                    "StructureFrameV1",
+                    timeframe,
+                    structure_payload,
+                ),
                 timeframe=timeframe,
                 direction=structure.current_trend,
                 role=EvidenceNodeRole.CONTEXT_PROJECTION,
@@ -450,7 +505,11 @@ def _collect_nodes(
                     collector.add(
                         family="FAIR_VALUE_GAP",
                         kind="FairValueGapV1",
-                        upstream_id=_record_id("FairValueGapV1", timeframe, asdict(fvg)),
+                        upstream_id=_record_id(
+                            "FairValueGapV1",
+                            timeframe,
+                            asdict(fvg),
+                        ),
                         timeframe=timeframe,
                         direction=fvg.gap_type,
                         role=EvidenceNodeRole.PRIMARY,
@@ -460,7 +519,11 @@ def _collect_nodes(
                 )
             if price_action.order_block is not None:
                 price_primary.append(
-                    _add_order_block(collector, timeframe, price_action.order_block)
+                    _add_order_block(
+                        collector,
+                        timeframe,
+                        price_action.order_block,
+                    )
                 )
             context_payload = asdict(price_action)
             context_payload.pop("fair_value_gap", None)
@@ -468,7 +531,11 @@ def _collect_nodes(
             context_id = collector.add(
                 family="PRICE_ACTION_CONTEXT",
                 kind="PriceActionFrameV1",
-                upstream_id=_record_id("PriceActionFrameV1", timeframe, context_payload),
+                upstream_id=_record_id(
+                    "PriceActionFrameV1",
+                    timeframe,
+                    context_payload,
+                ),
                 timeframe=timeframe,
                 direction=None,
                 role=EvidenceNodeRole.CONTEXT_PROJECTION,
@@ -480,7 +547,10 @@ def _collect_nodes(
             frame_ids.append(context_id)
 
         if mtf is not None:
-            collector.boundary(mtf_id, tuple(item for item in frame_ids if item != mtf_id))
+            collector.boundary(
+                mtf_id,
+                tuple(item for item in frame_ids if item != mtf_id),
+            )
 
     if model.regime.available:
         regime_payload = asdict(model.regime)
@@ -497,7 +567,12 @@ def _collect_nodes(
         )
 
     return (
-        tuple(sorted(collector.nodes.values(), key=lambda node: node.evidence_id)),
+        tuple(
+            sorted(
+                collector.nodes.values(),
+                key=lambda node: node.evidence_id,
+            )
+        ),
         tuple(
             sorted(
                 collector.relations.values(),
@@ -533,7 +608,9 @@ def _readiness(
         conflicts.append(
             ConflictRecord(
                 code="SOURCE_MISMATCH",
-                detail="requested source symbol differs from authoritative snapshot source",
+                detail=(
+                    "requested source symbol differs from authoritative snapshot source"
+                ),
             )
         )
     spec = model.market.symbol_spec
@@ -542,7 +619,10 @@ def _readiness(
             ReadinessRecord(
                 code="SOURCE_MISMATCH",
                 ready=False,
-                detail=f"market symbol {actual_symbol!r} != symbol-spec name {spec.name!r}",
+                detail=(
+                    f"market symbol {actual_symbol!r} != "
+                    f"symbol-spec name {spec.name!r}"
+                ),
             )
         )
         conflicts.append(
@@ -559,7 +639,9 @@ def _readiness(
                 detail="authoritative quote evidence is unavailable or incomplete",
             )
         )
-    missing = tuple(manifest.timeframe for manifest in manifests if manifest.bar_count == 0)
+    missing = tuple(
+        manifest.timeframe for manifest in manifests if manifest.bar_count == 0
+    )
     if missing:
         readiness.append(
             ReadinessRecord(
@@ -583,7 +665,9 @@ def _readiness(
                 ReadinessRecord(
                     code="BLOCKED_UPSTREAM",
                     ready=False,
-                    detail="live snapshot does not identify the sanctioned freshness policy",
+                    detail=(
+                        "live snapshot does not identify the sanctioned freshness policy"
+                    ),
                 )
             )
         if not freshness.valid:
@@ -609,19 +693,28 @@ def build_market_evidence_snapshot(
     model: AurumReadModelV1,
     *,
     configuration_identity: str,
+    source_instance_identity: str,
     expected_source_symbol: str | None = None,
 ) -> MarketEvidenceSnapshot:
     """Construct one immutable point-in-time evidence cut without recomputation."""
     if not configuration_identity.strip():
-        raise EvidenceSnapshotContractError("configuration_identity must be non-empty")
+        raise EvidenceSnapshotContractError(
+            "configuration_identity must be non-empty"
+        )
+    if not source_instance_identity.strip():
+        raise EvidenceSnapshotContractError(
+            "source_instance_identity must be non-empty"
+        )
     if not model.meta.read_only:
-        raise EvidenceSnapshotContractError("A1 accepts read-only platform snapshots only")
+        raise EvidenceSnapshotContractError(
+            "A1 accepts read-only platform snapshots only"
+        )
     if model.meta.decision_available_at_utc > model.meta.generated_at_utc:
         raise EvidenceSnapshotContractError(
             "decision availability cannot be later than snapshot generation"
         )
 
-    source = _source_identity(model)
+    source = _source_identity(model, source_instance_identity)
     freshness = _freshness(model)
     manifests = _timeframe_manifests(model, source)
     for manifest in manifests:
@@ -630,7 +723,8 @@ def build_market_evidence_snapshot(
             and manifest.last_bar_time_utc > model.meta.decision_available_at_utc
         ):
             raise EvidenceSnapshotContractError(
-                f"{manifest.timeframe} contains future bar evidence beyond the legal boundary"
+                f"{manifest.timeframe} contains future bar evidence beyond "
+                "the legal boundary"
             )
     candle_basis = {
         "symbol": model.market.symbol,
@@ -646,10 +740,16 @@ def build_market_evidence_snapshot(
         timeframes=manifests,
     )
     quote = _quote(model, source, freshness)
-    quote_time = quote.available_at_utc if quote is not None else model.meta.decision_available_at_utc
+    quote_time = (
+        quote.available_at_utc
+        if quote is not None
+        else model.meta.decision_available_at_utc
+    )
     as_of = max(model.meta.decision_available_at_utc, quote_time)
     if as_of > model.meta.generated_at_utc:
-        raise EvidenceSnapshotContractError("evidence is not available at snapshot generation time")
+        raise EvidenceSnapshotContractError(
+            "evidence is not available at snapshot generation time"
+        )
 
     try:
         nodes, relations = _collect_nodes(model, source)
@@ -657,7 +757,9 @@ def build_market_evidence_snapshot(
             if node.available_at_utc > as_of:
                 raise FatalLineageError(f"future evidence node {node.evidence_id}")
             if node.event_time_utc is not None and node.event_time_utc > as_of:
-                raise FatalLineageError(f"future event time for {node.evidence_id}")
+                raise FatalLineageError(
+                    f"future event time for {node.evidence_id}"
+                )
         nodes, groups = classify_dependencies(nodes, relations)
     except FatalLineageError as exc:
         raise EvidenceSnapshotContractError(str(exc)) from exc
