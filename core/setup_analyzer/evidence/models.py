@@ -85,7 +85,7 @@ class EvidenceNode:
     node_role: EvidenceNodeRole
     event_time_utc: datetime | None
     confirmed_at_utc: datetime | None
-    available_at_utc: datetime
+    available_at_utc: datetime | None
     source_identity: SourceIdentity
     status: EvidenceStatus
     freshness_status: str | None
