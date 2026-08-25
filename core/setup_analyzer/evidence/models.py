@@ -20,6 +20,7 @@ class SourceIdentity:
     repository: str
     platform_commit: str
     symbol: str
+    source_instance_identity: str
     data_mode: str
     observation_id: str
 
